@@ -36,13 +36,13 @@ takeoff:
   # - 调高(1.5)：更安全但更慢
   # - 调低(0.5)：快速但地效影响大
   # - ⚠️ 不低于 0.3m
-  height: 1.0
+  height: 1.5
 
   # 爬升速度 (m/s)
   # - 调高(0.5)：更快但过冲大
   # - 调低(0.2)：更稳但更慢
   # - ⚠️ 不超过 PX4 MPC_Z_VEL_MAX_UP
-  speed: 0.3
+  speed: 0.4
 
   # 电机预热时间 (s)
   # - 调高(3.0)：启动更柔和
@@ -55,7 +55,15 @@ takeoff:
   # 接近目标时减速距离 (m)
   # - 调高(0.5)：减速更平滑
   # - 调低(0.1)：接近急停
-  decel_distance: 0.3
+  decel_distance: 0.35
+
+  # 起飞到达判定阈值 (m)
+  # - remaining <= 阈值 即进入 HOVER
+  reach_threshold: 0.06
+
+  # 起飞最小上升速度 (m/s)
+  # - 防止减速阶段速度过小导致爬升停滞
+  min_speed: 0.1
 
   # 起飞完成后延迟发 trigger (s)
   # - 让悬停稳定后再通知 EGO 规划
@@ -74,7 +82,7 @@ landing:
   slow_factor: 0.5
 
   # 着陆检测：目标低于实际多少 (m)，负值
-  land_pos_deviation: -0.5
+  land_pos_deviation: -0.05
 
   # 着陆检测：速度阈值 (m/s)
   land_vel_threshold: 0.1

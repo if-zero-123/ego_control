@@ -65,6 +65,8 @@ struct Params {
     double motor_warmup_time;
     double motor_warmup_height;
     double decel_distance;
+    double reach_threshold;
+    double min_speed;
     double delay_trigger_time;
 
     // Landing
@@ -103,6 +105,8 @@ struct Params {
         nh.param("takeoff/motor_warmup_time",   motor_warmup_time,    2.0);
         nh.param("takeoff/motor_warmup_height", motor_warmup_height,  0.05);
         nh.param("takeoff/decel_distance",      decel_distance,       0.3);
+        nh.param("takeoff/reach_threshold",     reach_threshold,      0.05);
+        nh.param("takeoff/min_speed",           min_speed,            0.05);
         nh.param("takeoff/delay_trigger_time",  delay_trigger_time,   2.0);
 
         nh.param("landing/speed",               landing_speed,        0.3);
@@ -352,7 +356,10 @@ private:
     void enterTakeoff() {
         state_ = State::TAKEOFF;
         takeoff_start_pos_  = odom_pos_;
-        takeoff_target_z_   = odom_pos_.z() + params_.takeoff_height;
+        takeoff_target_z_   = params_.takeoff_height;
+        if (takeoff_target_z_ < odom_pos_.z()) {
+            takeoff_target_z_ = odom_pos_.z();
+        }
         takeoff_start_time_ = ros::Time::now();
         warmup_done_        = false;
         trigger_sent_       = false;
@@ -646,13 +653,12 @@ private:
             dt = 0.0;
         }
 
-        // Phase 2 & 3: Climb with deceleration near target
-        double current_z = takeoff_start_pos_.z() + params_.takeoff_speed * dt;
-        double remaining = takeoff_target_z_ - current_z;
+        // Phase 2 & 3: Climb with deceleration near target (use odom feedback)
+        double remaining = takeoff_target_z_ - odom_pos_.z();
 
-        if (remaining <= 0.0) {
+        if (remaining <= params_.reach_threshold) {
             // Reached target height → HOVER
-            Eigen::Vector3d target_pos = takeoff_start_pos_;
+            Eigen::Vector3d target_pos = odom_pos_;
             target_pos.z() = takeoff_target_z_;
             pub_setpoint_.publish(posOnlySetpoint(target_pos));
             enterHover();
@@ -663,7 +669,7 @@ private:
         double speed = params_.takeoff_speed;
         if (remaining < params_.decel_distance && params_.decel_distance > 1e-4) {
             speed *= remaining / params_.decel_distance;
-            speed = std::max(speed, 0.05);  // Minimum speed
+            speed = std::max(speed, params_.min_speed);
         }
 
         Eigen::Vector3d target_pos = takeoff_start_pos_;
