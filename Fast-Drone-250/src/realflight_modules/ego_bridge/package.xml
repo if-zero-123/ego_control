@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>ego_bridge</name>
+  <version>1.0.0</version>
+  <description>EGO-Planner to PX4 bridge with 6-state FSM, smooth takeoff/landing, OFFBOARD management, arrival detection, and control handover.</description>
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>GPLv3</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>roscpp</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>mavros_msgs</depend>
+  <depend>quadrotor_msgs</depend>
+  <depend>mavros</depend>
+
+  <export>
+  </export>
+</package>
