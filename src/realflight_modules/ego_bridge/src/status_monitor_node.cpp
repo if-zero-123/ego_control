@@ -133,6 +133,7 @@ private:
     // 里程计
     double odom_x_ = 0, odom_y_ = 0, odom_z_ = 0;
     double odom_yaw_ = 0;                   // 弧度
+    double vel_x_ = 0, vel_y_ = 0, vel_z_ = 0; // 三轴速度 m/s
     double speed_ = 0;                       // 合速度 m/s
 
     // EGO 指令
@@ -179,10 +180,10 @@ private:
         odom_yaw_ = std::atan2(2.0 * (qw * qz + qx * qy),
                                1.0 - 2.0 * (qy * qy + qz * qz));
 
-        double vx = msg->twist.twist.linear.x;
-        double vy = msg->twist.twist.linear.y;
-        double vz = msg->twist.twist.linear.z;
-        speed_ = std::sqrt(vx * vx + vy * vy + vz * vz);
+        vel_x_ = msg->twist.twist.linear.x;
+        vel_y_ = msg->twist.twist.linear.y;
+        vel_z_ = msg->twist.twist.linear.z;
+        speed_ = std::sqrt(vel_x_ * vel_x_ + vel_y_ * vel_y_ + vel_z_ * vel_z_);
 
         t_odom_ = ros::Time::now();
     }
@@ -306,11 +307,19 @@ private:
         printRow(buf);
 
         snprintf(buf, sizeof(buf),
-            " %s\u59ff\u6001%s  \u504f\u822a:%s%+6.1f\u00b0%s"
-            "    \u901f\u5ea6:%s%5.2f%s m/s",
+            " %s姿态%s  偏航:%s%+6.1f°%s",
             clr_.bold, clr_.reset,
-            clr_.yellow, yaw_deg, clr_.reset,
-            clr_.cyan, speed_, clr_.reset);
+            clr_.yellow, yaw_deg, clr_.reset);
+        printRow(buf);
+
+        snprintf(buf, sizeof(buf),
+            " %s速度%s  Vx:%s%+6.2f%s  Vy:%s%+6.2f%s  Vz:%s%+6.2f%s"
+            "  |V|:%s%5.2f%s m/s",
+            clr_.bold, clr_.reset,
+            clr_.cyan, vel_x_, clr_.reset,
+            clr_.cyan, vel_y_, clr_.reset,
+            clr_.cyan, vel_z_, clr_.reset,
+            clr_.yellow, speed_, clr_.reset);
         printRow(buf);
         printSep();
 
