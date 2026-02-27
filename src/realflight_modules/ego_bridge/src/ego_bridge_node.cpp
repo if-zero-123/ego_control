@@ -311,6 +311,17 @@ private:
                          msg->pose.position.y,
                          msg->pose.position.z;
         target_set_ = true;
+
+        // 重置到达检测，确保新目标的 reach_status 从 0 开始
+        reach_detecting_ = false;
+        if (last_reach_status_ != 0) {
+            last_reach_status_ = 0;
+            std_msgs::UInt8 rst;
+            rst.data = 0;
+            pub_reach_.publish(rst);
+        }
+        ROS_INFO("[ego_bridge] New target point: (%.2f, %.2f, %.2f)",
+                 target_point_.x(), target_point_.y(), target_point_.z());
     }
 
     void setControlModeCb(const std_msgs::UInt8::ConstPtr& msg) {
@@ -318,10 +329,11 @@ private:
             ROS_WARN("[ego_bridge] Override disabled in config, ignoring set_control_mode");
             return;
         }
-        if (msg->data == 1 && control_mode_ == 0 && state_ == State::TRACKING) {
+        if (msg->data == 1 && control_mode_ == 0 &&
+            (state_ == State::TRACKING || state_ == State::HOVER)) {
             // Enter OVERRIDE sub-mode
             control_mode_ = 1;
-            ROS_INFO("[ego_bridge] Entering OVERRIDE mode");
+            ROS_INFO("[ego_bridge] Entering OVERRIDE mode (state=%s)", stateStr(state_));
         } else if (msg->data == 0 && control_mode_ == 1) {
             // Exit OVERRIDE → go to HOVER with wait_new_traj
             control_mode_ = 0;
@@ -681,6 +693,12 @@ private:
 
     // ── HOVER ──
     void runHover(const ros::Time& now) {
+        // OVERRIDE sub-mode（在 HOVER 中也支持接管）
+        if (control_mode_ == 1) {
+            runOverride(now);
+            return;
+        }
+
         pub_setpoint_.publish(posOnlySetpoint(hover_pos_));
 
         // Send trigger after delay (only once after entering HOVER from TAKEOFF)

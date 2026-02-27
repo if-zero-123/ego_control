@@ -1,0 +1,21 @@
+<!-- ego_api_full_demo.launch
+     启动主示例节点 + Override 任务节点。
+     桥接命名空间需与 ego_bridge 配套（默认 /ego_bridge）。
+
+     Usage:
+       roslaunch ego_api ego_api_full_demo.launch
+       roslaunch ego_api ego_api_full_demo.launch bridge_ns:=/my_bridge
+-->
+<launch>
+    <arg name="bridge_ns" default="/ego_bridge" />
+
+    <!-- 主示例：顺序航点 + 触发 Override -->
+    <node pkg="ego_api" type="ego_api_demo" name="ego_api_demo" output="screen">
+        <param name="bridge_ns" value="$(arg bridge_ns)" />
+    </node>
+
+    <!-- Override 任务节点：等待触发 → 接管 → 执行 → 归还 -->
+    <node pkg="ego_api" type="override_task_demo" name="override_task_demo" output="screen">
+        <param name="bridge_ns" value="$(arg bridge_ns)" />
+    </node>
+</launch>

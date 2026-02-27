@@ -1,6 +1,8 @@
-# ego_bridge
+# ego_bridge & ego_api
 
 EGO-Planner → PX4 桥接功能包。绕过 `px4ctrl` 的自定义控制器，将 EGO-Planner 的轨迹命令（position + velocity + acceleration + yaw）直接发送给 PX4 内置位置控制器，实现更简洁的控制链路。
+
+> **高级用户**：推荐使用 `ego_api` 包（见[ego_api 高级封装](#ego_api-高级封装)章节），无需手动拼 rostopic 命令。
 
 ```
 ┌──────────┐    PositionCommand     ┌─────────────┐    PositionTarget     ┌─────┐
@@ -40,6 +42,18 @@ ego_bridge/
 └── src/
     ├── ego_bridge_node.cpp        # 核心桥接节点（6状态FSM）
     └── rc_commander_node.cpp      # RC 遥控器节点（可选）
+
+ego_api/                           # ← 高级封装包
+├── CMakeLists.txt
+├── package.xml
+├── include/ego_api/
+│   └── ego_api.h                  # EgoApi 类定义
+├── launch/
+│   └── ego_api_full_demo.launch   # 完整示例 launch
+└── src/
+    ├── ego_api.cpp                # EgoApi 类实现（阻塞式 API）
+    ├── ego_api_demo.cpp           # 主示例：航点导航 + 触发 Override
+    └── override_task_demo.cpp     # Override 多任务分发（6 个任务槽位）
 ```
 
 ---
@@ -342,3 +356,103 @@ rostopic echo /ego_bridge/reach_status
 | 复杂度 | 高 | 低 |
 | 控制权交接 | 无 | 支持 OVERRIDE 模式 |
 | 到达检测 | 无 | 内置 |
+
+---
+
+## ego_api 高级封装
+
+`ego_api` 包对 `ego_bridge` 的底层话题做了阻塞式封装，用户只需调用函数即可完成：起飞、航点导航、偏航控制、Override 接管/归还、精准定位等操作，**无需手动拼 rostopic 命令**。
+
+### 架构关系
+
+```
+┌───────────────────┐     triggerOverrideTask(N)      ┌───────────────────────┐
+│  ego_api_demo     │ ──────────────────────────────▶  │  override_task_demo   │
+│  (主任务：航点)    │     /ego_api/override_trigger   │  (子任务：投递/拍照…)  │
+│                   │  ◀── waitOverrideComplete ─────  │                       │
+└────────┬──────────┘                                  └───────────┬───────────┘
+         │  sendGoal / takeoff / land                              │  moveToOverride / sendOverrideCmd
+         ▼                                                         ▼
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │                         ego_bridge (FSM)                           │
+    │        EGO mode (control_mode=0)   ←→   OVERRIDE (control_mode=1) │
+    └─────────────────────────────────────────────────────────────────────┘
+```
+
+### API 一览
+
+| 函数 | 说明 | 阻塞 |
+|------|------|------|
+| `takeoff()` | 起飞并等待进入 HOVER 状态 | ✅ |
+| `land()` | 降落并等待进入 IDLE 状态 | ✅ |
+| `sendGoal(x,y,z)` | 发送目标点给 EGO-Planner，等待到达 | ✅ |
+| `sendGoalWithYaw(x,y,z,yaw)` | 带偏航角的目标点 | ✅ |
+| `enableOverride()` | 接管控制权（control_mode→1） | ✅ |
+| `disableOverride()` | 归还控制权（control_mode→0） | ✅ |
+| `moveToOverride(x,y,z,yaw,thr,timeout)` | Override 模式下精准移动 | ✅ |
+| `holdPosition()` | 发一帧悬停指令（当前位置） | ❌ |
+| `sendOverrideCmd(cmd)` | 发送自定义 PositionCommand | ❌ |
+| `triggerOverrideTask(task_id)` | 触发 Override 任务（通过话题） | ❌ |
+| `waitForOverrideTrigger(timeout)` | 等待任务触发，返回 task_id | ✅ |
+| `waitOverrideComplete(timeout)` | 等待 Override 结束（control_mode 回 0） | ✅ |
+| `emergencyStop()` | 紧急停止 | ❌ |
+| `getFlightState()` | 获取当前飞行状态字符串 | ❌ |
+| `getReachStatus()` | 获取到达状态（0/1） | ❌ |
+| `getControlMode()` | 获取控制模式（0=EGO, 1=OVERRIDE） | ❌ |
+| `getOdomPosition()` | 获取当前位置 (Eigen::Vector3d) | ❌ |
+| `getOdomYaw()` | 获取当前偏航角 (double) | ❌ |
+
+### 快速使用
+
+```bash
+# 编译
+cd ~/ros_ws && catkin_make
+
+# 启动（需先启动 EGO-Planner 和 ego_bridge）
+roslaunch ego_api ego_api_full_demo.launch
+```
+
+### 主示例流程 (ego_api_demo)
+
+```
+takeoff()
+  → sendGoal(A)                      # EGO 规划到 A，阻塞等待到达
+  → sendGoalWithYaw(B, yaw=π/2)      # EGO 规划到 B，同时转向
+  → triggerOverrideTask(1)            # 触发任务1（拍照）
+  → waitOverrideComplete()            # 等任务节点完成
+  → sendGoal(C)                       # 继续飞往 C
+  → sendGoalWithYaw(D, yaw=0)
+  → triggerOverrideTask(2)            # 触发任务2（投递）
+  → waitOverrideComplete()
+  → land()
+```
+
+### Override 任务节点 (override_task_demo)
+
+```
+while(ros::ok()):
+    task_id = waitForOverrideTrigger()   # 阻塞等待
+    enableOverride()                     # 接管控制
+    switch(task_id):
+        case 1: task1_photo(api)         # 拍照
+        case 2: task2_delivery(api)      # 投递
+        case 3: task3_circle(api)        # 绕圈（预留）
+        case 4: task4_inspect(api)       # 巡检（预留）
+        case 5: task5_reserve(api)       # 预留
+        case 6: task6_reserve(api)       # 预留
+    disableOverride()                    # 归还控制
+```
+
+### 扩展新任务
+
+1. 在 `override_task_demo.cpp` 中写一个 `void taskN_xxx(EgoApi& api)` 函数
+2. 在 `switch` 中添加 `case N: taskN_xxx(api); break;`
+3. 在主示例中需要的位置添加 `api.triggerOverrideTask(N)` + `api.waitOverrideComplete()`
+
+### ego_api 话题
+
+| 话题 | 类型 | 说明 |
+|------|------|------|
+| `/ego_api/override_trigger` | std_msgs/Int32 | 任务 ID 触发（主示例 → 任务节点） |
+
+> **注意**：`api_pkg`（旧包）已弃用，请使用 `ego_api`。
