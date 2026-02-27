@@ -3,39 +3,39 @@
 #include <cmath>
 
 // ─────────────────────────────────────────────────────────────
-//  Constructor
+//  构造函数：初始化订阅者、发布者，建立与 ego_bridge 的连接
 // ─────────────────────────────────────────────────────────────
 EgoApi::EgoApi(ros::NodeHandle& nh, const std::string& bridge_ns)
     : nh_(nh), bridge_ns_(bridge_ns)
 {
-    // ── Subscribers ──
-    sub_flight_state_    = nh_.subscribe(bridge_ns_ + "/flight_state",    10, &EgoApi::flightStateCb, this);
-    sub_reach_status_    = nh_.subscribe(bridge_ns_ + "/reach_status",    10, &EgoApi::reachStatusCb, this);
-    sub_control_mode_    = nh_.subscribe(bridge_ns_ + "/control_mode",    10, &EgoApi::controlModeCb, this);
-    sub_odom_            = nh_.subscribe("/mavros/local_position/odom",   10, &EgoApi::odomCb, this);
-    sub_override_trigger_= nh_.subscribe("/ego_api/override_trigger",     10, &EgoApi::overrideTriggerCb, this);
+    // ── 订阅者：接收 ego_bridge 的状态反馈 ──
+    sub_flight_state_    = nh_.subscribe(bridge_ns_ + "/flight_state",    10, &EgoApi::flightStateCb, this);   // FSM 状态
+    sub_reach_status_    = nh_.subscribe(bridge_ns_ + "/reach_status",    10, &EgoApi::reachStatusCb, this);   // 到达状态
+    sub_control_mode_    = nh_.subscribe(bridge_ns_ + "/control_mode",    10, &EgoApi::controlModeCb, this);   // EGO/OVERRIDE
+    sub_odom_            = nh_.subscribe("/mavros/local_position/odom",   10, &EgoApi::odomCb, this);          // 里程计
+    sub_override_trigger_= nh_.subscribe("/ego_api/override_trigger",     10, &EgoApi::overrideTriggerCb, this);// 任务触发
 
-    // ── Publishers ──
-    pub_takeoff_land_    = nh_.advertise<quadrotor_msgs::TakeoffLand>(bridge_ns_ + "/takeoff_land", 1);
-    pub_goal_            = nh_.advertise<geometry_msgs::PoseStamped>("/move_base_simple/goal", 1);
-    pub_target_point_    = nh_.advertise<geometry_msgs::PoseStamped>(bridge_ns_ + "/target_point", 1);
-    pub_set_ctrl_mode_   = nh_.advertise<std_msgs::UInt8>(bridge_ns_ + "/set_control_mode", 1);
-    pub_override_cmd_    = nh_.advertise<quadrotor_msgs::PositionCommand>(bridge_ns_ + "/override_cmd", 10);
-    pub_emergency_stop_  = nh_.advertise<std_msgs::Empty>(bridge_ns_ + "/emergency_stop", 1);
-    pub_override_trigger_= nh_.advertise<std_msgs::Int32>("/ego_api/override_trigger", 1);
+    // ── 发布者：向 ego_bridge / ego_planner / override 节点发送指令 ──
+    pub_takeoff_land_    = nh_.advertise<quadrotor_msgs::TakeoffLand>(bridge_ns_ + "/takeoff_land", 1);        // 起飞/降落
+    pub_goal_            = nh_.advertise<geometry_msgs::PoseStamped>("/move_base_simple/goal", 1);             // EGO 目标点
+    pub_target_point_    = nh_.advertise<geometry_msgs::PoseStamped>(bridge_ns_ + "/target_point", 1);         // 到达检测目标
+    pub_set_ctrl_mode_   = nh_.advertise<std_msgs::UInt8>(bridge_ns_ + "/set_control_mode", 1);                // 模式切换
+    pub_override_cmd_    = nh_.advertise<quadrotor_msgs::PositionCommand>(bridge_ns_ + "/override_cmd", 10);   // OVERRIDE 命令
+    pub_emergency_stop_  = nh_.advertise<std_msgs::Empty>(bridge_ns_ + "/emergency_stop", 1);                  // 紧急停止
+    pub_override_trigger_= nh_.advertise<std_msgs::Int32>("/ego_api/override_trigger", 1);                     // 任务触发
 
-    // Wait a moment for connections
+    // 等待连接建立
     ros::Duration(0.5).sleep();
 
     ROS_INFO("[EgoApi] Initialized. bridge_ns=%s", bridge_ns_.c_str());
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Callbacks
+//  回调函数：更新本地缓存数据
 // ─────────────────────────────────────────────────────────────
 void EgoApi::flightStateCb(const std_msgs::String::ConstPtr& msg) {
-    flight_state_ = msg->data;
-    connected_ = true;
+    flight_state_ = msg->data;   // 缓存 FSM 状态字符串
+    connected_ = true;           // 首次收到即标记已连接
 }
 
 void EgoApi::reachStatusCb(const std_msgs::UInt8::ConstPtr& msg) {
@@ -47,10 +47,12 @@ void EgoApi::controlModeCb(const std_msgs::UInt8::ConstPtr& msg) {
 }
 
 void EgoApi::odomCb(const nav_msgs::Odometry::ConstPtr& msg) {
+    // 提取位置
     odom_pos_ << msg->pose.pose.position.x,
                  msg->pose.pose.position.y,
                  msg->pose.pose.position.z;
 
+    // 从四元数提取 yaw
     double q_x = msg->pose.pose.orientation.x;
     double q_y = msg->pose.pose.orientation.y;
     double q_z = msg->pose.pose.orientation.z;
@@ -65,7 +67,7 @@ void EgoApi::overrideTriggerCb(const std_msgs::Int32::ConstPtr& msg) {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Status queries
+//  状态查询：直接返回缓存值（由回调实时更新）
 // ─────────────────────────────────────────────────────────────
 std::string     EgoApi::getFlightState()  const { return flight_state_; }
 uint8_t         EgoApi::getReachStatus()  const { return reach_status_; }
@@ -75,8 +77,10 @@ double          EgoApi::getOdomYaw()      const { return odom_yaw_; }
 bool            EgoApi::isConnected()     const { return connected_; }
 
 // ─────────────────────────────────────────────────────────────
-//  Internal helpers
+//  内部工具：发布目标点 + 构建 PositionCommand
 // ─────────────────────────────────────────────────────────────
+
+/// 同时发布目标到 EGO-Planner(规划路径) 和 ego_bridge(到达检测)
 void EgoApi::publishGoal(double x, double y, double z, double yaw) {
     geometry_msgs::PoseStamped goal;
     goal.header.stamp = ros::Time::now();
@@ -85,21 +89,22 @@ void EgoApi::publishGoal(double x, double y, double z, double yaw) {
     goal.pose.position.y = y;
     goal.pose.position.z = z;
 
-    // yaw → quaternion (only around z-axis)
+    // yaw 转四元数（仅绕 z 轴旋转）
     goal.pose.orientation.x = 0.0;
     goal.pose.orientation.y = 0.0;
     goal.pose.orientation.z = std::sin(yaw / 2.0);
     goal.pose.orientation.w = std::cos(yaw / 2.0);
 
-    // 发给 ego_planner（规划路径）
+    // 发给 ego_planner（规划新路径）
     pub_goal_.publish(goal);
 
-    // 发给 ego_bridge（到达检测）
+    // 发给 ego_bridge（用于到达检测）
     pub_target_point_.publish(goal);
 
     ROS_INFO("[EgoApi] Goal published: (%.2f, %.2f, %.2f) yaw=%.2f", x, y, z, yaw);
 }
 
+/// 构建一帧 PositionCommand（仅填 pos/vel/yaw，加速度全零）
 quadrotor_msgs::PositionCommand EgoApi::buildPositionCmd(
     double x, double y, double z, double yaw,
     double vx, double vy, double vz)
@@ -124,8 +129,10 @@ quadrotor_msgs::PositionCommand EgoApi::buildPositionCmd(
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Blocking flight control
+//  阻塞式飞行控制：发指令 → 轮询状态 → 达成/超时后返回
 // ─────────────────────────────────────────────────────────────
+
+/// 起飞：发 TAKEOFF 指令 → 轮询等待 flight_state 变为 HOVER
 bool EgoApi::takeoff(double timeout) {
     ROS_INFO("[EgoApi] Sending TAKEOFF command...");
 
@@ -151,6 +158,7 @@ bool EgoApi::takeoff(double timeout) {
     return false;
 }
 
+/// 降落：发 LAND 指令 → 轮询等待 flight_state 变为 IDLE
 bool EgoApi::land(double timeout) {
     ROS_INFO("[EgoApi] Sending LAND command...");
 
@@ -176,10 +184,12 @@ bool EgoApi::land(double timeout) {
     return false;
 }
 
+/// 发送目标点（自动使用当前 yaw）：内部转调 sendGoalWithYaw
 bool EgoApi::sendGoal(double x, double y, double z, double timeout) {
-    return sendGoalWithYaw(x, y, z, odom_yaw_, timeout);
+    return sendGoalWithYaw(x, y, z, odom_yaw_, timeout);  // 使用当前航向角
 }
 
+/// 发送目标点（指定 yaw）：发布目标 → 轮询 reach_status → 到达/超时
 bool EgoApi::sendGoalWithYaw(double x, double y, double z, double yaw, double timeout) {
     ROS_INFO("[EgoApi] sendGoalWithYaw(%.2f, %.2f, %.2f, yaw=%.2f, timeout=%.1f)",
              x, y, z, yaw, timeout);
@@ -209,8 +219,10 @@ bool EgoApi::sendGoalWithYaw(double x, double y, double z, double yaw, double ti
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Override control
+//  Override 控制：接管/归还控制权 + 发命令 + 移动
 // ─────────────────────────────────────────────────────────────
+
+/// 请求进入 OVERRIDE：持续发 set_control_mode=1 直到 control_mode_ 确认
 bool EgoApi::enableOverride() {
     ROS_INFO("[EgoApi] Requesting OVERRIDE mode...");
 
@@ -239,6 +251,7 @@ bool EgoApi::enableOverride() {
     return false;
 }
 
+/// 退出 OVERRIDE：持续发 set_control_mode=0 直到 control_mode_ 确认
 bool EgoApi::disableOverride() {
     ROS_INFO("[EgoApi] Exiting OVERRIDE mode...");
 
@@ -266,32 +279,35 @@ bool EgoApi::disableOverride() {
     return false;
 }
 
+/// 发送一帧 OVERRIDE 控制指令（调用方需自行以 ≥2Hz 持续发送）
 void EgoApi::sendOverrideCmd(const quadrotor_msgs::PositionCommand& cmd) {
     pub_override_cmd_.publish(cmd);
 }
 
+/// 在当前位置发一帧悬停命令（纯位置指令，速度全零）
 void EgoApi::holdPosition() {
     auto cmd = buildPositionCmd(odom_pos_.x(), odom_pos_.y(), odom_pos_.z(), odom_yaw_);
     pub_override_cmd_.publish(cmd);
 }
 
+/// OVERRIDE 模式下阻塞移动：以 50Hz 持续发 cmd → 检查位置距离 → 到达/超时
 bool EgoApi::moveToOverride(double x, double y, double z, double yaw,
                              double pos_threshold, double timeout)
 {
     ROS_INFO("[EgoApi] moveToOverride(%.2f, %.2f, %.2f, yaw=%.2f, thresh=%.2f)",
              x, y, z, yaw, pos_threshold);
 
-    ros::Rate rate(50);
+    ros::Rate rate(50);  // 50Hz 发送频率
     ros::Time start = ros::Time::now();
 
     while (ros::ok()) {
         ros::spinOnce();
 
-        // 持续发送 override cmd
+        // 持续发送目标位置的 override cmd
         auto cmd = buildPositionCmd(x, y, z, yaw);
         pub_override_cmd_.publish(cmd);
 
-        // 检查是否到达
+        // 检查是否到达（欧氏距离）
         Eigen::Vector3d target(x, y, z);
         double dist = (odom_pos_ - target).norm();
         if (dist < pos_threshold) {
@@ -310,8 +326,10 @@ bool EgoApi::moveToOverride(double x, double y, double z, double yaw,
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Override task trigger
+//  Override 任务触发：主示例 ↔ override 示例之间的协调机制
 // ─────────────────────────────────────────────────────────────
+
+/// 主示例调用：发布任务触发信号，override 示例会收到并执行对应任务
 void EgoApi::triggerOverrideTask(int task_id) {
     ROS_INFO("[EgoApi] Triggering override task %d", task_id);
     std_msgs::Int32 msg;
@@ -319,6 +337,7 @@ void EgoApi::triggerOverrideTask(int task_id) {
     pub_override_trigger_.publish(msg);
 }
 
+/// override 示例调用：阻塞等待触发信号，返回任务 ID
 int EgoApi::waitForOverrideTrigger(double timeout) {
     ROS_INFO("[EgoApi] Waiting for override trigger...");
 
@@ -349,6 +368,7 @@ int EgoApi::waitForOverrideTrigger(double timeout) {
     return -1;
 }
 
+/// 主示例调用：阻塞等待 override 完成（control_mode 回到 0）
 bool EgoApi::waitOverrideComplete(double timeout) {
     ROS_INFO("[EgoApi] Waiting for override to complete...");
 
@@ -380,7 +400,7 @@ bool EgoApi::waitOverrideComplete(double timeout) {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Emergency
+//  紧急停止：发 empty 消息 → ego_bridge 停发 setpoint → PX4 failsafe
 // ─────────────────────────────────────────────────────────────
 void EgoApi::emergencyStop() {
     ROS_ERROR("[EgoApi] EMERGENCY STOP!");

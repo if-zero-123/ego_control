@@ -35,12 +35,14 @@ ego_bridge/
 ├── config/
 │   └── ego_bridge_param.yaml      # 所有参数（含详细注释）
 ├── launch/
-│   └── ego_bridge.launch          # 启动文件（桥接 + 可选RC）
+│   ├── ego_bridge.launch          # 启动文件（桥接 + 可选RC）
+│   └── ego_bridge_monitor.launch  # 终端状态监视器（独立窗口运行）
 ├── scripts/
 │   ├── takeoff.sh                 # 脚本触发起飞
 │   └── land.sh                    # 脚本触发降落
 └── src/
     ├── ego_bridge_node.cpp        # 核心桥接节点（6状态FSM）
+    ├── status_monitor_node.cpp    # 终端状态监视器（中文UI）
     └── rc_commander_node.cpp      # RC 遥控器节点（可选）
 
 ego_api/                           # ← 高级封装包
@@ -342,6 +344,91 @@ rostopic echo /ego_bridge/reach_status
 | **EGO 命令超时** | traj_server 超过 0.5s 无消息 | TRACKING → HOVER 悬停 |
 | **OVERRIDE 命令超时** | 接管代码超过 0.5s 无消息 | 在当前位置悬停（不退出 OVERRIDE） |
 | **紧急停止** | RC 或 emergency_stop 话题 | 立即停发所有 setpoint → PX4 failsafe |
+
+---
+
+## 终端状态监视器
+
+ego_bridge 内置了一个**中文终端状态监视器**（`status_monitor_node`），以 4Hz 实时刷新，在独立终端窗口中显示所有关键飞行信息。它是**纯只读**的（只订阅话题，不发布任何消息），可以随时启动/关闭，不会影响飞行。
+
+### 启动方式
+
+在**另一个终端**中运行（不要和 ego_bridge 主节点在同一个终端）：
+
+```bash
+# 打开第二个终端
+roslaunch ego_bridge ego_bridge_monitor.launch
+```
+
+### 终端效果示意
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║             EGO-Bridge 飞行状态监视器                        ║
+╠══════════════════════════════════════════════════════════════╣
+║                                                              ║
+║  ● FSM 状态链:                                               ║
+║  IDLE → PRE_OFFBOARD → TAKEOFF → [HOVER] → TRACKING → LANDING║
+║                                   ^^^^^^                     ║
+║                              (当前状态绿色高亮)                ║
+║                                                              ║
+╠══════════════════════════════════════════════════════════════╣
+║  控制模式:  ● EGO (自动轨迹跟踪)                              ║
+║            (OVERRIDE 模式时显示红色 ● OVERRIDE)               ║
+╠══════════════════════════════════════════════════════════════╣
+║  位置:  x= 3.02  y= 0.15  z= 1.01                          ║
+║  航向:  yaw= 12.3°                                          ║
+║  速度:  0.32 m/s                                             ║
+╠══════════════════════════════════════════════════════════════╣
+║  目标:  (5.00, 0.00, 1.00)                                   ║
+║  距离:  2.15 m    到达: ✗ 未到达                              ║
+╠══════════════════════════════════════════════════════════════╣
+║  EGO命令:  pos(3.10, 0.18, 1.00)  vel(0.30, 0.02, 0.00)    ║
+║           acc(0.05, 0.01, 0.00)  yaw=12.5°  traj_id=3       ║
+╠══════════════════════════════════════════════════════════════╣
+║  Topic 健康:                                                 ║
+║    ● odom   ● cmd   ● flight_state   ● reach   ● ctrl_mode  ║
+║    (绿色=正常收到数据, 红色=超时未收到)                         ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+> 上面是简化示意。实际终端中使用 ANSI 颜色渲染：当前 FSM 状态**绿色高亮**，EGO 模式**绿色**，OVERRIDE 模式**红色**，Topic 超时**红色圆点**，正常**绿色圆点**。
+
+### 各面板含义
+
+| 面板 | 含义 | 作用 |
+|------|------|------|
+| **FSM 状态链** | 6 个状态横向排列，当前状态绿色高亮显示 | 一眼看出飞机处于什么阶段（地面？起飞中？悬停？跟踪？降落？） |
+| **控制模式** | `EGO`（绿色）= EGO-Planner 自动控制；`OVERRIDE`（红色）= 你的代码接管 | 确认控制权在谁手里 |
+| **位置/航向/速度** | 实时 x, y, z（米）、yaw（度）、合速度（m/s） | 观察飞机当前位姿 |
+| **目标与到达** | 目标点坐标、到目标的欧氏距离、到达状态 `✓ 已到达` / `✗ 未到达` | 确认 EGO 是否完成导航 |
+| **EGO 命令详情** | EGO-Planner 输出的位置/速度/加速度/yaw + 轨迹 ID | 排查 EGO 是否正常输出轨迹 |
+| **Override 命令详情** | 外部代码发送的位置/速度/yaw（仅 OVERRIDE 模式时有数据） | 排查你的接管代码是否正确发送命令 |
+| **Topic 健康指示** | 7 个关键话题的实时健康状态（`●` 绿色正常 / `●` 红色超时 0.5s） | 快速定位通信故障（某个节点挂了、话题名错了等） |
+
+### 特性
+
+- **纯只读**：只订阅 7 个话题，不发布任何消息，绝不干扰飞行控制
+- **ANSI 自动检测**：通过 `isatty()` 检测是否在真实终端中运行，非终端（如重定向到文件）自动退化为纯文本，不输出乱码
+- **Unicode 方框绘制**：使用 `╔═╗║╚═╝╠╣` 等 Box-Drawing 字符绘制面板边框
+- **独立启动**：有自己的 launch 文件，可随时开关，不需要和 ego_bridge 一起启动
+- **4Hz 刷新**：每 0.25 秒刷新一次画面（使用 `\033[H` 光标归位，避免闪烁）
+
+### 话题订阅
+
+所有话题都通过 `~`（私有命名空间）+ launch 文件 remap 映射，默认配置：
+
+| 话题 | remap 目标 | 数据来源 | 用途 |
+|------|-----------|---------|------|
+| `~odom` | `/mavros/local_position/odom` | MAVROS | 飞机位置、速度、航向 |
+| `~cmd` | `/position_cmd` | EGO traj_server | EGO 轨迹命令 |
+| `~flight_state` | `/ego_bridge/flight_state` | ego_bridge | FSM 状态字符串 |
+| `~reach_status` | `/ego_bridge/reach_status` | ego_bridge | 到达状态 (0/1) |
+| `~control_mode` | `/ego_bridge/control_mode` | ego_bridge | 控制模式 (0=EGO/1=OVERRIDE) |
+| `~target_point` | `/ego_bridge/target_point` | ego_api 或手动 | 当前目标点 |
+| `~override_cmd` | `/ego_bridge/override_cmd` | 你的代码 | Override 控制命令 |
+
+> **提示**：如果你修改了 ego_bridge 的命名空间，需要同步修改 `ego_bridge_monitor.launch` 中的 remap。
 
 ---
 

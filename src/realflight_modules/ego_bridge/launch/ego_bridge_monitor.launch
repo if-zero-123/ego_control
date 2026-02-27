@@ -1,0 +1,15 @@
+<!-- ego_bridge_monitor.launch
+     飞行状态监视器 — 在另一个终端窗口中启动，实时显示中文仪表盘。
+
+     用法（打开第二个终端）：
+       roslaunch ego_bridge ego_bridge_monitor.launch
+
+     前提：ego_bridge 主节点已在第一个终端中运行。
+-->
+<launch>
+    <node pkg="ego_bridge" type="status_monitor_node" name="status_monitor" output="screen">
+        <!-- remap 与主节点一致的 Topic -->
+        <remap from="~odom" to="/mavros/local_position/odom" />
+        <remap from="~cmd"  to="/position_cmd" />
+    </node>
+</launch>

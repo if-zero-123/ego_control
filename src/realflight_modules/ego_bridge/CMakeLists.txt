@@ -33,3 +33,8 @@ target_link_libraries(ego_bridge_node ${catkin_LIBRARIES})
 add_executable(rc_commander_node src/rc_commander_node.cpp)
 add_dependencies(rc_commander_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(rc_commander_node ${catkin_LIBRARIES})
+
+# ---- status_monitor_node ----
+add_executable(status_monitor_node src/status_monitor_node.cpp)
+add_dependencies(status_monitor_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(status_monitor_node ${catkin_LIBRARIES})

@@ -2,6 +2,14 @@
  * @file override_task_demo.cpp
  * @brief Override 多任务示例 — while 循环 + switch-case 分发。
  *
+ * 【中文概述】
+ * 本节点在后台运行，通过 /ego_api/override_trigger 话题接收主示例发来的任务 ID。
+ * 收到触发后：
+ *   1. 调用 enableOverride() 接管控制权
+ *   2. 根据 task_id 分发到对应的任务函数
+ *   3. 任务函数返回后调用 disableOverride() 归还控制权
+ *   4. 主示例的 waitOverrideComplete() 会感知到 control_mode 回 0 而继续
+ *
  * 预留 6 个任务槽位，用户在对应的 taskN_xxx() 函数中填入自己的逻辑。
  *
  * 扩展方法：
@@ -42,6 +50,7 @@ int main(int argc, char** argv) {
 
     ROS_INFO("[override] Node started, waiting for trigger...");
 
+    // 主循环：持续等待触发信号 → 接管 → 执行任务 → 归还 → 继续等待
     while (ros::ok()) {
         // 阻塞等待主示例的触发信号，返回任务 ID
         int task_id = api.waitForOverrideTrigger(0);  // 0 = 永不超时
@@ -52,14 +61,14 @@ int main(int argc, char** argv) {
 
         ROS_INFO("[override] ===== Received task %d =====", task_id);
 
-        // 接管控制权
+        // 接管控制权：通过 ego_bridge 的 set_control_mode=1
         if (!api.enableOverride()) {
             ROS_ERROR("[override] Failed to enable override, skip task %d", task_id);
-            continue;
+            continue;  // 接管失败，跳过本次任务
         }
         ROS_INFO("[override] Override enabled, executing task %d...", task_id);
 
-        // 按任务 ID 分发
+        // 按任务 ID 分发到对应的任务函数
         switch (task_id) {
             case 1: task1_photo(api);     break;
             case 2: task2_delivery(api);  break;
@@ -74,7 +83,7 @@ int main(int argc, char** argv) {
                 break;
         }
 
-        // 归还控制权
+        // 归还控制权：set_control_mode=0 → ego_bridge 回到 HOVER(wait_new_traj)
         api.disableOverride();
         ROS_INFO("[override] Task %d complete, control returned. Waiting for next trigger...\n",
                  task_id);
@@ -83,52 +92,50 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-// ══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
 //  任务实现（用户修改区域）
 //  每个任务函数接收 EgoApi& 引用，在 OVERRIDE 模式下执行。
 //  函数返回后会自动 disableOverride() 归还控制权。
-// ══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
 
-// ─────────────────────────────────────────
-//  任务 1: 拍照（精准定位 + 悬停）
-// ─────────────────────────────────────────
+// ───────────────────────────────────────
+//  任务 1: 拍照（精准定位 + 悬停等待拍照）
+// ───────────────────────────────────────
 void task1_photo(EgoApi& api) {
     ROS_INFO("[task1] === Photo Task ===");
 
-    // 精准移动到拍照位置
+    // 精准移动到拍照位置（到达阈值 0.15m）
     bool ok = api.moveToOverride(3.1, 3.1, 1.5, 0.0, 0.15, 30.0);
     if (!ok) {
         ROS_WARN("[task1] Failed to reach photo position");
     }
 
-    // 悬停等待拍照
+    // 悬停等待拍照（5秒）
     ROS_INFO("[task1] Holding position for photo...");
-    // TODO: 在此添加拍照逻辑，例如调用相机服务
-    //       srv_camera_.call(...)
+    // TODO: 在此添加拍照逻辑，例如调用相机服务 srv_camera_.call(...)
     ros::Duration(5.0).sleep();
 
     ROS_INFO("[task1] Photo task done.");
 }
 
-// ─────────────────────────────────────────
-//  任务 2: 投递（下降 + 释放 + 回升）
-// ─────────────────────────────────────────
+// ───────────────────────────────────────
+//  任务 2: 投递（精准定位 → 下降 → 释放货物 → 回升）
+// ───────────────────────────────────────
 void task2_delivery(EgoApi& api) {
     ROS_INFO("[task2] === Delivery Task ===");
 
-    // 移动到投递点上方
+    // 第一步：移动到投递点上方
     api.moveToOverride(0.0, 0.0, 1.0, 0.0, 0.1, 30.0);
 
-    // 下降到投递高度
+    // 第二步：下降到投递高度
     api.moveToOverride(0.0, 0.0, 0.5, 0.0, 0.1, 30.0);
 
-    // 执行投递
+    // 第三步：执行投递
     ROS_INFO("[task2] Delivering payload...");
-    // TODO: 在此添加投递/释放逻辑，例如控制舵机
-    //       pub_servo_.publish(...)
+    // TODO: 在此添加投递/释放逻辑，例如控制舵机 pub_servo_.publish(...)
     ros::Duration(2.0).sleep();
 
-    // 回到安全高度
+    // 第四步：回到安全高度
     api.moveToOverride(0.0, 0.0, 1.5, 0.0, 0.2, 30.0);
 
     ROS_INFO("[task2] Delivery task done.");

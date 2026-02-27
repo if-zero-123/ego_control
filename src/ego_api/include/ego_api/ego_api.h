@@ -155,48 +155,49 @@ public:
     void emergencyStop();
 
 private:
-    ros::NodeHandle nh_;
-    std::string bridge_ns_;
+    ros::NodeHandle nh_;       // ROS 句柄
+    std::string bridge_ns_;    // ego_bridge 命名空间（默认 "/ego_bridge"）
 
-    // ── Subscribers ──
-    ros::Subscriber sub_flight_state_;
-    ros::Subscriber sub_reach_status_;
-    ros::Subscriber sub_control_mode_;
-    ros::Subscriber sub_odom_;
-    ros::Subscriber sub_override_trigger_;
+    // ── 订阅者：从 ego_bridge 接收状态更新 ──
+    ros::Subscriber sub_flight_state_;      // FSM 状态字符串
+    ros::Subscriber sub_reach_status_;      // 到达状态 (0/1)
+    ros::Subscriber sub_control_mode_;      // 控制模式 (0=EGO, 1=OVERRIDE)
+    ros::Subscriber sub_odom_;              // 里程计位姿
+    ros::Subscriber sub_override_trigger_;  // override 任务触发信号
 
-    // ── Publishers ──
-    ros::Publisher pub_takeoff_land_;
-    ros::Publisher pub_goal_;
-    ros::Publisher pub_target_point_;
-    ros::Publisher pub_set_ctrl_mode_;
-    ros::Publisher pub_override_cmd_;
-    ros::Publisher pub_emergency_stop_;
-    ros::Publisher pub_override_trigger_;
+    // ── 发布者：向 ego_bridge / ego_planner / override 节点发送指令 ──
+    ros::Publisher pub_takeoff_land_;       // 起飞/降落指令
+    ros::Publisher pub_goal_;               // 发给 EGO-Planner 的目标点
+    ros::Publisher pub_target_point_;       // 发给 ego_bridge 的目标点（到达检测用）
+    ros::Publisher pub_set_ctrl_mode_;      // 切换 EGO/OVERRIDE 模式
+    ros::Publisher pub_override_cmd_;       // OVERRIDE 模式的控制指令
+    ros::Publisher pub_emergency_stop_;     // 紧急停止
+    ros::Publisher pub_override_trigger_;   // 触发 override 任务
 
-    // ── 缓存数据 ──
-    std::string     flight_state_   = "UNKNOWN";
-    uint8_t         reach_status_   = 0;
-    uint8_t         control_mode_   = 0;
-    Eigen::Vector3d odom_pos_       = Eigen::Vector3d::Zero();
-    double          odom_yaw_       = 0.0;
-    bool            connected_      = false;
+    // ── 缓存数据：由回调更新，供阻塞函数查询 ──
+    std::string     flight_state_   = "UNKNOWN";              // 当前 FSM 状态
+    uint8_t         reach_status_   = 0;                      // 0=未到达, 1=已到达
+    uint8_t         control_mode_   = 0;                      // 0=EGO, 1=OVERRIDE
+    Eigen::Vector3d odom_pos_       = Eigen::Vector3d::Zero();// 当前位置
+    double          odom_yaw_       = 0.0;                    // 当前航向角(rad)
+    bool            connected_      = false;                  // 是否收到过 flight_state
 
-    // ── Override trigger ──
-    int  pending_task_id_    = -1;
-    bool trigger_received_   = false;
+    // ── Override 任务触发机制 ──
+    int  pending_task_id_    = -1;    // 待处理的任务 ID
+    bool trigger_received_   = false; // 是否收到触发信号
 
-    // ── Callbacks ──
-    void flightStateCb(const std_msgs::String::ConstPtr& msg);
-    void reachStatusCb(const std_msgs::UInt8::ConstPtr& msg);
-    void controlModeCb(const std_msgs::UInt8::ConstPtr& msg);
-    void odomCb(const nav_msgs::Odometry::ConstPtr& msg);
-    void overrideTriggerCb(const std_msgs::Int32::ConstPtr& msg);
+    // ── 回调函数：更新缓存数据 ──
+    void flightStateCb(const std_msgs::String::ConstPtr& msg);    // 更新 flight_state_
+    void reachStatusCb(const std_msgs::UInt8::ConstPtr& msg);     // 更新 reach_status_
+    void controlModeCb(const std_msgs::UInt8::ConstPtr& msg);     // 更新 control_mode_
+    void odomCb(const nav_msgs::Odometry::ConstPtr& msg);         // 更新 odom_pos_ 和 odom_yaw_
+    void overrideTriggerCb(const std_msgs::Int32::ConstPtr& msg); // 更新 pending_task_id_
 
     // ── 内部工具 ──
+    /// 同时发布目标到 EGO-Planner(规划路径) 和 ego_bridge(到达检测)
     void publishGoal(double x, double y, double z, double yaw);
 
-    /** @brief 构造一帧 PositionCommand */
+    /** @brief 构造一帧 PositionCommand（用于 OVERRIDE 模式发送命令） */
     quadrotor_msgs::PositionCommand buildPositionCmd(
         double x, double y, double z, double yaw,
         double vx = 0, double vy = 0, double vz = 0);

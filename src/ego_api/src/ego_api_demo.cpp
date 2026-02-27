@@ -2,6 +2,14 @@
  * @file ego_api_demo.cpp
  * @brief 主飞行示例 — 函数式航点编排 + Override 任务触发。
  *
+ * 【中文概述】
+ * 本文件演示如何用 EgoApi 编排一条完整的飞行任务：
+ *   起飞 → 飞往 A → 飞往 B(指定 yaw) → 触发 Override 任务 1
+ *   → 飞往 C → 飞往 D(指定 yaw) → 触发 Override 任务 2 → 降落
+ *
+ * 每个 sendGoal/sendGoalWithYaw 都是阻塞调用，到达后才执行下一行。
+ * triggerOverrideTask 触发 override_task_demo 中对应的任务函数。
+ *
  * 用法：直接修改 main 中的 sendGoal / triggerOverrideTask 行来编排飞行任务。
  *       sendGoal(x, y, z, timeout)         — 自动 yaw
  *       sendGoalWithYaw(x, y, z, yaw, timeout) — 指定 yaw
@@ -15,13 +23,13 @@ int main(int argc, char** argv) {
     ros::init(argc, argv, "ego_api_demo");
     ros::NodeHandle nh;
 
-    // 从参数读取 bridge 命名空间（默认 /ego_bridge）
+    // 从参数服务器读取 bridge 命名空间（默认 /ego_bridge）
     std::string bridge_ns;
     nh.param<std::string>("~bridge_ns", bridge_ns, "/ego_bridge");
 
-    EgoApi api(nh, bridge_ns);
+    EgoApi api(nh, bridge_ns);  // 初始化 API，自动建立订阅/发布连接
 
-    // 等待连接到 ego_bridge
+    // 等待连接到 ego_bridge（收到第一个 flight_state 消息）
     ROS_INFO("[demo] Waiting for ego_bridge...");
     ros::Rate wait_rate(5);
     while (ros::ok() && !api.isConnected()) {
