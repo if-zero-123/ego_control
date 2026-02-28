@@ -290,6 +290,27 @@ void EgoApi::holdPosition() {
     pub_override_cmd_.publish(cmd);
 }
 
+/// 发送一帧速度控制指令（世界坐标系），位置用当前 odom 填充
+void EgoApi::sendVelocityCmd(double vx, double vy, double vz, double yaw_rate) {
+    quadrotor_msgs::PositionCommand cmd;
+    cmd.header.stamp = ros::Time::now();
+    cmd.header.frame_id = "world";
+    cmd.position.x = odom_pos_.x();
+    cmd.position.y = odom_pos_.y();
+    cmd.position.z = odom_pos_.z();
+    cmd.velocity.x = vx;
+    cmd.velocity.y = vy;
+    cmd.velocity.z = vz;
+    cmd.acceleration.x = 0.0;
+    cmd.acceleration.y = 0.0;
+    cmd.acceleration.z = 0.0;
+    cmd.yaw = odom_yaw_;
+    cmd.yaw_dot = yaw_rate;
+    cmd.trajectory_id = 0;
+    cmd.trajectory_flag = 0;
+    pub_override_cmd_.publish(cmd);
+}
+
 /// OVERRIDE 模式下阻塞移动：以 50Hz 持续发 cmd → 检查位置距离 → 到达/超时
 bool EgoApi::moveToOverride(double x, double y, double z, double yaw,
                              double pos_threshold, double timeout)

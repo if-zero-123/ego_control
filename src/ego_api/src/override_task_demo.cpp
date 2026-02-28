@@ -20,6 +20,7 @@
  * 任务内可用 API：
  *   - api.moveToOverride(x,y,z,yaw,threshold,timeout)  阻塞精准移动
  *   - api.holdPosition()                                 原地悬停(发一帧cmd)
+ *   - api.sendVelocityCmd(vx,vy,vz,yaw_rate)             速度控制(世界系,需≥2Hz)
  *   - api.sendOverrideCmd(cmd)                            自由发控制指令(需≥2Hz)
  *   - api.getOdomPosition() / api.getOdomYaw()            获取当前位姿
  */

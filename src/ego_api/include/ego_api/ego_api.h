@@ -112,6 +112,20 @@ public:
     void sendOverrideCmd(const quadrotor_msgs::PositionCommand& cmd);
 
     /**
+     * @brief 发送一帧速度控制指令（世界坐标系）。
+     *
+     * 非阻塞，发一帧后立即返回。调用方需以 ≥2Hz 持续调用，
+     * 否则 ego_bridge 会因超时自动切回悬停。
+     * 适合外环 PID 控制器在循环中调用。
+     *
+     * @param vx  世界系 X 轴线速度 (m/s)
+     * @param vy  世界系 Y 轴线速度 (m/s)
+     * @param vz  世界系 Z 轴线速度 (m/s)
+     * @param yaw_rate  偏航角速度 (rad/s)
+     */
+    void sendVelocityCmd(double vx, double vy, double vz, double yaw_rate = 0.0);
+
+    /**
      * @brief 在当前位置发送一帧悬停 override cmd。
      */
     void holdPosition();
