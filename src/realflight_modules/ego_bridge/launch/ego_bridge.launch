@@ -1,25 +1,22 @@
 <launch>
-    <!-- ============================================================
-         ego_bridge.launch  —  桥接节点 + 可选 RC 控制节点
-         ============================================================ -->
-
-    <!-- 是否启用 RC 遥控器控制节点，默认启用 -->
     <arg name="enable_rc" default="false" />
 
-    <!-- Load parameters -->
     <rosparam file="$(find ego_bridge)/config/ego_bridge_param.yaml" command="load"
               ns="ego_bridge" />
 
-    <!-- ── Ego Bridge Node ── -->
     <node pkg="ego_bridge" type="ego_bridge_node" name="ego_bridge" output="screen">
         <remap from="~odom"          to="/mavros/local_position/odom" />
         <remap from="~cmd"           to="/position_cmd" />
     </node>
 
-    <!-- ── RC Commander Node (可选) ── -->
     <node pkg="ego_bridge" type="rc_commander_node" name="rc_commander" output="screen"
           if="$(arg enable_rc)">
         <remap from="~takeoff_land"   to="/ego_bridge/takeoff_land" />
         <remap from="~emergency_stop" to="/ego_bridge/emergency_stop" />
     </node>
+
+    <!-- <include file="$(find fast_lio)/launch/mapping_velodyne.launch" /> -->
+
+    <include file="$(find lidar_to_mavros)/launch/lidar_to_mavros.launch" />
+
 </launch>

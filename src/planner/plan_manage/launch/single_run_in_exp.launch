@@ -7,6 +7,7 @@
     <arg name="map_size_y" value="50"/>
     <arg name="map_size_z" value="3.0"/>
     <arg name="odom_topic" value="/mavros/local_position/odom"/>
+    <arg name="cloud_topic" value="/cloud_registered_aligned"/>
     
     <!-- main algorithm params -->
     <include file="$(find ego_planner)/launch/advanced_param_exp.xml">
@@ -23,7 +24,7 @@
         <arg name="depth_topic" value="nouse2"/>
         <!-- topic of point cloud measurement, such as from LIDAR  -->
         <!-- don't set camera pose and depth, if you already set this one! -->
-        <arg name="cloud_topic" value="/cloud_registered"/>
+        <arg name="cloud_topic" value="$(arg cloud_topic)"/>
         <!-- intrinsic params of the depth camera -->
         <arg name="cx" value="323.3316345214844"/>
         <arg name="cy" value="234.95498657226562"/>
