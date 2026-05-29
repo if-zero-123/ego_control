@@ -35,6 +35,11 @@
   <arg name="point4_z"/>
 
   <arg name="flight_type"/>
+  <!-- /move_base_simple/goal 手动目标点高度模式：
+       use_goal_msg_z=false：只使用消息里的 x/y，高度 z 固定为 fixed_goal_z，适合 RViz 2D Nav Goal
+       use_goal_msg_z=true ：x/y/z 全部使用消息里的值，适合 ego_api 或手动 rostopic 发送完整目标点 -->
+  <arg name="use_goal_msg_z" default="false"/>
+  <arg name="fixed_goal_z" default="1.0"/>
   <arg name="use_distinctive_trajs"/>
 
   <arg name="obj_num_set"/>
@@ -65,6 +70,9 @@
     <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/> <!--always set to 1.5 times grater than sensing horizen-->
     <param name="fsm/planning_horizen_time" value="3" type="double"/>
     <param name="fsm/emergency_time" value="1.0" type="double"/>
+    <!-- 目标点高度模式：false 保持官方固定高度行为；true 使用传入目标点的 z。 -->
+    <param name="fsm/use_goal_msg_z" value="$(arg use_goal_msg_z)" type="bool"/>
+    <param name="fsm/fixed_goal_z" value="$(arg fixed_goal_z)" type="double"/>
     <param name="fsm/realworld_experiment" value="false"/>
     <param name="fsm/fail_safe" value="true"/>
 

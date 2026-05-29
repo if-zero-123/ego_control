@@ -3,11 +3,18 @@
     <arg name="obj_num" value="10" />
     <arg name="drone_id" value="0"/>
 
+    <!-- 栅格地图总范围：z 方向建议比限高略大，给建图和边界判断留余量。 -->
     <arg name="map_size_x" value="100"/>
     <arg name="map_size_y" value="50"/>
     <arg name="map_size_z" value="3.0"/>
+    <!-- 规划虚拟天花板高度：EGO planner 会把该高度附近当成障碍，避免主动规划飞过 2m。 -->
+    <arg name="virtual_ceil_height" value="2.0"/>
     <arg name="odom_topic" value="/mavros/local_position/odom"/>
-    <arg name="cloud_topic" value="/cloud_registered_aligned"/>
+    <arg name="cloud_topic" default="/cloud_registered_aligned"/>
+    <!-- /move_base_simple/goal 目标点高度模式：
+         默认 false = 固定高度，适合 RViz 2D Nav Goal；发送完整 x/y/z 目标点时设为 true。 -->
+    <arg name="use_goal_msg_z" default="false"/>
+    <arg name="fixed_goal_z" default="1.0"/>
     
     <!-- main algorithm params -->
     <include file="$(find ego_planner)/launch/advanced_param_exp.xml">
@@ -15,6 +22,7 @@
         <arg name="map_size_x_" value="$(arg map_size_x)"/>
         <arg name="map_size_y_" value="$(arg map_size_y)"/>
         <arg name="map_size_z_" value="$(arg map_size_z)"/>
+        <arg name="virtual_ceil_height_" value="$(arg virtual_ceil_height)"/>
         <arg name="odometry_topic" value="$(arg odom_topic)"/>
         <arg name="obj_num_set" value="$(arg obj_num)" />
         <!-- camera pose: transform of camera frame in the world frame -->
@@ -39,6 +47,9 @@
         <!-- 1: use 2D Nav Goal to select goal  -->
         <!-- 2: use global waypoints below  -->
         <arg name="flight_type" value="1" />
+        <!-- 将手动目标点高度模式传给 EGO FSM。 -->
+        <arg name="use_goal_msg_z" value="$(arg use_goal_msg_z)" />
+        <arg name="fixed_goal_z" value="$(arg fixed_goal_z)" />
         <!-- global waypoints -->
         <!-- It generates a piecewise min-snap traj passing all waypoints -->
         <arg name="point_num" value="1" />

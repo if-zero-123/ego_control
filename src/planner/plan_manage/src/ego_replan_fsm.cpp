@@ -19,6 +19,8 @@ namespace ego_planner
     nh.param("fsm/planning_horizon", planning_horizen_, -1.0);
     nh.param("fsm/planning_horizen_time", planning_horizen_time_, -1.0);
     nh.param("fsm/emergency_time", emergency_time_, 1.0);
+    nh.param("fsm/use_goal_msg_z", use_goal_msg_z_, false);
+    nh.param("fsm/fixed_goal_z", fixed_goal_z_, 1.0);
     nh.param("fsm/realworld_experiment", flag_realworld_experiment_, false);
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
 
@@ -217,7 +219,11 @@ namespace ego_planner
     // trigger_ = true;
     init_pt_ = odom_pos_;
 
-    Eigen::Vector3d end_wp(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+    double goal_z = use_goal_msg_z_ ? msg->pose.position.z : fixed_goal_z_;
+    Eigen::Vector3d end_wp(msg->pose.position.x, msg->pose.position.y, goal_z);
+    ROS_INFO("[EGO FSM] Goal height mode: %s, target=(%.2f, %.2f, %.2f)",
+             use_goal_msg_z_ ? "message" : "fixed",
+             end_wp.x(), end_wp.y(), end_wp.z());
 
     planNextWaypoint(end_wp);
   }

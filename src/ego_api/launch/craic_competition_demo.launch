@@ -1,0 +1,109 @@
+<!-- CRAIC 比赛第一版：真实调用 EgoApi 飞行，MID360 点云识别柱子，
+     D435 深度图通过 override 任务闭环穿框。 -->
+<launch>
+    <arg name="bridge_ns" default="/ego_bridge" />
+    <arg name="flight_z" default="0.9" />
+    <arg name="takeoff_height" default="0.65" />
+    <arg name="land_after_finish" default="true" />
+    <arg name="start_ego_planner" default="true" />
+    <arg name="start_ego_bridge" default="true" />
+    <arg name="climb_to_flight_z_before_detect" default="true" />
+    <arg name="override_climb_timeout" default="10.0" />
+    <arg name="override_climb_speed" default="0.18" />
+    <arg name="pillar_align_timeout" default="20.0" />
+    <arg name="pillar_align_threshold" default="0.15" />
+    <arg name="pillar_align_speed" default="0.18" />
+
+    <arg name="raw_cloud_topic" default="/cloud_registered_aligned" />
+    <arg name="cloud_topic" default="/craic/cloud_filtered" />
+    <arg name="depth_topic" default="/d435/depth/image_raw" />
+    <arg name="camera_info_topic" default="/d435/depth/camera_info" />
+    <arg name="pillar_roi_x_min" default="-0.5" />
+    <arg name="pillar_roi_x_max" default="3.6" />
+    <arg name="pillar_roi_y_min" default="-3.2" />
+    <arg name="pillar_roi_y_max" default="4.0" />
+    <arg name="pillar_roi_z_min" default="0.05" />
+    <arg name="pillar_roi_z_max" default="1.9" />
+    <arg name="pillar_min_height" default="0.55" />
+    <arg name="pillar_min_face_width" default="0.04" />
+    <arg name="pillar_min_cluster_size" default="15" />
+    <arg name="pillar_cluster_tolerance" default="0.24" />
+    <arg name="pillar_pair_gap_min" default="1.0" />
+    <arg name="pillar_pair_gap_max" default="2.3" />
+    <arg name="pillar_pair_expected_gap" default="1.6" />
+    <arg name="pillar_pair_x_tolerance" default="0.8" />
+
+    <!-- 先过滤 MID360/FAST-LIO 点云里的机体附近点和异常高度点，避免 EGO 把自身刷成障碍。 -->
+    <node pkg="ego_api" type="craic_cloud_self_filter" name="craic_cloud_self_filter" output="screen">
+        <param name="input_cloud_topic" value="$(arg raw_cloud_topic)" />
+        <param name="output_cloud_topic" value="$(arg cloud_topic)" />
+        <param name="odom_topic" value="/mavros/local_position/odom" />
+        <param name="self_radius_xy" value="0.45" />
+        <param name="self_radius_z" value="0.45" />
+        <param name="min_z" value="0.03" />
+        <param name="max_z" value="2.2" />
+    </node>
+
+    <!-- 拉起 EGO-Planner。当前仿真话题已经对齐：
+         odom=/mavros/local_position/odom，cloud=/craic/cloud_filtered。 -->
+    <include file="$(find ego_planner)/launch/single_run_in_exp.launch"
+             if="$(arg start_ego_planner)">
+        <arg name="cloud_topic" value="$(arg cloud_topic)" />
+        <arg name="use_goal_msg_z" value="true" />
+        <arg name="fixed_goal_z" value="$(arg flight_z)" />
+    </include>
+
+    <!-- 这里直接拉起 ego_bridge_node，而不是 include ego_bridge.launch。
+         原 launch 还会 include 当前仿真环境里不存在的 lidar_to_mavros。 -->
+    <group if="$(arg start_ego_bridge)">
+        <rosparam file="$(find ego_bridge)/config/ego_bridge_param.yaml" command="load"
+                  ns="ego_bridge" />
+        <node pkg="ego_bridge" type="ego_bridge_node" name="ego_bridge" output="screen">
+            <!-- api.takeoff() 的真正起飞完成高度：这里只控制起飞悬停高度，不等同于后续任务 flight_z。 -->
+            <param name="takeoff/height" value="$(arg takeoff_height)" />
+            <remap from="~odom" to="/mavros/local_position/odom" />
+            <remap from="~cmd" to="/position_cmd" />
+        </node>
+    </group>
+
+    <!-- MID360/FAST-LIO 点云柱子识别，稳定后发布 /craic/pillar_pre_goal 和 post_goal。 -->
+    <node pkg="ego_api" type="craic_pillar_detector" name="craic_pillar_detector" output="screen">
+        <param name="cloud_topic" value="$(arg cloud_topic)" />
+        <param name="flight_z" value="$(arg flight_z)" />
+        <param name="roi_x_min" value="$(arg pillar_roi_x_min)" />
+        <param name="roi_x_max" value="$(arg pillar_roi_x_max)" />
+        <param name="roi_y_min" value="$(arg pillar_roi_y_min)" />
+        <param name="roi_y_max" value="$(arg pillar_roi_y_max)" />
+        <param name="roi_z_min" value="$(arg pillar_roi_z_min)" />
+        <param name="roi_z_max" value="$(arg pillar_roi_z_max)" />
+        <param name="pillar_min_height" value="$(arg pillar_min_height)" />
+        <param name="pillar_min_face_width" value="$(arg pillar_min_face_width)" />
+        <param name="min_cluster_size" value="$(arg pillar_min_cluster_size)" />
+        <param name="cluster_tolerance" value="$(arg pillar_cluster_tolerance)" />
+        <param name="pillar_pair_gap_min" value="$(arg pillar_pair_gap_min)" />
+        <param name="pillar_pair_gap_max" value="$(arg pillar_pair_gap_max)" />
+        <param name="pillar_pair_expected_gap" value="$(arg pillar_pair_expected_gap)" />
+        <param name="pillar_pair_x_tolerance" value="$(arg pillar_pair_x_tolerance)" />
+    </node>
+
+    <!-- override 任务节点：负责 D435 穿框，以及二维码/气球占位任务。 -->
+    <node pkg="ego_api" type="override_task_demo" name="override_task_demo" output="screen">
+        <param name="bridge_ns" value="$(arg bridge_ns)" />
+        <param name="flight_z" value="$(arg flight_z)" />
+        <param name="depth_topic" value="$(arg depth_topic)" />
+        <param name="camera_info_topic" value="$(arg camera_info_topic)" />
+    </node>
+
+    <!-- 比赛主流程：起飞、等柱子、过柱、穿框、返程、回击打区、降落。 -->
+    <node pkg="ego_api" type="craic_competition_demo" name="craic_competition_demo" output="screen">
+        <param name="bridge_ns" value="$(arg bridge_ns)" />
+        <param name="flight_z" value="$(arg flight_z)" />
+        <param name="land_after_finish" value="$(arg land_after_finish)" />
+        <param name="climb_to_flight_z_before_detect" value="$(arg climb_to_flight_z_before_detect)" />
+        <param name="override_climb_timeout" value="$(arg override_climb_timeout)" />
+        <param name="override_climb_speed" value="$(arg override_climb_speed)" />
+        <param name="pillar_align_timeout" value="$(arg pillar_align_timeout)" />
+        <param name="pillar_align_threshold" value="$(arg pillar_align_threshold)" />
+        <param name="pillar_align_speed" value="$(arg pillar_align_speed)" />
+    </node>
+</launch>

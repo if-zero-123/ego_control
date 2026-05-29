@@ -241,6 +241,7 @@ private:
     // ── TAKEOFF 状态变量：起飞过程跟踪 ──
     Eigen::Vector3d takeoff_start_pos_;  // 起飞时的起始位置
     double          takeoff_target_z_   = 0.0;  // 起飞目标高度
+    double          takeoff_start_yaw_  = 0.0;  // 起飞时锁定的航向角
     ros::Time       takeoff_start_time_;         // 起飞计时起点
     bool            warmup_done_        = false; // 电机预热是否完成
     bool            trigger_sent_       = false; // 是否已发送 traj_start_trigger
@@ -248,6 +249,7 @@ private:
 
     // ── HOVER 状态变量：悬停位置 + 新轨迹等待 ──
     Eigen::Vector3d hover_pos_;             // 悬停锁定位置
+    double          hover_yaw_       = 0.0; // 悬停锁定航向角
     bool            wait_new_traj_  = false;// 是否等待新 trajectory_id 才进 TRACKING
     uint32_t        old_traj_id_    = 0;    // 进入 HOVER 时的旧 trajectory_id
 
@@ -397,6 +399,7 @@ private:
     void enterTakeoff() {
         state_ = State::TAKEOFF;
         takeoff_start_pos_  = odom_pos_;                  // 记录当前位置作为起飞基准
+        takeoff_start_yaw_  = odom_yaw_;                  // 锁定起飞航向，避免起飞阶段 yaw 跟随漂动
         takeoff_target_z_   = params_.takeoff_height;     // 目标绝对高度
         if (takeoff_target_z_ < odom_pos_.z()) {
             takeoff_target_z_ = odom_pos_.z();            // 保护：如果已经高于目标则保持当前高度
@@ -411,6 +414,7 @@ private:
     void enterHover() {
         state_ = State::HOVER;
         hover_pos_ = odom_pos_;
+        hover_yaw_ = odom_yaw_;
         hover_enter_time_ = ros::Time::now();
         wait_new_traj_ = false;
         control_mode_  = 0;
@@ -422,6 +426,7 @@ private:
     void enterHoverFromOverride() {
         state_ = State::HOVER;
         hover_pos_ = odom_pos_;
+        hover_yaw_ = odom_yaw_;
         hover_enter_time_ = ros::Time::now();
         wait_new_traj_ = true;
         old_traj_id_   = latest_cmd_.trajectory_id;
@@ -700,7 +705,7 @@ private:
             if (dt < params_.motor_warmup_time) {
                 Eigen::Vector3d target = takeoff_start_pos_;
                 target.z() += params_.motor_warmup_height;
-                pub_setpoint_.publish(posOnlySetpoint(target));
+                pub_setpoint_.publish(posOnlySetpoint(target, takeoff_start_yaw_));
                 return;  // 继续预热
             }
             warmup_done_ = true;
@@ -715,7 +720,7 @@ private:
             // 到达目标高度 → 进入 HOVER
             Eigen::Vector3d target_pos = odom_pos_;
             target_pos.z() = takeoff_target_z_;
-            pub_setpoint_.publish(posOnlySetpoint(target_pos));
+            pub_setpoint_.publish(posOnlySetpoint(target_pos, takeoff_start_yaw_));
             enterHover();
             return;
         }
@@ -731,7 +736,7 @@ private:
         target_pos.z() = std::min(takeoff_start_pos_.z() + params_.takeoff_speed * dt,
                                   takeoff_target_z_);
         Eigen::Vector3d vel(0.0, 0.0, speed);
-        pub_setpoint_.publish(posVelSetpoint(target_pos, vel));
+        pub_setpoint_.publish(posVelSetpoint(target_pos, vel, takeoff_start_yaw_));
     }
 
     /// 【HOVER】悬停状态：锁定位置 + 延时触发 EGO + 等待 EGO 命令进 TRACKING
@@ -744,7 +749,7 @@ private:
         }
 
         // 发送悬停位置的 setpoint，维持当前位置
-        pub_setpoint_.publish(posOnlySetpoint(hover_pos_));
+        pub_setpoint_.publish(posOnlySetpoint(hover_pos_, hover_yaw_));
 
         // 延迟触发：从 TAKEOFF 刚进入 HOVER 后，等 delay_trigger_time 秒再发 trigger
         if (!trigger_sent_) {

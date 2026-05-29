@@ -2,6 +2,7 @@
   <arg name="map_size_x_"/>
   <arg name="map_size_y_"/>
   <arg name="map_size_z_"/>
+  <arg name="virtual_ceil_height_"/>
 
   <arg name="odometry_topic"/>
   <arg name="camera_pose_topic"/>
@@ -35,6 +36,11 @@
   <arg name="point4_z"/>
 
   <arg name="flight_type"/>
+  <!-- /move_base_simple/goal 手动目标点高度模式：
+       use_goal_msg_z=false：只使用消息里的 x/y，高度 z 固定为 fixed_goal_z，适合 RViz 2D Nav Goal
+       use_goal_msg_z=true ：x/y/z 全部使用消息里的值，适合 ego_api 或手动 rostopic 发送完整目标点 -->
+  <arg name="use_goal_msg_z" default="false"/>
+  <arg name="fixed_goal_z" default="1.0"/>
   <arg name="use_distinctive_trajs"/>
 
   <arg name="obj_num_set"/>
@@ -65,6 +71,9 @@
     <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/> <!--always set to 1.5 times grater than sensing horizen-->
     <param name="fsm/planning_horizen_time" value="3" type="double"/>
     <param name="fsm/emergency_time" value="1.0" type="double"/>
+    <!-- 目标点高度模式：false 保持官方固定高度行为；true 使用传入目标点的 z。 -->
+    <param name="fsm/use_goal_msg_z" value="$(arg use_goal_msg_z)" type="bool"/>
+    <param name="fsm/fixed_goal_z" value="$(arg fixed_goal_z)" type="double"/>
     <param name="fsm/realworld_experiment" value="true"/>
     <param name="fsm/fail_safe" value="true"/>
 
@@ -85,6 +94,7 @@
     <param name="fsm/waypoint4_y" value="$(arg point4_y)" type="double"/>
     <param name="fsm/waypoint4_z" value="$(arg point4_z)" type="double"/>
 
+    <!-- 栅格地图边界：map_size_z 是地图总高度，实际上边界为 ground_height + map_size_z。 -->
     <param name="grid_map/resolution"      value="0.15" /> 
     <param name="grid_map/map_size_x"   value="$(arg map_size_x_)" /> 
     <param name="grid_map/map_size_y"   value="$(arg map_size_y_)" /> 
@@ -92,7 +102,7 @@
     <param name="grid_map/local_update_range_x"  value="5.5" /> 
     <param name="grid_map/local_update_range_y"  value="5.5" /> 
     <param name="grid_map/local_update_range_z"  value="4.5" /> 
-    <param name="grid_map/obstacles_inflation"     value="0.299" /> 
+    <param name="grid_map/obstacles_inflation"     value="0.299" />
     <param name="grid_map/local_map_margin" value="10"/>
     <param name="grid_map/ground_height"        value="-0.01"/>
     <!-- camera parameter -->
@@ -117,6 +127,8 @@
     <param name="grid_map/min_ray_length" value="0.3"/>
     <param name="grid_map/max_ray_length" value="5.0"/>
 
+    <!-- 虚拟天花板：不缩小地图，只在指定高度生成占用栅格，用于规划限高。 -->
+    <param name="grid_map/virtual_ceil_height" value="$(arg virtual_ceil_height_)"/>
     <param name="grid_map/visualization_truncate_height"   value="1.8"/>
     <param name="grid_map/show_occ_time"  value="false"/>
     <param name="grid_map/pose_type"     value="2"/>  
