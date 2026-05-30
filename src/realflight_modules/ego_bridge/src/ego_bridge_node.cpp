@@ -22,6 +22,7 @@
 
 #include <ros/ros.h>
 #include <Eigen/Dense>
+#include <cmath>
 
 // Messages
 #include <nav_msgs/Odometry.h>
@@ -86,8 +87,7 @@ struct Params {
 
     // ── 降落参数 ──
     double landing_speed;            // 降落速度(m/s)
-    double slow_height;              // 低于此高度时减速(m)
-    double slow_factor;              // 近地减速因子(0~1)，速度乘以此值
+    double min_landing_detect_time;   // 降落开始后至少等待多久才启用触地检测(s)
     double land_pos_deviation;       // 着陆检测：目标z与实际z的偏差阈值(m)，负值
     double land_vel_threshold;       // 着陆检测：速度阈值(m/s)
     double land_hold_time;           // 着陆检测：条件持续满足多久判定着陆(秒)
@@ -124,12 +124,11 @@ struct Params {
         nh.param("takeoff/min_speed",           min_speed,            0.05);
         nh.param("takeoff/delay_trigger_time",  delay_trigger_time,   2.0);
 
-        nh.param("landing/speed",               landing_speed,        0.3);
-        nh.param("landing/slow_height",         slow_height,          0.3);
-        nh.param("landing/slow_factor",         slow_factor,          0.5);
-        nh.param("landing/land_pos_deviation",  land_pos_deviation,  -0.5);
-        nh.param("landing/land_vel_threshold",  land_vel_threshold,   0.1);
-        nh.param("landing/land_hold_time",      land_hold_time,       3.0);
+        nh.param("landing/speed",               landing_speed,          0.18);
+        nh.param("landing/min_detect_time",     min_landing_detect_time, 2.0);
+        nh.param("landing/land_pos_deviation",  land_pos_deviation,    -0.08);
+        nh.param("landing/land_vel_threshold",  land_vel_threshold,     0.08);
+        nh.param("landing/land_hold_time",      land_hold_time,         1.0);
 
         nh.param("timeout/cmd",                 cmd_timeout,          0.5);
         nh.param("timeout/odom",                odom_timeout,         0.5);
@@ -825,23 +824,17 @@ private:
         }
     }
 
-    /// 【LANDING】匀速下降 + 近地减速 + 着陆检测（两种方式）
+    /// 【LANDING】OFFBOARD 慢速压降 + 相对触地检测
     // ── LANDING ──
     void runLanding(const ros::Time& now) {
         double dt = (now - landing_start_time_).toSec();
 
         // 计算目标 z：线性下降
         double target_z = landing_start_z_ - params_.landing_speed * dt;
-        double speed = params_.landing_speed;
-
-        // 近地减速：低于 slow_height 时乘以 slow_factor
-        if (odom_pos_.z() < params_.slow_height) {
-            speed *= params_.slow_factor;
-        }
 
         Eigen::Vector3d target_pos = landing_start_pos_;
         target_pos.z() = target_z;
-        Eigen::Vector3d vel(0.0, 0.0, -speed);
+        Eigen::Vector3d vel(0.0, 0.0, -params_.landing_speed);
 
         pub_setpoint_.publish(posVelSetpoint(target_pos, vel));
 
@@ -854,18 +847,20 @@ private:
             return;
         }
 
-        // 着陆检测方式A：目标z已远低于实际z(pos_deviation<0) + 速度很小 → 持续 hold_time 则判定着陆
+        // 着陆检测方式A：目标z已压到实际z下方 + 垂直速度很小 → 持续 hold_time 判定触地。
+        // 这样不依赖 odom.z 归零，适合局部里程计高度存在零点漂移的情况。
         double pos_error_z = target_pos.z() - odom_pos_.z();
-        double vel_norm = odom_vel_.norm();
+        double vertical_speed = std::abs(odom_vel_.z());
 
-        if (pos_error_z < params_.land_pos_deviation &&
-            vel_norm < params_.land_vel_threshold)
+        if (dt > params_.min_landing_detect_time &&
+            pos_error_z < params_.land_pos_deviation &&
+            vertical_speed < params_.land_vel_threshold)
         {
             if (!land_detect_active_) {
                 land_detect_active_ = true;
                 land_detect_start_  = now;
             } else if ((now - land_detect_start_).toSec() >= params_.land_hold_time) {
-                ROS_INFO("[ego_bridge] Landing detected (pos+vel hold)");
+                ROS_INFO("[ego_bridge] Landing detected (pressed below, vz hold)");
                 completeLanding();
                 return;
             }
@@ -874,16 +869,13 @@ private:
         }
     }
 
-    /// 着陆完成：锁定电机 + 切到 AUTO.LAND + 进入 IDLE
+    /// 着陆完成：锁定电机 + 进入 IDLE（不再切 AUTO.LAND，避免落地后控制权切换回弹）
     void completeLanding() {
-        disarmDrone();  // 锁定电机
-
-        // 退出 OFFBOARD（切到 AUTO.LAND 让 PX4 自行处理剩余流程）
-        mavros_msgs::SetMode req;
-        req.request.custom_mode = "AUTO.LAND";
-        srv_set_mode_.call(req);
-
-        enterIdle();
+        if (disarmDrone()) {
+            enterIdle();
+        } else {
+            ROS_WARN_THROTTLE(1.0, "[ego_bridge] Disarm failed during landing, keep LANDING setpoints");
+        }
     }
 
     // ────────────────────────────────────────────

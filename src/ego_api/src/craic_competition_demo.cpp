@@ -64,6 +64,14 @@ public:
         pnh_.param<double>("pillar_align_max_yaw_rate", pillar_align_max_yaw_rate_, 0.35);
         pnh_.param<double>("pillar_align_yaw_threshold", pillar_align_yaw_threshold_, 0.25);
         pnh_.param<double>("pillar_align_hold_time", pillar_align_hold_time_, 0.35);
+        pnh_.param<bool>("enable_pillar_active_scan", enable_pillar_active_scan_, true);
+        pnh_.param<double>("pillar_active_scan_delay", pillar_active_scan_delay_, 3.0);
+        pnh_.param<double>("pillar_scan_yaw_rate", pillar_scan_yaw_rate_, 0.35);
+        pnh_.param<double>("pillar_scan_period", pillar_scan_period_, 8.0);
+        pnh_.param<double>("pillar_scan_lateral_speed", pillar_scan_lateral_speed_, 0.06);
+        pnh_.param<double>("pillar_scan_lateral_after", pillar_scan_lateral_after_, 8.0);
+        pnh_.param<double>("pillar_scan_lateral_period", pillar_scan_lateral_period_, 10.0);
+        pnh_.param<double>("pillar_scan_max_vz", pillar_scan_max_vz_, 0.12);
         pnh_.param<bool>("climb_to_flight_z_before_detect", climb_to_flight_z_before_detect_, true);
         pnh_.param<bool>("land_after_finish", land_after_finish_, true);
 
@@ -179,16 +187,37 @@ private:
     bool waitForPillars() {
         ros::Rate rate(20);
         const ros::Time start = ros::Time::now();
+        bool scan_active = false;
+        ros::Time scan_start;
         while (ros::ok()) {
             ros::spinOnce();
             // 状态和目标点分开订阅，防止只收到 status 却还没拿到最新 goal。
             if (pillar_status_ == "valid" && have_pre_ && have_post_) {
+                if (scan_active) {
+                    stopPillarActiveScan();
+                }
                 ROS_INFO("[craic_demo] Pillars valid. pre=(%.2f %.2f %.2f), post=(%.2f %.2f %.2f)",
                          pillar_pre_.pose.position.x, pillar_pre_.pose.position.y, pillar_pre_.pose.position.z,
                          pillar_post_.pose.position.x, pillar_post_.pose.position.y, pillar_post_.pose.position.z);
                 return true;
             }
+            const double elapsed = (ros::Time::now() - start).toSec();
+            if (enable_pillar_active_scan_ && !scan_active && elapsed > pillar_active_scan_delay_) {
+                ROS_WARN("[craic_demo] Pillars not valid yet, start OVERRIDE active scan.");
+                if (api_.enableOverride()) {
+                    scan_active = true;
+                    scan_start = ros::Time::now();
+                } else {
+                    ROS_WARN("[craic_demo] Active scan cannot enter OVERRIDE, keep waiting.");
+                }
+            }
+            if (scan_active) {
+                sendPillarActiveScanCmd((ros::Time::now() - scan_start).toSec());
+            }
             if ((ros::Time::now() - start).toSec() > pillar_detect_timeout_) {
+                if (scan_active) {
+                    stopPillarActiveScan();
+                }
                 ROS_ERROR("[craic_demo] Pillar status=%s have_pre=%d have_post=%d",
                           pillar_status_.c_str(), have_pre_, have_post_);
                 return false;
@@ -196,6 +225,34 @@ private:
             rate.sleep();
         }
         return false;
+    }
+
+    void sendPillarActiveScanCmd(double elapsed) {
+        const Eigen::Vector3d pos = api_.getOdomPosition();
+        const double z_err = flight_z_ - pos.z();
+        const double vz = clampValue(0.8 * z_err, -pillar_scan_max_vz_, pillar_scan_max_vz_);
+        const double yaw_rate = pillar_scan_yaw_rate_ *
+            std::sin(2.0 * M_PI * elapsed / std::max(1.0, pillar_scan_period_));
+
+        double lateral_speed = 0.0;
+        if (elapsed > pillar_scan_lateral_after_) {
+            lateral_speed = pillar_scan_lateral_speed_ *
+                std::sin(2.0 * M_PI * (elapsed - pillar_scan_lateral_after_) /
+                         std::max(1.0, pillar_scan_lateral_period_));
+        }
+        const double yaw = api_.getOdomYaw();
+        const double vx = -std::sin(yaw) * lateral_speed;
+        const double vy = std::cos(yaw) * lateral_speed;
+        api_.sendVelocityCmd(vx, vy, vz, yaw_rate);
+
+        ROS_INFO_THROTTLE(1.0,
+                          "[craic_demo] active pillar scan status=%s yaw_rate=%.2f lateral=%.2f z_err=%.2f",
+                          pillar_status_.c_str(), yaw_rate, lateral_speed, z_err);
+    }
+
+    void stopPillarActiveScan() {
+        holdOverride(0.25);
+        api_.disableOverride();
     }
 
     void flyGoal(const std::string& label, const geometry_msgs::PoseStamped& pose, double yaw) {
@@ -428,6 +485,14 @@ private:
     double pillar_align_max_yaw_rate_ = 0.35;
     double pillar_align_yaw_threshold_ = 0.25;
     double pillar_align_hold_time_ = 0.35;
+    bool enable_pillar_active_scan_ = true;
+    double pillar_active_scan_delay_ = 3.0;
+    double pillar_scan_yaw_rate_ = 0.35;
+    double pillar_scan_period_ = 8.0;
+    double pillar_scan_lateral_speed_ = 0.06;
+    double pillar_scan_lateral_after_ = 8.0;
+    double pillar_scan_lateral_period_ = 10.0;
+    double pillar_scan_max_vz_ = 0.12;
     bool land_after_finish_ = true;
     bool climb_to_flight_z_before_detect_ = true;
 

@@ -9,6 +9,7 @@
 #include <Eigen/Dense>
 
 #include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/Odometry.h>
 #include <pcl/common/common.h>
 #include <pcl/filters/crop_box.h>
 #include <pcl/filters/voxel_grid.h>
@@ -37,6 +38,21 @@ geometry_msgs::Quaternion yawToQuat(double yaw) {
     return q;
 }
 
+double yawFromQuat(const geometry_msgs::Quaternion& q) {
+    return std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                      1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+}
+
+std::string candidateKindName(int kind) {
+    switch (kind) {
+        case 1: return "full_box";
+        case 2: return "face_patch";
+        case 3: return "weak_face";
+        case 4: return "corner_edge";
+        default: return "rejected";
+    }
+}
+
 struct PillarCandidate {
     // 单个聚类的包围盒信息，用尺寸和点数给“像柱子”的程度打分。
     Eigen::Vector3d min_pt = Eigen::Vector3d::Zero();
@@ -47,6 +63,12 @@ struct PillarCandidate {
     double height = 0.0;
     double score = 0.0;
     int points = 0;
+    int kind = 0;
+    int vertical_bins = 0;
+    double confidence = 0.0;
+    std::string reject_reason = "unclassified";
+    // 对只看到一个面/一条边的柱子，不直接用 bbox 中心，而是生成多个可能柱心。
+    std::vector<Eigen::Vector3d> center_hypotheses;
 };
 
 struct Detection {
@@ -65,29 +87,46 @@ public:
     PillarDetectorNode() : nh_(), pnh_("~") {
         // 默认订阅 FAST-LIO 输出到 world/aligned 坐标系下的 MID360 点云。
         pnh_.param<std::string>("cloud_topic", cloud_topic_, "/cloud_registered_aligned");
+        pnh_.param<std::string>("odom_topic", odom_topic_, "/mavros/local_position/odom");
         pnh_.param<std::string>("frame_id", frame_id_, "world");
         pnh_.param<double>("flight_z", flight_z_, 1.1);
         // FAST-LIO 的 world 坐标会随初始位姿建立，不直接等于 Gazebo 模型坐标。
-        // 默认 ROI 放宽到起点前方的大场地区域，再靠聚类尺寸筛柱子。
-        pnh_.param<double>("roi_x_min", roi_x_min_, -0.5);
-        pnh_.param<double>("roi_x_max", roi_x_max_, 3.6);
-        pnh_.param<double>("roi_y_min", roi_y_min_, -3.2);
-        pnh_.param<double>("roi_y_max", roi_y_max_, 4.0);
+        // 因此默认用起飞点 home + 起飞 yaw 建立局部规则坐标，只使用比赛规则的场地尺寸做约束。
+        pnh_.param<bool>("use_local_rule_roi", use_local_rule_roi_, true);
+        pnh_.param<double>("field_length", field_length_, 6.0);
+        pnh_.param<double>("field_width", field_width_, 5.0);
+        pnh_.param<double>("search_forward_min", search_forward_min_, -0.25);
+        pnh_.param<double>("search_forward_max", search_forward_max_, 6.5);
+        pnh_.param<double>("search_lateral_abs", search_lateral_abs_, 3.0);
+        // 兼容旧参数：只有 use_local_rule_roi=false 或尚未收到 odom 时才使用绝对 ROI。
+        pnh_.param<double>("roi_x_min", roi_x_min_, -1.0);
+        pnh_.param<double>("roi_x_max", roi_x_max_, 7.0);
+        pnh_.param<double>("roi_y_min", roi_y_min_, -3.5);
+        pnh_.param<double>("roi_y_max", roi_y_max_, 3.5);
         pnh_.param<double>("roi_z_min", roi_z_min_, 0.05);
         pnh_.param<double>("roi_z_max", roi_z_max_, 1.9);
         pnh_.param<double>("voxel_leaf", voxel_leaf_, 0.06);
         pnh_.param<double>("cluster_tolerance", cluster_tolerance_, 0.24);
         pnh_.param<int>("min_cluster_size", min_cluster_size_, 15);
         pnh_.param<int>("max_cluster_size", max_cluster_size_, 8000);
-        // 低高度起飞时 MID360 可能只扫到柱子的一部分，因此第一版允许部分柱体。
-        pnh_.param<double>("pillar_min_height", pillar_min_height_, 0.55);
-        pnh_.param<double>("pillar_min_width", pillar_min_width_, 0.30);
-        pnh_.param<double>("pillar_min_face_width", pillar_min_face_width_, 0.04);
-        pnh_.param<double>("pillar_max_width", pillar_max_width_, 0.95);
-        pnh_.param<double>("pillar_pair_gap_min", pillar_pair_gap_min_, 1.0);
-        pnh_.param<double>("pillar_pair_gap_max", pillar_pair_gap_max_, 2.3);
+        // 规则约束：方柱不低于 1.5m，截面不小于 0.5m；实际点云可能只看到一个面/角点。
+        pnh_.param<double>("pillar_width", pillar_width_, 0.50);
+        pnh_.param<double>("pillar_min_visible_height", pillar_min_visible_height_, 0.32);
+        pnh_.param<double>("pillar_min_strong_height", pillar_min_strong_height_, 0.55);
+        pnh_.param<double>("pillar_full_min_width", pillar_full_min_width_, 0.25);
+        pnh_.param<double>("pillar_full_max_width", pillar_full_max_width_, 0.75);
+        pnh_.param<double>("pillar_face_span_min", pillar_face_span_min_, 0.25);
+        pnh_.param<double>("pillar_face_span_max", pillar_face_span_max_, 0.75);
+        pnh_.param<double>("pillar_thin_face_max_width", pillar_thin_face_max_width_, 0.22);
+        pnh_.param<double>("pillar_corner_max_width", pillar_corner_max_width_, 0.28);
+        pnh_.param<double>("pillar_long_reject_width", pillar_long_reject_width_, 0.85);
+        pnh_.param<double>("vertical_bin_size", vertical_bin_size_, 0.18);
+        pnh_.param<int>("pillar_min_vertical_bins", pillar_min_vertical_bins_, 2);
+        pnh_.param<double>("pillar_pair_gap_min", pillar_pair_gap_min_, 0.8);
+        pnh_.param<double>("pillar_pair_gap_max", pillar_pair_gap_max_, 2.8);
         pnh_.param<double>("pillar_pair_expected_gap", pillar_pair_expected_gap_, 1.6);
-        pnh_.param<double>("pillar_pair_x_tolerance", pillar_pair_x_tolerance_, 0.8);
+        pnh_.param<double>("pair_forward_tolerance", pair_forward_tolerance_, 0.9);
+        pnh_.param<double>("pillar_pair_x_tolerance", pair_forward_tolerance_, pair_forward_tolerance_);
         pnh_.param<double>("safety_inflation", safety_inflation_, 0.40);
         pnh_.param<double>("goal_offset", goal_offset_, 0.90);
         pnh_.param<double>("stability_threshold", stability_threshold_, 0.18);
@@ -95,18 +134,49 @@ public:
         pnh_.param<int>("history_size", history_size_, 5);
 
         cloud_sub_ = nh_.subscribe(cloud_topic_, 1, &PillarDetectorNode::cloudCb, this);
+        odom_sub_ = nh_.subscribe(odom_topic_, 10, &PillarDetectorNode::odomCb, this);
         pre_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic/pillar_pre_goal", 1, true);
         post_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic/pillar_post_goal", 1, true);
         status_pub_ = nh_.advertise<std_msgs::String>("/craic/pillar_status", 1, true);
         // Marker 只用于 RViz 调试，不参与飞控闭环。
         marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/craic/pillar_markers", 1, true);
 
-        ROS_INFO("[pillar_detector] cloud=%s frame=%s roi=[x %.2f..%.2f, y %.2f..%.2f, z %.2f..%.2f]",
-                 cloud_topic_.c_str(), frame_id_.c_str(),
-                 roi_x_min_, roi_x_max_, roi_y_min_, roi_y_max_, roi_z_min_, roi_z_max_);
+        ROS_INFO("[pillar_detector] cloud=%s odom=%s frame=%s local_rule_roi=%d field=%.1fx%.1f search=[forward %.2f..%.2f lateral +/-%.2f z %.2f..%.2f]",
+                 cloud_topic_.c_str(), odom_topic_.c_str(), frame_id_.c_str(),
+                 use_local_rule_roi_, field_length_, field_width_,
+                 search_forward_min_, search_forward_max_, search_lateral_abs_,
+                 roi_z_min_, roi_z_max_);
     }
 
 private:
+    void odomCb(const nav_msgs::Odometry::ConstPtr& msg) {
+        if (have_home_) return;
+        home_pos_ = Eigen::Vector3d(msg->pose.pose.position.x,
+                                    msg->pose.pose.position.y,
+                                    msg->pose.pose.position.z);
+        home_yaw_ = yawFromQuat(msg->pose.pose.orientation);
+        have_home_ = true;
+        ROS_INFO("[pillar_detector] home locked at (%.2f %.2f %.2f), yaw=%.2f",
+                 home_pos_.x(), home_pos_.y(), home_pos_.z(), home_yaw_);
+    }
+
+    Eigen::Vector2d worldToLocalXY(const Eigen::Vector3d& world) const {
+        const double dx = world.x() - home_pos_.x();
+        const double dy = world.y() - home_pos_.y();
+        const double c = std::cos(home_yaw_);
+        const double s = std::sin(home_yaw_);
+        return Eigen::Vector2d(c * dx + s * dy, -s * dx + c * dy);
+    }
+
+    bool inLocalRuleRoi(const Eigen::Vector3d& world) const {
+        const Eigen::Vector2d local = worldToLocalXY(world);
+        return local.x() >= search_forward_min_ &&
+               local.x() <= search_forward_max_ &&
+               std::abs(local.y()) <= search_lateral_abs_ &&
+               world.z() >= roi_z_min_ &&
+               world.z() <= roi_z_max_;
+    }
+
     void cloudCb(const sensor_msgs::PointCloud2ConstPtr& msg) {
         pcl::PointCloud<pcl::PointXYZ>::Ptr input(new pcl::PointCloud<pcl::PointXYZ>());
         pcl::fromROSMsg(*msg, *input);
@@ -123,19 +193,39 @@ private:
         voxel.setLeafSize(voxel_leaf_, voxel_leaf_, voxel_leaf_);
         voxel.filter(*down);
 
-        // 用比赛场地尺寸做 ROI 约束：只看柱子可能出现的区域，并过滤地面附近点。
+        // 用规则场地尺寸做 ROI 约束：默认在 home 局部坐标中裁剪，不绑定 Gazebo 绝对坐标。
         pcl::PointCloud<pcl::PointXYZ>::Ptr roi(new pcl::PointCloud<pcl::PointXYZ>());
-        pcl::CropBox<pcl::PointXYZ> crop;
-        crop.setInputCloud(down);
-        crop.setMin(Eigen::Vector4f(roi_x_min_, roi_y_min_, roi_z_min_, 1.0f));
-        crop.setMax(Eigen::Vector4f(roi_x_max_, roi_y_max_, roi_z_max_, 1.0f));
-        crop.filter(*roi);
+        if (use_local_rule_roi_) {
+            if (!have_home_) {
+                publishStatus("waiting_odom");
+                ROS_WARN_THROTTLE(1.0, "[pillar_detector] waiting_odom before local rule ROI can run");
+                return;
+            }
+            roi->header = down->header;
+            for (const auto& pt : down->points) {
+                if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
+                const Eigen::Vector3d world(pt.x, pt.y, pt.z);
+                if (inLocalRuleRoi(world)) {
+                    roi->points.push_back(pt);
+                }
+            }
+            roi->width = static_cast<uint32_t>(roi->points.size());
+            roi->height = 1;
+            roi->is_dense = false;
+        } else {
+            pcl::CropBox<pcl::PointXYZ> crop;
+            crop.setInputCloud(down);
+            crop.setMin(Eigen::Vector4f(roi_x_min_, roi_y_min_, roi_z_min_, 1.0f));
+            crop.setMax(Eigen::Vector4f(roi_x_max_, roi_y_max_, roi_z_max_, 1.0f));
+            crop.filter(*roi);
+        }
         if (roi->empty()) {
             publishStatus("empty_roi");
             ROS_WARN_THROTTLE(1.0,
-                              "[pillar_detector] empty_roi input=%zu down=%zu frame=%s roi=[x %.2f..%.2f y %.2f..%.2f z %.2f..%.2f]",
+                              "[pillar_detector] empty_roi input=%zu down=%zu frame=%s local_rule=%d roi=[forward %.2f..%.2f lateral +/-%.2f z %.2f..%.2f]",
                               input->size(), down->size(), msg->header.frame_id.c_str(),
-                              roi_x_min_, roi_x_max_, roi_y_min_, roi_y_max_, roi_z_min_, roi_z_max_);
+                              use_local_rule_roi_, search_forward_min_, search_forward_max_,
+                              search_lateral_abs_, roi_z_min_, roi_z_max_);
             return;
         }
 
@@ -154,11 +244,13 @@ private:
         std::vector<PillarCandidate> candidates;
         for (const auto& indices : cluster_indices) {
             PillarCandidate c;
-            // 每个聚类转成候选柱，再按尺寸条件过滤。
+            // 每个聚类转成候选柱，再按规则尺寸和可见形态生成柱心假设。
             if (!buildCandidate(*roi, indices, c)) continue;
+            classifyCandidate(c);
             if (!acceptCandidate(c)) continue;
             candidates.push_back(c);
         }
+        cacheDebugHypotheses(candidates);
 
         if (candidates.size() < 2) {
             publishStatus("not_enough_candidates");
@@ -172,15 +264,17 @@ private:
 
         PillarCandidate left_candidate;
         PillarCandidate right_candidate;
-        if (!selectBestPair(candidates, left_candidate, right_candidate)) {
+        Eigen::Vector3d left_center;
+        Eigen::Vector3d right_center;
+        if (!selectBestPair(candidates, left_candidate, right_candidate, left_center, right_center)) {
             publishStatus("invalid_pair");
             ROS_WARN_THROTTLE(1.0,
-                              "[pillar_detector] invalid_pair accepted=%zu gap=[%.2f..%.2f] x_tol=%.2f",
-                              candidates.size(), pillar_pair_gap_min_, pillar_pair_gap_max_, pillar_pair_x_tolerance_);
+                              "[pillar_detector] invalid_pair accepted=%zu gap=[%.2f..%.2f] forward_tol=%.2f",
+                              candidates.size(), pillar_pair_gap_min_, pillar_pair_gap_max_, pair_forward_tolerance_);
             return;
         }
 
-        Detection detection = makeDetection(left_candidate, right_candidate, msg->header.stamp);
+        Detection detection = makeDetection(left_center, right_center, msg->header.stamp);
         if (!detection.valid) {
             publishStatus("invalid_geometry");
             return;
@@ -220,6 +314,7 @@ private:
         out.width_y = out.max_pt.y() - out.min_pt.y();
         out.height = out.max_pt.z() - out.min_pt.z();
         out.points = static_cast<int>(indices.indices.size());
+        out.vertical_bins = countVerticalBins(cloud, indices, out.min_pt.z(), out.max_pt.z());
 
         const double width_error = std::abs(out.width_x - 0.5) + std::abs(out.width_y - 0.5);
         const double height_score = std::min(out.height, 1.5);
@@ -228,23 +323,124 @@ private:
         return true;
     }
 
-    bool acceptCandidate(const PillarCandidate& c) const {
-        if (c.height < pillar_min_height_) return false;
+    int countVerticalBins(const pcl::PointCloud<pcl::PointXYZ>& cloud,
+                          const pcl::PointIndices& indices,
+                          double min_z,
+                          double max_z) const {
+        if (indices.indices.empty() || max_z <= min_z) return 0;
+        const int bins = std::max(1, static_cast<int>(std::ceil((max_z - min_z) / vertical_bin_size_)));
+        std::vector<bool> occupied(bins, false);
+        for (int idx : indices.indices) {
+            const double z = cloud.points[idx].z;
+            int bin = static_cast<int>((z - min_z) / vertical_bin_size_);
+            if (bin < 0) bin = 0;
+            if (bin >= bins) bin = bins - 1;
+            occupied[bin] = true;
+        }
+        return static_cast<int>(std::count(occupied.begin(), occupied.end(), true));
+    }
+
+    void classifyCandidate(PillarCandidate& c) const {
+        c.kind = 0;
+        c.confidence = 0.0;
+        c.center_hypotheses.clear();
+        c.reject_reason = "unknown";
+
         const double w_min = std::min(c.width_x, c.width_y);
         const double w_max = std::max(c.width_x, c.width_y);
-        if (w_max > pillar_max_width_) return false;
 
-        // 完整方柱：两个水平尺寸都接近柱子宽度。
-        if (c.width_x >= pillar_min_width_ && c.width_y >= pillar_min_width_) return true;
+        if (c.height < pillar_min_visible_height_) {
+            c.reject_reason = "height_too_low";
+            return;
+        }
+        if (c.vertical_bins < pillar_min_vertical_bins_) {
+            c.reject_reason = "vertical_bins_too_few";
+            return;
+        }
+        if (w_max > pillar_long_reject_width_) {
+            c.reject_reason = "horizontal_extent_too_long";
+            return;
+        }
 
-        // 低高度或遮挡时，MID360 可能只看到方柱的一个侧面：一个尺寸接近柱宽，
-        // 另一个尺寸很薄。允许这种“柱面候选”，后续再通过成对几何关系筛掉误检。
-        return w_max >= pillar_min_width_ && w_min >= pillar_min_face_width_;
+        const bool full_like =
+            c.width_x >= pillar_full_min_width_ && c.width_x <= pillar_full_max_width_ &&
+            c.width_y >= pillar_full_min_width_ && c.width_y <= pillar_full_max_width_;
+        const bool face_like =
+            w_max >= pillar_face_span_min_ && w_max <= pillar_face_span_max_ &&
+            w_min <= pillar_thin_face_max_width_;
+        const bool corner_like =
+            w_max <= pillar_corner_max_width_ && w_max >= 0.06 &&
+            c.height >= pillar_min_strong_height_;
+
+        if (full_like) {
+            c.kind = 1;
+            c.confidence = 1.0 + std::min(0.5, 0.001 * c.points);
+            c.center_hypotheses.push_back(c.center);
+            c.reject_reason = "accepted_full_box";
+        } else if (face_like && c.height >= pillar_min_strong_height_) {
+            c.kind = 2;
+            c.confidence = 0.78 + std::min(0.4, 0.001 * c.points);
+            addFaceCenterHypotheses(c);
+            c.reject_reason = "accepted_face_patch";
+        } else if (face_like) {
+            c.kind = 3;
+            c.confidence = 0.58 + std::min(0.3, 0.001 * c.points);
+            addFaceCenterHypotheses(c);
+            c.reject_reason = "accepted_weak_face";
+        } else if (corner_like) {
+            c.kind = 4;
+            c.confidence = 0.45 + std::min(0.25, 0.001 * c.points);
+            addCornerCenterHypotheses(c);
+            c.reject_reason = "accepted_corner_edge";
+        } else {
+            c.reject_reason = "shape_not_pillar";
+        }
+    }
+
+    bool acceptCandidate(const PillarCandidate& c) const {
+        return c.kind != 0 && !c.center_hypotheses.empty();
+    }
+
+    void addFaceCenterHypotheses(PillarCandidate& c) const {
+        c.center_hypotheses.push_back(c.center);
+        if (c.width_x <= c.width_y) {
+            const double offset = std::max(0.0, 0.5 * (pillar_width_ - c.width_x));
+            Eigen::Vector3d h1 = c.center;
+            Eigen::Vector3d h2 = c.center;
+            h1.x() -= offset;
+            h2.x() += offset;
+            c.center_hypotheses.push_back(h1);
+            c.center_hypotheses.push_back(h2);
+        } else {
+            const double offset = std::max(0.0, 0.5 * (pillar_width_ - c.width_y));
+            Eigen::Vector3d h1 = c.center;
+            Eigen::Vector3d h2 = c.center;
+            h1.y() -= offset;
+            h2.y() += offset;
+            c.center_hypotheses.push_back(h1);
+            c.center_hypotheses.push_back(h2);
+        }
+    }
+
+    void addCornerCenterHypotheses(PillarCandidate& c) const {
+        const double ox = std::max(0.0, 0.5 * (pillar_width_ - c.width_x));
+        const double oy = std::max(0.0, 0.5 * (pillar_width_ - c.width_y));
+        c.center_hypotheses.push_back(c.center);
+        for (double sx : {-1.0, 1.0}) {
+            for (double sy : {-1.0, 1.0}) {
+                Eigen::Vector3d h = c.center;
+                h.x() += sx * ox;
+                h.y() += sy * oy;
+                c.center_hypotheses.push_back(h);
+            }
+        }
     }
 
     bool selectBestPair(const std::vector<PillarCandidate>& candidates,
                         PillarCandidate& out_a,
-                        PillarCandidate& out_b) const {
+                        PillarCandidate& out_b,
+                        Eigen::Vector3d& out_center_a,
+                        Eigen::Vector3d& out_center_b) const {
         if (candidates.size() < 2) return false;
 
         double best_score = -std::numeric_limits<double>::infinity();
@@ -254,31 +450,56 @@ private:
             for (size_t j = i + 1; j < candidates.size(); ++j) {
                 const auto& a = candidates[i];
                 const auto& b = candidates[j];
-                const double dx = std::abs(a.center.x() - b.center.x());
-                const double dy = std::abs(a.center.y() - b.center.y());
-                const double gap = std::hypot(a.center.x() - b.center.x(),
-                                              a.center.y() - b.center.y());
+                for (const auto& center_a : a.center_hypotheses) {
+                    for (const auto& center_b : b.center_hypotheses) {
+                        const Eigen::Vector2d span(center_b.x() - center_a.x(),
+                                                   center_b.y() - center_a.y());
+                        const double gap = span.norm();
+                        if (gap < pillar_pair_gap_min_ || gap > pillar_pair_gap_max_) continue;
 
-                if (gap < pillar_pair_gap_min_ || gap > pillar_pair_gap_max_) continue;
-                if (dx > pillar_pair_x_tolerance_) continue;
+                        double forward_delta = std::abs(center_a.x() - center_b.x());
+                        double lateral_delta = std::abs(center_a.y() - center_b.y());
+                        double forward_position_bonus = 0.0;
+                        if (use_local_rule_roi_ && have_home_) {
+                            const Eigen::Vector2d la = worldToLocalXY(center_a);
+                            const Eigen::Vector2d lb = worldToLocalXY(center_b);
+                            forward_delta = std::abs(la.x() - lb.x());
+                            lateral_delta = std::abs(la.y() - lb.y());
+                            const double avg_forward = 0.5 * (la.x() + lb.x());
+                            if (avg_forward > 0.0 && avg_forward < field_length_ + 0.5) {
+                                forward_position_bonus = 0.25;
+                            }
+                        }
+                        if (forward_delta > pair_forward_tolerance_) continue;
 
-                const double gap_penalty = std::abs(gap - pillar_pair_expected_gap_);
-                const double score = a.score + b.score - gap_penalty - 0.5 * dx + 0.1 * dy;
-                if (score > best_score) {
-                    best_score = score;
-                    out_a = a;
-                    out_b = b;
-                    found = true;
+                        const double gap_penalty = std::abs(gap - pillar_pair_expected_gap_);
+                        const double kind_bonus = 0.05 * (a.kind + b.kind);
+                        const double score = a.confidence + b.confidence + kind_bonus +
+                                             forward_position_bonus -
+                                             0.55 * gap_penalty -
+                                             0.75 * forward_delta +
+                                             0.05 * lateral_delta;
+                        if (score > best_score) {
+                            best_score = score;
+                            out_a = a;
+                            out_b = b;
+                            out_center_a = center_a;
+                            out_center_b = center_b;
+                            found = true;
+                        }
+                    }
                 }
             }
         }
 
         if (found) {
             ROS_INFO_THROTTLE(1.0,
-                              "[pillar_detector] selected pair center_a=(%.2f %.2f %.2f) center_b=(%.2f %.2f %.2f) gap=%.2f score=%.2f",
-                              out_a.center.x(), out_a.center.y(), out_a.center.z(),
-                              out_b.center.x(), out_b.center.y(), out_b.center.z(),
-                              (out_a.center - out_b.center).norm(), best_score);
+                              "[pillar_detector] selected pair %s/%s center_a=(%.2f %.2f %.2f) center_b=(%.2f %.2f %.2f) gap=%.2f score=%.2f",
+                              candidateKindName(out_a.kind).c_str(),
+                              candidateKindName(out_b.kind).c_str(),
+                              out_center_a.x(), out_center_a.y(), out_center_a.z(),
+                              out_center_b.x(), out_center_b.y(), out_center_b.z(),
+                              (out_center_a - out_center_b).norm(), best_score);
         }
         return found;
     }
@@ -298,7 +519,11 @@ private:
             double width_x = 0.0;
             double width_y = 0.0;
             double height = 0.0;
+            int vertical_bins = 0;
+            int kind = 0;
+            size_t hypotheses = 0;
             bool accepted = false;
+            std::string reason;
         };
 
         std::vector<ClusterInfo> infos;
@@ -316,7 +541,12 @@ private:
             info.width_x = c.width_x;
             info.width_y = c.width_y;
             info.height = c.height;
+            info.vertical_bins = c.vertical_bins;
+            classifyCandidate(c);
+            info.kind = c.kind;
+            info.hypotheses = c.center_hypotheses.size();
             info.accepted = acceptCandidate(c);
+            info.reason = c.reject_reason;
             infos.push_back(info);
         }
 
@@ -335,23 +565,45 @@ private:
                 << " y " << c.min_y << ".." << c.max_y
                 << " z " << c.min_z << ".." << c.max_z
                 << " size=" << c.width_x << "," << c.width_y << "," << c.height
-                << " acc=" << c.accepted;
+                << " zbins=" << c.vertical_bins
+                << " kind=" << candidateKindName(c.kind)
+                << " hyps=" << c.hypotheses
+                << " acc=" << c.accepted
+                << " reason=" << c.reason;
         }
         ROS_WARN_THROTTLE(1.0, "%s", oss.str().c_str());
     }
 
-    Detection makeDetection(PillarCandidate a,
-                            PillarCandidate b,
+    void cacheDebugHypotheses(const std::vector<PillarCandidate>& candidates) {
+        debug_hypotheses_.clear();
+        for (const auto& c : candidates) {
+            for (const auto& h : c.center_hypotheses) {
+                debug_hypotheses_.push_back(h);
+            }
+        }
+        if (debug_hypotheses_.size() > 30) {
+            debug_hypotheses_.resize(30);
+        }
+    }
+
+    Detection makeDetection(Eigen::Vector3d center_a,
+                            Eigen::Vector3d center_b,
                             const ros::Time&) const {
         Detection d;
-        if (a.center.y() > b.center.y()) std::swap(a, b);
+        if (have_home_) {
+            if (worldToLocalXY(center_a).y() > worldToLocalXY(center_b).y()) {
+                std::swap(center_a, center_b);
+            }
+        } else if (center_a.y() > center_b.y()) {
+            std::swap(center_a, center_b);
+        }
 
-        d.left = a.center;
-        d.right = b.center;
-        d.corridor = 0.5 * (a.center + b.center);
+        d.left = center_a;
+        d.right = center_b;
+        d.corridor = 0.5 * (center_a + center_b);
         d.corridor.z() = flight_z_;
 
-        const Eigen::Vector2d span(b.center.x() - a.center.x(), b.center.y() - a.center.y());
+        const Eigen::Vector2d span(center_b.x() - center_a.x(), center_b.y() - center_a.y());
         Eigen::Vector2d forward(span.y(), -span.x());
         if (forward.norm() < 1e-3) {
             forward = Eigen::Vector2d(1.0, 0.0);
@@ -360,11 +612,15 @@ private:
         }
 
         // 两根柱子的连线是“门宽方向”，真正穿越方向应取它的垂线。
-        // 选择让 pre_goal 更靠近起点原点的一侧，避免把“柱后点”当成第一个目标。
+        // 选择让 pre_goal 更靠近 home 的一侧，避免把“柱后点”当成第一个目标。
         const Eigen::Vector2d corridor_xy(d.corridor.x(), d.corridor.y());
         const Eigen::Vector2d pre_xy = corridor_xy - goal_offset_ * forward;
         const Eigen::Vector2d post_xy = corridor_xy + goal_offset_ * forward;
-        if (pre_xy.norm() > post_xy.norm()) {
+        Eigen::Vector2d home_xy(0.0, 0.0);
+        if (have_home_) {
+            home_xy = Eigen::Vector2d(home_pos_.x(), home_pos_.y());
+        }
+        if ((pre_xy - home_xy).squaredNorm() > (post_xy - home_xy).squaredNorm()) {
             forward = -forward;
         }
 
@@ -484,20 +740,35 @@ private:
         arr.markers.push_back(makeSphereMarker(2, d.right, stamp, 1.0f, 0.2f, 0.2f, 0.22));
         arr.markers.push_back(makeSphereMarker(3, d.pre_goal, stamp, 0.2f, 0.6f, 1.0f, stable ? 0.20 : 0.12));
         arr.markers.push_back(makeSphereMarker(4, d.post_goal, stamp, 0.2f, 1.0f, 0.3f, stable ? 0.20 : 0.12));
+        int id = 100;
+        for (const auto& h : debug_hypotheses_) {
+            arr.markers.push_back(makeSphereMarker(id++, h, stamp, 1.0f, 0.85f, 0.1f, 0.08));
+        }
         marker_pub_.publish(arr);
     }
 
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_;
     ros::Subscriber cloud_sub_;
+    ros::Subscriber odom_sub_;
     ros::Publisher pre_pub_;
     ros::Publisher post_pub_;
     ros::Publisher status_pub_;
     ros::Publisher marker_pub_;
 
     std::string cloud_topic_;
+    std::string odom_topic_;
     std::string frame_id_;
     double flight_z_;
+    bool use_local_rule_roi_;
+    bool have_home_ = false;
+    Eigen::Vector3d home_pos_ = Eigen::Vector3d::Zero();
+    double home_yaw_ = 0.0;
+    double field_length_;
+    double field_width_;
+    double search_forward_min_;
+    double search_forward_max_;
+    double search_lateral_abs_;
     double roi_x_min_;
     double roi_x_max_;
     double roi_y_min_;
@@ -508,14 +779,22 @@ private:
     double cluster_tolerance_;
     int min_cluster_size_;
     int max_cluster_size_;
-    double pillar_min_height_;
-    double pillar_min_width_;
-    double pillar_min_face_width_;
-    double pillar_max_width_;
+    double pillar_width_;
+    double pillar_min_visible_height_;
+    double pillar_min_strong_height_;
+    double pillar_full_min_width_;
+    double pillar_full_max_width_;
+    double pillar_face_span_min_;
+    double pillar_face_span_max_;
+    double pillar_thin_face_max_width_;
+    double pillar_corner_max_width_;
+    double pillar_long_reject_width_;
+    double vertical_bin_size_;
+    int pillar_min_vertical_bins_;
     double pillar_pair_gap_min_;
     double pillar_pair_gap_max_;
     double pillar_pair_expected_gap_;
-    double pillar_pair_x_tolerance_;
+    double pair_forward_tolerance_;
     double safety_inflation_;
     double goal_offset_;
     double stability_threshold_;
@@ -524,6 +803,7 @@ private:
 
     std::deque<Detection> history_;
     Detection latest_;
+    std::vector<Eigen::Vector3d> debug_hypotheses_;
 };
 
 }  // namespace

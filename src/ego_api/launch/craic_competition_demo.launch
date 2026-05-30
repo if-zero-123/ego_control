@@ -13,31 +13,45 @@
     <arg name="pillar_align_timeout" default="20.0" />
     <arg name="pillar_align_threshold" default="0.15" />
     <arg name="pillar_align_speed" default="0.18" />
+    <arg name="enable_pillar_active_scan" default="true" />
+    <arg name="pillar_active_scan_delay" default="3.0" />
+    <arg name="pillar_scan_yaw_rate" default="0.35" />
+    <arg name="pillar_scan_lateral_speed" default="0.06" />
 
     <arg name="raw_cloud_topic" default="/cloud_registered_aligned" />
     <arg name="cloud_topic" default="/craic/cloud_filtered" />
+    <arg name="odom_topic" default="/mavros/local_position/odom" />
     <arg name="depth_topic" default="/d435/depth/image_raw" />
     <arg name="camera_info_topic" default="/d435/depth/camera_info" />
-    <arg name="pillar_roi_x_min" default="-0.5" />
-    <arg name="pillar_roi_x_max" default="3.6" />
-    <arg name="pillar_roi_y_min" default="-3.2" />
-    <arg name="pillar_roi_y_max" default="4.0" />
+    <arg name="use_local_rule_roi" default="true" />
+    <arg name="field_length" default="6.0" />
+    <arg name="field_width" default="5.0" />
+    <arg name="pillar_search_forward_min" default="-0.25" />
+    <arg name="pillar_search_forward_max" default="6.5" />
+    <arg name="pillar_search_lateral_abs" default="3.0" />
+    <arg name="pillar_roi_x_min" default="-1.0" />
+    <arg name="pillar_roi_x_max" default="7.0" />
+    <arg name="pillar_roi_y_min" default="-3.5" />
+    <arg name="pillar_roi_y_max" default="3.5" />
     <arg name="pillar_roi_z_min" default="0.05" />
     <arg name="pillar_roi_z_max" default="1.9" />
-    <arg name="pillar_min_height" default="0.55" />
-    <arg name="pillar_min_face_width" default="0.04" />
+    <arg name="pillar_width" default="0.50" />
+    <arg name="pillar_min_visible_height" default="0.32" />
+    <arg name="pillar_min_strong_height" default="0.55" />
+    <arg name="pillar_thin_face_max_width" default="0.22" />
+    <arg name="pillar_long_reject_width" default="0.85" />
     <arg name="pillar_min_cluster_size" default="15" />
     <arg name="pillar_cluster_tolerance" default="0.24" />
-    <arg name="pillar_pair_gap_min" default="1.0" />
-    <arg name="pillar_pair_gap_max" default="2.3" />
+    <arg name="pillar_pair_gap_min" default="0.8" />
+    <arg name="pillar_pair_gap_max" default="2.8" />
     <arg name="pillar_pair_expected_gap" default="1.6" />
-    <arg name="pillar_pair_x_tolerance" default="0.8" />
+    <arg name="pillar_pair_forward_tolerance" default="0.9" />
 
     <!-- 先过滤 MID360/FAST-LIO 点云里的机体附近点和异常高度点，避免 EGO 把自身刷成障碍。 -->
     <node pkg="ego_api" type="craic_cloud_self_filter" name="craic_cloud_self_filter" output="screen">
         <param name="input_cloud_topic" value="$(arg raw_cloud_topic)" />
         <param name="output_cloud_topic" value="$(arg cloud_topic)" />
-        <param name="odom_topic" value="/mavros/local_position/odom" />
+        <param name="odom_topic" value="$(arg odom_topic)" />
         <param name="self_radius_xy" value="0.45" />
         <param name="self_radius_z" value="0.45" />
         <param name="min_z" value="0.03" />
@@ -69,21 +83,31 @@
     <!-- MID360/FAST-LIO 点云柱子识别，稳定后发布 /craic/pillar_pre_goal 和 post_goal。 -->
     <node pkg="ego_api" type="craic_pillar_detector" name="craic_pillar_detector" output="screen">
         <param name="cloud_topic" value="$(arg cloud_topic)" />
+        <param name="odom_topic" value="$(arg odom_topic)" />
         <param name="flight_z" value="$(arg flight_z)" />
+        <param name="use_local_rule_roi" value="$(arg use_local_rule_roi)" />
+        <param name="field_length" value="$(arg field_length)" />
+        <param name="field_width" value="$(arg field_width)" />
+        <param name="search_forward_min" value="$(arg pillar_search_forward_min)" />
+        <param name="search_forward_max" value="$(arg pillar_search_forward_max)" />
+        <param name="search_lateral_abs" value="$(arg pillar_search_lateral_abs)" />
         <param name="roi_x_min" value="$(arg pillar_roi_x_min)" />
         <param name="roi_x_max" value="$(arg pillar_roi_x_max)" />
         <param name="roi_y_min" value="$(arg pillar_roi_y_min)" />
         <param name="roi_y_max" value="$(arg pillar_roi_y_max)" />
         <param name="roi_z_min" value="$(arg pillar_roi_z_min)" />
         <param name="roi_z_max" value="$(arg pillar_roi_z_max)" />
-        <param name="pillar_min_height" value="$(arg pillar_min_height)" />
-        <param name="pillar_min_face_width" value="$(arg pillar_min_face_width)" />
+        <param name="pillar_width" value="$(arg pillar_width)" />
+        <param name="pillar_min_visible_height" value="$(arg pillar_min_visible_height)" />
+        <param name="pillar_min_strong_height" value="$(arg pillar_min_strong_height)" />
+        <param name="pillar_thin_face_max_width" value="$(arg pillar_thin_face_max_width)" />
+        <param name="pillar_long_reject_width" value="$(arg pillar_long_reject_width)" />
         <param name="min_cluster_size" value="$(arg pillar_min_cluster_size)" />
         <param name="cluster_tolerance" value="$(arg pillar_cluster_tolerance)" />
         <param name="pillar_pair_gap_min" value="$(arg pillar_pair_gap_min)" />
         <param name="pillar_pair_gap_max" value="$(arg pillar_pair_gap_max)" />
         <param name="pillar_pair_expected_gap" value="$(arg pillar_pair_expected_gap)" />
-        <param name="pillar_pair_x_tolerance" value="$(arg pillar_pair_x_tolerance)" />
+        <param name="pair_forward_tolerance" value="$(arg pillar_pair_forward_tolerance)" />
     </node>
 
     <!-- override 任务节点：负责 D435 穿框，以及二维码/气球占位任务。 -->
@@ -105,5 +129,9 @@
         <param name="pillar_align_timeout" value="$(arg pillar_align_timeout)" />
         <param name="pillar_align_threshold" value="$(arg pillar_align_threshold)" />
         <param name="pillar_align_speed" value="$(arg pillar_align_speed)" />
+        <param name="enable_pillar_active_scan" value="$(arg enable_pillar_active_scan)" />
+        <param name="pillar_active_scan_delay" value="$(arg pillar_active_scan_delay)" />
+        <param name="pillar_scan_yaw_rate" value="$(arg pillar_scan_yaw_rate)" />
+        <param name="pillar_scan_lateral_speed" value="$(arg pillar_scan_lateral_speed)" />
     </node>
 </launch>
