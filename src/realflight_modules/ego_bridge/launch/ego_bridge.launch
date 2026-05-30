@@ -14,9 +14,4 @@
         <remap from="~takeoff_land"   to="/ego_bridge/takeoff_land" />
         <remap from="~emergency_stop" to="/ego_bridge/emergency_stop" />
     </node>
-
-    <!-- <include file="$(find fast_lio)/launch/mapping_velodyne.launch" /> -->
-
-    <include file="$(find lidar_to_mavros)/launch/fastlio_to_px4_mid360.launch" />
-
 </launch>
