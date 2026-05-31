@@ -1,0 +1,47 @@
+<launch>
+  <arg name="bridge_ns" default="/ego_bridge" />
+  <arg name="odom_topic" default="/mavros/local_position/odom" />
+  <arg name="flight_z" default="0.9" />
+
+  <arg name="takeoff_timeout" default="35.0" />
+  <arg name="detect_timeout" default="20.0" />
+  <arg name="align_timeout" default="25.0" />
+  <arg name="hold_after_align" default="3.0" />
+  <arg name="land_timeout" default="35.0" />
+  <arg name="command_publish_timeout" default="4.0" />
+
+  <arg name="align_threshold" default="0.12" />
+  <arg name="stable_hold_time" default="0.8" />
+  <arg name="max_lateral_speed" default="0.10" />
+  <arg name="lateral_kp" default="0.65" />
+  <arg name="z_kp" default="0.9" />
+  <arg name="max_vz" default="0.12" />
+  <arg name="yaw_kp" default="0.6" />
+  <arg name="max_yaw_rate" default="0.25" />
+  <arg name="yaw_threshold" default="0.20" />
+  <arg name="valid_max_age" default="0.5" />
+
+  <node pkg="craic_pillar_debug" type="takeoff_align_land_demo" name="takeoff_align_land_demo" output="screen">
+    <param name="bridge_ns" value="$(arg bridge_ns)" />
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="flight_z" value="$(arg flight_z)" />
+
+    <param name="takeoff_timeout" value="$(arg takeoff_timeout)" />
+    <param name="detect_timeout" value="$(arg detect_timeout)" />
+    <param name="align_timeout" value="$(arg align_timeout)" />
+    <param name="hold_after_align" value="$(arg hold_after_align)" />
+    <param name="land_timeout" value="$(arg land_timeout)" />
+    <param name="command_publish_timeout" value="$(arg command_publish_timeout)" />
+
+    <param name="align_threshold" value="$(arg align_threshold)" />
+    <param name="stable_hold_time" value="$(arg stable_hold_time)" />
+    <param name="max_lateral_speed" value="$(arg max_lateral_speed)" />
+    <param name="lateral_kp" value="$(arg lateral_kp)" />
+    <param name="z_kp" value="$(arg z_kp)" />
+    <param name="max_vz" value="$(arg max_vz)" />
+    <param name="yaw_kp" value="$(arg yaw_kp)" />
+    <param name="max_yaw_rate" value="$(arg max_yaw_rate)" />
+    <param name="yaw_threshold" value="$(arg yaw_threshold)" />
+    <param name="valid_max_age" value="$(arg valid_max_age)" />
+  </node>
+</launch>

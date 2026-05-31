@@ -1,0 +1,178 @@
+<launch>
+  <arg name="start_frame_detector" default="true" />
+  <arg name="control_method" default="planner" />
+  <arg name="failure_action" default="land" />
+  <arg name="bridge_ns" default="/ego_bridge" />
+  <arg name="odom_topic" default="/mavros/local_position/odom" />
+
+  <arg name="cloud_topic" default="/cloud_registered" />
+  <arg name="frame_id" default="" />
+  <arg name="flight_z" default="0.9" />
+  <arg name="height_mode" default="fixed" />
+  <arg name="gate_center_z" default="0.9" />
+  <arg name="crossing_z" default="0.9" />
+  <arg name="use_detected_center_z" default="false" />
+  <arg name="goal_z_follows_center" default="false" />
+  <arg name="detected_center_z_bias" default="0.0" />
+  <arg name="goal_z_bias" default="0.0" />
+  <arg name="clamp_detected_center_z" default="false" />
+  <arg name="center_z_min" default="0.45" />
+  <arg name="center_z_max" default="1.20" />
+  <arg name="auto_height_bottom_mode" default="detected" />
+  <arg name="gate_bottom_z" default="0.15" />
+  <arg name="auto_height_top_z_max" default="1.25" />
+  <arg name="auto_height_forward_tolerance" default="0.35" />
+  <arg name="auto_height_lateral_margin" default="0.18" />
+  <arg name="auto_height_post_forward_margin" default="0.12" />
+  <arg name="auto_height_post_lateral_margin" default="0.12" />
+  <arg name="auto_height_low_quantile" default="0.05" />
+  <arg name="auto_height_high_quantile" default="0.95" />
+  <arg name="auto_height_min_span" default="0.45" />
+  <arg name="auto_height_min_points" default="18" />
+
+  <arg name="use_local_rule_roi" default="true" />
+  <arg name="field_length" default="6.0" />
+  <arg name="field_width" default="5.0" />
+  <arg name="gate_search_x_min" default="-0.5" />
+  <arg name="gate_search_x_max" default="4.2" />
+  <arg name="gate_search_y_min" default="-2.5" />
+  <arg name="gate_search_y_max" default="2.5" />
+  <arg name="roi_forward_min" default="0.20" />
+  <arg name="roi_forward_max" default="5.00" />
+  <arg name="roi_lateral_abs" default="2.50" />
+  <arg name="roi_z_min" default="0.15" />
+  <arg name="roi_z_max" default="2.20" />
+  <arg name="post_extract_z_max" default="2.00" />
+  <arg name="voxel_leaf" default="0.05" />
+  <arg name="cluster_tolerance" default="0.22" />
+  <arg name="min_cluster_size" default="8" />
+  <arg name="max_cluster_size" default="5000" />
+  <arg name="gate_post_min_width" default="0.05" />
+  <arg name="gate_post_max_width" default="0.42" />
+  <arg name="gate_post_weak_max_width" default="0.55" />
+  <arg name="gate_frame_cluster_min_width" default="0.75" />
+  <arg name="gate_frame_cluster_max_width" default="1.40" />
+  <arg name="gate_split_side_band" default="0.22" />
+  <arg name="gate_post_min_height" default="0.40" />
+  <arg name="gate_post_weak_min_height" default="0.18" />
+  <arg name="vertical_bin_size" default="0.18" />
+  <arg name="gate_post_min_vertical_bins" default="2" />
+  <arg name="gate_post_weak_min_vertical_bins" default="2" />
+  <arg name="gate_width_min" default="0.85" />
+  <arg name="gate_width_max" default="1.35" />
+  <arg name="gate_width_expected" default="1.00" />
+  <arg name="pair_forward_tolerance" default="0.35" />
+  <arg name="allow_weak_single_partial" default="true" />
+  <arg name="pre_offset" default="0.60" />
+  <arg name="post_offset" default="1.00" />
+  <arg name="detector_stable_frames" default="3" />
+  <arg name="detector_history_size" default="5" />
+  <arg name="detector_stability_threshold" default="0.18" />
+  <arg name="debug_log_period" default="1.0" />
+  <arg name="debug_top_clusters" default="6" />
+
+  <arg name="takeoff_timeout" default="35.0" />
+  <arg name="detect_timeout" default="20.0" />
+  <arg name="pre_timeout" default="30.0" />
+  <arg name="post_timeout" default="35.0" />
+  <arg name="command_publish_timeout" default="4.0" />
+  <arg name="reach_threshold" default="0.20" />
+  <arg name="valid_required_frames" default="5" />
+  <arg name="valid_max_age" default="0.6" />
+  <arg name="hover_before_detect" default="1.0" />
+  <arg name="hold_after_pass" default="5.0" />
+  <arg name="land_timeout" default="35.0" />
+  <arg name="z_kp" default="0.9" />
+  <arg name="max_vz" default="0.15" />
+
+  <group if="$(arg start_frame_detector)">
+    <include file="$(find craic_pillar_debug)/launch/frame_cloud_debug.launch">
+      <arg name="cloud_topic" value="$(arg cloud_topic)" />
+      <arg name="odom_topic" value="$(arg odom_topic)" />
+      <arg name="frame_id" value="$(arg frame_id)" />
+      <arg name="flight_z" value="$(arg flight_z)" />
+      <arg name="height_mode" value="$(arg height_mode)" />
+      <arg name="gate_center_z" value="$(arg gate_center_z)" />
+      <arg name="crossing_z" value="$(arg crossing_z)" />
+      <arg name="use_detected_center_z" value="$(arg use_detected_center_z)" />
+      <arg name="goal_z_follows_center" value="$(arg goal_z_follows_center)" />
+      <arg name="detected_center_z_bias" value="$(arg detected_center_z_bias)" />
+      <arg name="goal_z_bias" value="$(arg goal_z_bias)" />
+      <arg name="clamp_detected_center_z" value="$(arg clamp_detected_center_z)" />
+      <arg name="center_z_min" value="$(arg center_z_min)" />
+      <arg name="center_z_max" value="$(arg center_z_max)" />
+      <arg name="auto_height_bottom_mode" value="$(arg auto_height_bottom_mode)" />
+      <arg name="gate_bottom_z" value="$(arg gate_bottom_z)" />
+      <arg name="auto_height_top_z_max" value="$(arg auto_height_top_z_max)" />
+      <arg name="auto_height_forward_tolerance" value="$(arg auto_height_forward_tolerance)" />
+      <arg name="auto_height_lateral_margin" value="$(arg auto_height_lateral_margin)" />
+      <arg name="auto_height_post_forward_margin" value="$(arg auto_height_post_forward_margin)" />
+      <arg name="auto_height_post_lateral_margin" value="$(arg auto_height_post_lateral_margin)" />
+      <arg name="auto_height_low_quantile" value="$(arg auto_height_low_quantile)" />
+      <arg name="auto_height_high_quantile" value="$(arg auto_height_high_quantile)" />
+      <arg name="auto_height_min_span" value="$(arg auto_height_min_span)" />
+      <arg name="auto_height_min_points" value="$(arg auto_height_min_points)" />
+      <arg name="use_local_rule_roi" value="$(arg use_local_rule_roi)" />
+      <arg name="field_length" value="$(arg field_length)" />
+      <arg name="field_width" value="$(arg field_width)" />
+      <arg name="gate_search_x_min" value="$(arg gate_search_x_min)" />
+      <arg name="gate_search_x_max" value="$(arg gate_search_x_max)" />
+      <arg name="gate_search_y_min" value="$(arg gate_search_y_min)" />
+      <arg name="gate_search_y_max" value="$(arg gate_search_y_max)" />
+      <arg name="roi_forward_min" value="$(arg roi_forward_min)" />
+      <arg name="roi_forward_max" value="$(arg roi_forward_max)" />
+      <arg name="roi_lateral_abs" value="$(arg roi_lateral_abs)" />
+      <arg name="roi_z_min" value="$(arg roi_z_min)" />
+      <arg name="roi_z_max" value="$(arg roi_z_max)" />
+      <arg name="post_extract_z_max" value="$(arg post_extract_z_max)" />
+      <arg name="voxel_leaf" value="$(arg voxel_leaf)" />
+      <arg name="cluster_tolerance" value="$(arg cluster_tolerance)" />
+      <arg name="min_cluster_size" value="$(arg min_cluster_size)" />
+      <arg name="max_cluster_size" value="$(arg max_cluster_size)" />
+      <arg name="gate_post_min_width" value="$(arg gate_post_min_width)" />
+      <arg name="gate_post_max_width" value="$(arg gate_post_max_width)" />
+      <arg name="gate_post_weak_max_width" value="$(arg gate_post_weak_max_width)" />
+      <arg name="gate_frame_cluster_min_width" value="$(arg gate_frame_cluster_min_width)" />
+      <arg name="gate_frame_cluster_max_width" value="$(arg gate_frame_cluster_max_width)" />
+      <arg name="gate_split_side_band" value="$(arg gate_split_side_band)" />
+      <arg name="gate_post_min_height" value="$(arg gate_post_min_height)" />
+      <arg name="gate_post_weak_min_height" value="$(arg gate_post_weak_min_height)" />
+      <arg name="vertical_bin_size" value="$(arg vertical_bin_size)" />
+      <arg name="gate_post_min_vertical_bins" value="$(arg gate_post_min_vertical_bins)" />
+      <arg name="gate_post_weak_min_vertical_bins" value="$(arg gate_post_weak_min_vertical_bins)" />
+      <arg name="gate_width_min" value="$(arg gate_width_min)" />
+      <arg name="gate_width_max" value="$(arg gate_width_max)" />
+      <arg name="gate_width_expected" value="$(arg gate_width_expected)" />
+      <arg name="pair_forward_tolerance" value="$(arg pair_forward_tolerance)" />
+      <arg name="allow_weak_single_partial" value="$(arg allow_weak_single_partial)" />
+      <arg name="pre_offset" value="$(arg pre_offset)" />
+      <arg name="post_offset" value="$(arg post_offset)" />
+      <arg name="stable_frames" value="$(arg detector_stable_frames)" />
+      <arg name="history_size" value="$(arg detector_history_size)" />
+      <arg name="stability_threshold" value="$(arg detector_stability_threshold)" />
+      <arg name="debug_log_period" value="$(arg debug_log_period)" />
+      <arg name="debug_top_clusters" value="$(arg debug_top_clusters)" />
+    </include>
+  </group>
+
+  <node pkg="craic_pillar_debug" type="frame_cross_demo_node" name="frame_cross_demo_node" output="screen">
+    <param name="bridge_ns" value="$(arg bridge_ns)" />
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="control_method" value="$(arg control_method)" />
+    <param name="failure_action" value="$(arg failure_action)" />
+
+    <param name="takeoff_timeout" value="$(arg takeoff_timeout)" />
+    <param name="detect_timeout" value="$(arg detect_timeout)" />
+    <param name="pre_timeout" value="$(arg pre_timeout)" />
+    <param name="post_timeout" value="$(arg post_timeout)" />
+    <param name="command_publish_timeout" value="$(arg command_publish_timeout)" />
+    <param name="reach_threshold" value="$(arg reach_threshold)" />
+    <param name="valid_required_frames" value="$(arg valid_required_frames)" />
+    <param name="valid_max_age" value="$(arg valid_max_age)" />
+    <param name="hover_before_detect" value="$(arg hover_before_detect)" />
+    <param name="hold_after_pass" value="$(arg hold_after_pass)" />
+    <param name="land_timeout" value="$(arg land_timeout)" />
+    <param name="z_kp" value="$(arg z_kp)" />
+    <param name="max_vz" value="$(arg max_vz)" />
+  </node>
+</launch>

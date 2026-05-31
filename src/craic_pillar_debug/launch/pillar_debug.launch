@@ -1,0 +1,97 @@
+<launch>
+  <arg name="cloud_topic" default="/cloud_registered" />
+  <arg name="odom_topic" default="/mavros/local_position/odom" />
+  <arg name="flight_z" default="0.9" />
+
+  <arg name="use_local_rule_roi" default="false" />
+  <arg name="field_length" default="6.0" />
+  <arg name="field_width" default="5.0" />
+  <arg name="search_forward_min" default="-0.25" />
+  <arg name="search_forward_max" default="6.5" />
+  <arg name="search_lateral_abs" default="3.0" />
+
+  <arg name="roi_x_min" default="-0.3" />
+  <arg name="roi_x_max" default="4.0" />
+  <arg name="roi_y_min" default="-2.5" />
+  <arg name="roi_y_max" default="2.5" />
+  <arg name="roi_z_min" default="0.05" />
+  <arg name="roi_z_max" default="1.9" />
+
+  <arg name="voxel_leaf" default="0.06" />
+  <arg name="cluster_tolerance" default="0.28" />
+  <arg name="min_cluster_size" default="10" />
+  <arg name="max_cluster_size" default="8000" />
+
+  <arg name="pillar_width" default="0.50" />
+  <arg name="pillar_min_visible_height" default="0.32" />
+  <arg name="pillar_min_strong_height" default="0.50" />
+  <arg name="pillar_full_min_width" default="0.25" />
+  <arg name="pillar_full_max_width" default="0.75" />
+  <arg name="pillar_face_span_min" default="0.25" />
+  <arg name="pillar_face_span_max" default="0.75" />
+  <arg name="pillar_thin_face_max_width" default="0.22" />
+  <arg name="pillar_corner_max_width" default="0.28" />
+  <arg name="pillar_long_reject_width" default="0.85" />
+  <arg name="pillar_min_vertical_bins" default="2" />
+
+  <arg name="pillar_pair_gap_min" default="0.8" />
+  <arg name="pillar_pair_gap_max" default="2.8" />
+  <arg name="pillar_pair_expected_gap" default="1.6" />
+  <arg name="pair_forward_tolerance" default="1.0" />
+  <arg name="goal_offset" default="0.90" />
+  <arg name="stable_frames" default="3" />
+  <arg name="history_size" default="5" />
+  <arg name="stability_threshold" default="0.15" />
+
+  <arg name="debug_log_period" default="1.0" />
+  <arg name="debug_top_clusters" default="5" />
+
+  <node pkg="craic_pillar_debug" type="pillar_debug_node" name="pillar_debug_node" output="screen">
+    <param name="cloud_topic" value="$(arg cloud_topic)" />
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="flight_z" value="$(arg flight_z)" />
+
+    <param name="use_local_rule_roi" value="$(arg use_local_rule_roi)" />
+    <param name="field_length" value="$(arg field_length)" />
+    <param name="field_width" value="$(arg field_width)" />
+    <param name="search_forward_min" value="$(arg search_forward_min)" />
+    <param name="search_forward_max" value="$(arg search_forward_max)" />
+    <param name="search_lateral_abs" value="$(arg search_lateral_abs)" />
+
+    <param name="roi_x_min" value="$(arg roi_x_min)" />
+    <param name="roi_x_max" value="$(arg roi_x_max)" />
+    <param name="roi_y_min" value="$(arg roi_y_min)" />
+    <param name="roi_y_max" value="$(arg roi_y_max)" />
+    <param name="roi_z_min" value="$(arg roi_z_min)" />
+    <param name="roi_z_max" value="$(arg roi_z_max)" />
+
+    <param name="voxel_leaf" value="$(arg voxel_leaf)" />
+    <param name="cluster_tolerance" value="$(arg cluster_tolerance)" />
+    <param name="min_cluster_size" value="$(arg min_cluster_size)" />
+    <param name="max_cluster_size" value="$(arg max_cluster_size)" />
+
+    <param name="pillar_width" value="$(arg pillar_width)" />
+    <param name="pillar_min_visible_height" value="$(arg pillar_min_visible_height)" />
+    <param name="pillar_min_strong_height" value="$(arg pillar_min_strong_height)" />
+    <param name="pillar_full_min_width" value="$(arg pillar_full_min_width)" />
+    <param name="pillar_full_max_width" value="$(arg pillar_full_max_width)" />
+    <param name="pillar_face_span_min" value="$(arg pillar_face_span_min)" />
+    <param name="pillar_face_span_max" value="$(arg pillar_face_span_max)" />
+    <param name="pillar_thin_face_max_width" value="$(arg pillar_thin_face_max_width)" />
+    <param name="pillar_corner_max_width" value="$(arg pillar_corner_max_width)" />
+    <param name="pillar_long_reject_width" value="$(arg pillar_long_reject_width)" />
+    <param name="pillar_min_vertical_bins" value="$(arg pillar_min_vertical_bins)" />
+
+    <param name="pillar_pair_gap_min" value="$(arg pillar_pair_gap_min)" />
+    <param name="pillar_pair_gap_max" value="$(arg pillar_pair_gap_max)" />
+    <param name="pillar_pair_expected_gap" value="$(arg pillar_pair_expected_gap)" />
+    <param name="pair_forward_tolerance" value="$(arg pair_forward_tolerance)" />
+    <param name="goal_offset" value="$(arg goal_offset)" />
+    <param name="stable_frames" value="$(arg stable_frames)" />
+    <param name="history_size" value="$(arg history_size)" />
+    <param name="stability_threshold" value="$(arg stability_threshold)" />
+
+    <param name="debug_log_period" value="$(arg debug_log_period)" />
+    <param name="debug_top_clusters" value="$(arg debug_top_clusters)" />
+  </node>
+</launch>

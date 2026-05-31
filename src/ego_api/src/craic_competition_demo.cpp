@@ -46,7 +46,7 @@ class CraicCompetitionDemo {
 public:
     CraicCompetitionDemo()
         : nh_(), pnh_("~"), api_(nh_, getBridgeNs()) {
-        pnh_.param<double>("flight_z", flight_z_, 1.1);
+        pnh_.param<double>("flight_z", flight_z_, 0.9);
         pnh_.param<double>("takeoff_timeout", takeoff_timeout_, 30.0);
         pnh_.param<double>("goal_timeout", goal_timeout_, 60.0);
         pnh_.param<double>("override_timeout", override_timeout_, 120.0);
@@ -54,16 +54,18 @@ public:
         pnh_.param<double>("override_climb_timeout", override_climb_timeout_, 10.0);
         pnh_.param<double>("override_climb_speed", override_climb_speed_, 0.18);
         pnh_.param<double>("override_climb_threshold", override_climb_threshold_, 0.05);
-        pnh_.param<double>("pillar_align_timeout", pillar_align_timeout_, 20.0);
-        pnh_.param<double>("pillar_align_threshold", pillar_align_threshold_, 0.15);
-        pnh_.param<double>("pillar_align_speed", pillar_align_speed_, 0.18);
-        pnh_.param<double>("pillar_align_kp", pillar_align_kp_, 0.8);
+        pnh_.param<double>("pillar_valid_max_age", pillar_valid_max_age_, 0.5);
+        pnh_.param<int>("pillar_valid_count_required", pillar_valid_count_required_, 5);
+        pnh_.param<double>("pillar_align_timeout", pillar_align_timeout_, 25.0);
+        pnh_.param<double>("pillar_align_threshold", pillar_align_threshold_, 0.12);
+        pnh_.param<double>("pillar_align_speed", pillar_align_speed_, 0.10);
+        pnh_.param<double>("pillar_align_kp", pillar_align_kp_, 0.65);
         pnh_.param<double>("pillar_align_z_kp", pillar_align_z_kp_, 0.9);
-        pnh_.param<double>("pillar_align_max_vz", pillar_align_max_vz_, 0.16);
-        pnh_.param<double>("pillar_align_yaw_kp", pillar_align_yaw_kp_, 0.8);
-        pnh_.param<double>("pillar_align_max_yaw_rate", pillar_align_max_yaw_rate_, 0.35);
-        pnh_.param<double>("pillar_align_yaw_threshold", pillar_align_yaw_threshold_, 0.25);
-        pnh_.param<double>("pillar_align_hold_time", pillar_align_hold_time_, 0.35);
+        pnh_.param<double>("pillar_align_max_vz", pillar_align_max_vz_, 0.12);
+        pnh_.param<double>("pillar_align_yaw_kp", pillar_align_yaw_kp_, 0.6);
+        pnh_.param<double>("pillar_align_max_yaw_rate", pillar_align_max_yaw_rate_, 0.25);
+        pnh_.param<double>("pillar_align_yaw_threshold", pillar_align_yaw_threshold_, 0.20);
+        pnh_.param<double>("pillar_align_hold_time", pillar_align_hold_time_, 0.8);
         pnh_.param<bool>("enable_pillar_active_scan", enable_pillar_active_scan_, true);
         pnh_.param<double>("pillar_active_scan_delay", pillar_active_scan_delay_, 3.0);
         pnh_.param<double>("pillar_scan_yaw_rate", pillar_scan_yaw_rate_, 0.35);
@@ -116,8 +118,7 @@ public:
         }
 
         // 去程朝向来自柱子识别节点发布的目标姿态；返程直接反向加 pi。
-        const double yaw_forward = yawFromPose(pillar_pre_);
-        const double yaw_back = normalizeYaw(yaw_forward + M_PI);
+        double yaw_forward = yawFromPose(pillar_pre_);
 
         ROS_INFO("[craic_demo] ===== PASS_PILLARS_OUTBOUND =====");
         // 第一段不再把 pillar_pre 交给 EGO：先用 OVERRIDE 横向挪到两柱中心线，
@@ -127,6 +128,8 @@ public:
             safeLand();
             return 1;
         }
+        yaw_forward = yawFromPose(pillar_pre_);
+        const double yaw_back = normalizeYaw(yaw_forward + M_PI);
         // 对中完成后，只给 EGO 一个柱后目标点，让规划轨迹自然穿过两柱中线。
         flyGoal("pillar_post", pillar_post_, yaw_forward);
 
@@ -189,17 +192,23 @@ private:
         const ros::Time start = ros::Time::now();
         bool scan_active = false;
         ros::Time scan_start;
+        int valid_count = 0;
         while (ros::ok()) {
             ros::spinOnce();
             // 状态和目标点分开订阅，防止只收到 status 却还没拿到最新 goal。
-            if (pillar_status_ == "valid" && have_pre_ && have_post_) {
-                if (scan_active) {
-                    stopPillarActiveScan();
+            if (freshPillars()) {
+                ++valid_count;
+                if (valid_count >= pillar_valid_count_required_) {
+                    if (scan_active) {
+                        stopPillarActiveScan();
+                    }
+                    ROS_INFO("[craic_demo] Pillars stable. pre=(%.2f %.2f %.2f), post=(%.2f %.2f %.2f)",
+                             pillar_pre_.pose.position.x, pillar_pre_.pose.position.y, pillar_pre_.pose.position.z,
+                             pillar_post_.pose.position.x, pillar_post_.pose.position.y, pillar_post_.pose.position.z);
+                    return true;
                 }
-                ROS_INFO("[craic_demo] Pillars valid. pre=(%.2f %.2f %.2f), post=(%.2f %.2f %.2f)",
-                         pillar_pre_.pose.position.x, pillar_pre_.pose.position.y, pillar_pre_.pose.position.z,
-                         pillar_post_.pose.position.x, pillar_post_.pose.position.y, pillar_post_.pose.position.z);
-                return true;
+            } else {
+                valid_count = 0;
             }
             const double elapsed = (ros::Time::now() - start).toSec();
             if (enable_pillar_active_scan_ && !scan_active && elapsed > pillar_active_scan_delay_) {
@@ -225,6 +234,17 @@ private:
             rate.sleep();
         }
         return false;
+    }
+
+    bool freshPillars() const {
+        const ros::Time now = ros::Time::now();
+        return pillar_status_ == "valid" &&
+               have_pre_ &&
+               have_post_ &&
+               pillar_status_stamp_.isValid() &&
+               pillar_goal_stamp_.isValid() &&
+               (now - pillar_status_stamp_).toSec() < pillar_valid_max_age_ &&
+               (now - pillar_goal_stamp_).toSec() < pillar_valid_max_age_;
     }
 
     void sendPillarActiveScanCmd(double elapsed) {
@@ -316,23 +336,6 @@ private:
     }
 
     bool overrideAlignToPillarCenter(double yaw_forward) {
-        const Eigen::Vector3d pre = posePosition(pillar_pre_);
-        const Eigen::Vector3d post = posePosition(pillar_post_);
-        const Eigen::Vector3d corridor = 0.5 * (pre + post);
-        Eigen::Vector2d forward(post.x() - pre.x(), post.y() - pre.y());
-        if (forward.norm() < 1e-3) {
-            ROS_ERROR("[craic_demo] invalid pillar pre/post, cannot compute forward direction.");
-            return false;
-        }
-        forward.normalize();
-
-        // lateral 是两柱连线方向；只沿这个方向移动，就能从起点横向挪到通道中心线。
-        const Eigen::Vector2d lateral(-forward.y(), forward.x());
-        const Eigen::Vector2d corridor_xy(corridor.x(), corridor.y());
-
-        ROS_INFO("[craic_demo] OVERRIDE lateral align to pillar center line: corridor=(%.2f %.2f), forward=(%.2f %.2f), lateral=(%.2f %.2f)",
-                 corridor.x(), corridor.y(), forward.x(), forward.y(), lateral.x(), lateral.y());
-
         if (!api_.enableOverride()) return false;
 
         ros::Rate rate(50);
@@ -344,54 +347,75 @@ private:
         while (ros::ok()) {
             ros::spinOnce();
             const Eigen::Vector3d pos = api_.getOdomPosition();
-            const Eigen::Vector2d pos_xy(pos.x(), pos.y());
-            const Eigen::Vector2d to_center = corridor_xy - pos_xy;
-
-            const double lateral_err = to_center.dot(lateral);
-            const double along_err = to_center.dot(forward);
             const double z_err = flight_z_ - pos.z();
-            const double yaw_err = normalizeYaw(yaw_forward - api_.getOdomYaw());
-
-            double v_lat = clampValue(pillar_align_kp_ * lateral_err,
-                                      -pillar_align_speed_, pillar_align_speed_);
-            if (std::abs(lateral_err) < pillar_align_threshold_) v_lat = 0.0;
-
             double vz = clampValue(pillar_align_z_kp_ * z_err,
                                    -pillar_align_max_vz_, pillar_align_max_vz_);
-            if (std::abs(z_err) < 0.05) vz = 0.0;
+            if (std::abs(z_err) < 0.04) vz = 0.0;
 
-            double yaw_rate = clampValue(pillar_align_yaw_kp_ * yaw_err,
-                                         -pillar_align_max_yaw_rate_, pillar_align_max_yaw_rate_);
-            if (std::abs(yaw_err) < pillar_align_yaw_threshold_) yaw_rate = 0.0;
-
-            api_.sendVelocityCmd(v_lat * lateral.x(),
-                                 v_lat * lateral.y(),
-                                 vz,
-                                 yaw_rate);
-
-            // 这里的“对中”只看横向误差和高度误差；yaw 只顺手慢速修正，
-            // 不作为硬门槛，避免因为 yaw 控制响应慢导致一直悬停。
-            const bool centered = std::abs(lateral_err) < pillar_align_threshold_ &&
-                                  std::abs(z_err) < 0.10;
-            if (centered) {
-                if (!stable_started) {
-                    stable_started = true;
-                    stable_since = ros::Time::now();
-                } else if ((ros::Time::now() - stable_since).toSec() > pillar_align_hold_time_) {
-                    reached = true;
+            if (!freshPillars()) {
+                api_.sendVelocityCmd(0.0, 0.0, vz, 0.0);
+                stable_started = false;
+                ROS_WARN_THROTTLE(0.5,
+                                  "[craic_demo] Pillar detection stale while aligning. status=%s",
+                                  pillar_status_.c_str());
+            } else {
+                const Eigen::Vector3d pre = posePosition(pillar_pre_);
+                const Eigen::Vector3d post = posePosition(pillar_post_);
+                Eigen::Vector2d forward(post.x() - pre.x(), post.y() - pre.y());
+                if (forward.norm() < 1e-3) {
+                    ROS_ERROR("[craic_demo] invalid pillar pre/post, cannot compute forward direction.");
                     break;
                 }
-            } else {
-                stable_started = false;
+                forward.normalize();
+
+                // lateral 是两柱连线方向；只沿这个方向移动，就能从起点横向挪到通道中心线。
+                const Eigen::Vector2d lateral(-forward.y(), forward.x());
+                const Eigen::Vector2d corridor_xy(0.5 * (pre.x() + post.x()),
+                                                  0.5 * (pre.y() + post.y()));
+                const Eigen::Vector2d pos_xy(pos.x(), pos.y());
+                const Eigen::Vector2d to_center = corridor_xy - pos_xy;
+
+                const double lateral_err = to_center.dot(lateral);
+                const double along_err = to_center.dot(forward);
+                yaw_forward = yawFromPose(pillar_pre_);
+                const double yaw_err = normalizeYaw(yaw_forward - api_.getOdomYaw());
+
+                double v_lat = clampValue(pillar_align_kp_ * lateral_err,
+                                          -pillar_align_speed_, pillar_align_speed_);
+                if (std::abs(lateral_err) < pillar_align_threshold_) v_lat = 0.0;
+
+                double yaw_rate = clampValue(pillar_align_yaw_kp_ * yaw_err,
+                                             -pillar_align_max_yaw_rate_, pillar_align_max_yaw_rate_);
+                if (std::abs(yaw_err) < pillar_align_yaw_threshold_) yaw_rate = 0.0;
+
+                api_.sendVelocityCmd(v_lat * lateral.x(),
+                                     v_lat * lateral.y(),
+                                     vz,
+                                     yaw_rate);
+
+                // 这里的“对中”只看横向误差和高度误差；yaw 只顺手慢速修正。
+                const bool centered = std::abs(lateral_err) < pillar_align_threshold_ &&
+                                      std::abs(z_err) < 0.12;
+                if (centered) {
+                    if (!stable_started) {
+                        stable_started = true;
+                        stable_since = ros::Time::now();
+                    } else if ((ros::Time::now() - stable_since).toSec() > pillar_align_hold_time_) {
+                        reached = true;
+                        break;
+                    }
+                } else {
+                    stable_started = false;
+                }
+
+                ROS_INFO_THROTTLE(0.4,
+                                  "[craic_demo] pillar align pos=(%.2f %.2f %.2f) lat_err=%.3f along_err=%.3f z_err=%.3f yaw_err=%.3f v_lat=%.3f",
+                                  pos.x(), pos.y(), pos.z(),
+                                  lateral_err, along_err, z_err, yaw_err, v_lat);
             }
 
-            ROS_INFO_THROTTLE(0.5,
-                              "[craic_demo] pillar align pos=(%.2f %.2f %.2f) lat_err=%.2f along_err=%.2f z_err=%.2f yaw_err=%.2f v_lat=%.2f",
-                              pos.x(), pos.y(), pos.z(), lateral_err, along_err, z_err, yaw_err, v_lat);
-
             if ((ros::Time::now() - start).toSec() > pillar_align_timeout_) {
-                ROS_WARN("[craic_demo] pillar align timeout lat_err=%.2f along_err=%.2f z_err=%.2f yaw_err=%.2f",
-                         lateral_err, along_err, z_err, yaw_err);
+                ROS_WARN("[craic_demo] pillar align timeout.");
                 break;
             }
             rate.sleep();
@@ -448,16 +472,19 @@ private:
         // 高度统一由比赛流程控制，柱子识别只负责给出平面通道位置。
         pillar_pre_.pose.position.z = flight_z_;
         have_pre_ = true;
+        pillar_goal_stamp_ = ros::Time::now();
     }
 
     void postGoalCb(const geometry_msgs::PoseStamped::ConstPtr& msg) {
         pillar_post_ = *msg;
         pillar_post_.pose.position.z = flight_z_;
         have_post_ = true;
+        pillar_goal_stamp_ = ros::Time::now();
     }
 
     void statusCb(const std_msgs::String::ConstPtr& msg) {
         pillar_status_ = msg->data;
+        pillar_status_stamp_ = ros::Time::now();
     }
 
     ros::NodeHandle nh_;
@@ -467,7 +494,7 @@ private:
     ros::Subscriber post_sub_;
     ros::Subscriber status_sub_;
 
-    double flight_z_ = 1.1;
+    double flight_z_ = 0.9;
     double takeoff_timeout_ = 30.0;
     double goal_timeout_ = 60.0;
     double override_timeout_ = 120.0;
@@ -475,16 +502,18 @@ private:
     double override_climb_timeout_ = 10.0;
     double override_climb_speed_ = 0.18;
     double override_climb_threshold_ = 0.05;
-    double pillar_align_timeout_ = 20.0;
-    double pillar_align_threshold_ = 0.15;
-    double pillar_align_speed_ = 0.18;
-    double pillar_align_kp_ = 0.8;
+    double pillar_valid_max_age_ = 0.5;
+    int pillar_valid_count_required_ = 5;
+    double pillar_align_timeout_ = 25.0;
+    double pillar_align_threshold_ = 0.12;
+    double pillar_align_speed_ = 0.10;
+    double pillar_align_kp_ = 0.65;
     double pillar_align_z_kp_ = 0.9;
-    double pillar_align_max_vz_ = 0.16;
-    double pillar_align_yaw_kp_ = 0.8;
-    double pillar_align_max_yaw_rate_ = 0.35;
-    double pillar_align_yaw_threshold_ = 0.25;
-    double pillar_align_hold_time_ = 0.35;
+    double pillar_align_max_vz_ = 0.12;
+    double pillar_align_yaw_kp_ = 0.6;
+    double pillar_align_max_yaw_rate_ = 0.25;
+    double pillar_align_yaw_threshold_ = 0.20;
+    double pillar_align_hold_time_ = 0.8;
     bool enable_pillar_active_scan_ = true;
     double pillar_active_scan_delay_ = 3.0;
     double pillar_scan_yaw_rate_ = 0.35;
@@ -499,6 +528,8 @@ private:
     bool have_pre_ = false;
     bool have_post_ = false;
     std::string pillar_status_ = "unknown";
+    ros::Time pillar_status_stamp_;
+    ros::Time pillar_goal_stamp_;
     geometry_msgs::PoseStamped pillar_pre_;
     geometry_msgs::PoseStamped pillar_post_;
     Eigen::Vector3d home_hover_ = Eigen::Vector3d::Zero();
