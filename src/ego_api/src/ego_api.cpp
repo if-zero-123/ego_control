@@ -404,11 +404,16 @@ bool EgoApi::waitOverrideComplete(double timeout) {
 
     ros::Rate rate(10);
     ros::Time start = ros::Time::now();
+    bool saw_override = false;
 
     while (ros::ok()) {
         ros::spinOnce();
 
-        if (control_mode_ == 0) {
+        if (control_mode_ == 1) {
+            saw_override = true;
+        }
+
+        if (saw_override && control_mode_ == 0) {
             ROS_INFO("[EgoApi] Override complete (control_mode=0).");
             return true;
         }

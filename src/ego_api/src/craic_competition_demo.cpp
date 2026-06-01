@@ -468,10 +468,7 @@ private:
             return false;
         }
         ROS_INFO("[craic_demo] Reusing locked frame goals for backward pass; no frame re-detect.");
-        logFrameGoal("backward_frame_post_prepare", locked_frame_post_);
         logFrameGoal("backward_frame_pre", locked_frame_pre_);
-        if (!flyFrameGoalFixedZ("frame_post_return_prepare", locked_frame_post_, locked_frame_yaw_back_)) return false;
-        ros::Duration(frame_hold_at_pre_).sleep();
         return flyFrameGoalFixedZ("frame_pre_return", locked_frame_pre_, locked_frame_yaw_back_);
     }
 

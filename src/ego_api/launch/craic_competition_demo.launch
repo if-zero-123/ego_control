@@ -141,7 +141,7 @@
     <arg name="frame_pair_forward_tolerance" default="0.35" />
     <arg name="frame_allow_weak_single_partial" default="true" />
     <arg name="frame_pre_offset" default="0.70" />
-    <arg name="frame_post_offset" default="1.00" />
+    <arg name="frame_post_offset" default="0.70" />
     <arg name="frame_stable_frames" default="3" />
     <arg name="frame_history_size" default="5" />
     <arg name="frame_stability_threshold" default="0.18" />
