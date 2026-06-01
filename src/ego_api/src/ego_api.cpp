@@ -198,11 +198,16 @@ bool EgoApi::sendGoalWithYaw(double x, double y, double z, double yaw, double ti
 
     ros::Rate rate(10);
     ros::Time start = ros::Time::now();
+    bool saw_reach_reset = reach_status_ == 0;
 
     while (ros::ok()) {
         ros::spinOnce();
 
-        if (reach_status_ == 1) {
+        if (reach_status_ == 0) {
+            saw_reach_reset = true;
+        }
+
+        if (saw_reach_reset && reach_status_ == 1) {
             ROS_INFO("[EgoApi] Goal reached!");
             return true;
         }
@@ -216,6 +221,10 @@ bool EgoApi::sendGoalWithYaw(double x, double y, double z, double yaw, double ti
         rate.sleep();
     }
     return false;
+}
+
+void EgoApi::publishGoalOnly(double x, double y, double z, double yaw) {
+    publishGoal(x, y, z, yaw);
 }
 
 // ─────────────────────────────────────────────────────────────

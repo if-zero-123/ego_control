@@ -91,6 +91,13 @@ public:
      */
     bool sendGoalWithYaw(double x, double y, double z, double yaw, double timeout = 60.0);
 
+    /**
+     * @brief 只发布目标点，不阻塞等待到达。
+     *
+     * 适合上层自己同时监控到达状态和任务阶段切换条件。
+     */
+    void publishGoalOnly(double x, double y, double z, double yaw);
+
     // ═══════════ Override 控制 ═══════════
 
     /**
