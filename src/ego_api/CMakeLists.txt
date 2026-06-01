@@ -95,6 +95,18 @@ add_dependencies(craic_pillar_detector
   ${catkin_EXPORTED_TARGETS}
 )
 
+# ── CRAIC MID360 frame detector ──
+add_executable(craic_frame_detector
+  src/frame_detector_node.cpp
+)
+target_link_libraries(craic_frame_detector
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+)
+add_dependencies(craic_frame_detector
+  ${catkin_EXPORTED_TARGETS}
+)
+
 # ── CRAIC point cloud self filter ──
 add_executable(craic_cloud_self_filter
   src/cloud_self_filter_node.cpp

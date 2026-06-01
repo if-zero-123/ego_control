@@ -51,17 +51,25 @@ public:
         pnh_.param<std::string>("odom_topic", odom_topic_, "/mavros/local_position/odom");
         pnh_.param<std::string>("control_method", control_method_, "planner");
         pnh_.param<std::string>("failure_action", failure_action_, "land");
+        pnh_.param<std::string>("goal_frame_id", goal_frame_id_, "world");
+        pnh_.param<std::string>("ego_use_goal_msg_z_param", ego_use_goal_msg_z_param_,
+                                "/drone_0_ego_planner_node/fsm/use_goal_msg_z");
         pnh_.param<double>("takeoff_timeout", takeoff_timeout_, 35.0);
         pnh_.param<double>("detect_timeout", detect_timeout_, 20.0);
         pnh_.param<double>("pre_timeout", pre_timeout_, 30.0);
         pnh_.param<double>("post_timeout", post_timeout_, 35.0);
         pnh_.param<double>("command_publish_timeout", command_publish_timeout_, 4.0);
         pnh_.param<double>("reach_threshold", reach_threshold_, 0.20);
+        pnh_.param<double>("max_goal_distance", max_goal_distance_, 5.0);
+        pnh_.param<double>("min_goal_z", min_goal_z_, 0.35);
+        pnh_.param<double>("max_goal_z", max_goal_z_, 1.8);
         pnh_.param<int>("valid_required_frames", valid_required_frames_, 5);
         pnh_.param<double>("valid_max_age", valid_max_age_, 0.6);
         pnh_.param<double>("hover_before_detect", hover_before_detect_, 1.0);
+        pnh_.param<double>("hold_at_pre", hold_at_pre_, 1.0);
         pnh_.param<double>("hold_after_pass", hold_after_pass_, 5.0);
         pnh_.param<double>("land_timeout", land_timeout_, 35.0);
+        pnh_.param<bool>("refresh_before_pass", refresh_before_pass_, true);
         pnh_.param<double>("z_kp", z_kp_, 0.9);
         pnh_.param<double>("max_vz", max_vz_, 0.15);
 
@@ -90,9 +98,11 @@ public:
         target_point_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(
             bridge_ns_ + "/target_point", 1);
 
-        ROS_INFO("[frame_cross_demo] bridge=%s odom=%s method=%s reach=%.2f valid_frames=%d failure=%s",
+        ROS_INFO("[frame_cross_demo] bridge=%s odom=%s method=%s goal_frame=%s reach=%.2f valid_frames=%d safety_dist=%.2f z=[%.2f %.2f] refresh_before_pass=%d failure=%s",
                  bridge_ns_.c_str(), odom_topic_.c_str(), control_method_.c_str(),
-                 reach_threshold_, valid_required_frames_, failure_action_.c_str());
+                 goal_frame_id_.c_str(), reach_threshold_, valid_required_frames_,
+                 max_goal_distance_, min_goal_z_, max_goal_z_, refresh_before_pass_,
+                 failure_action_.c_str());
     }
 
     int run() {
@@ -113,11 +123,16 @@ public:
             return 1;
         }
 
-        const geometry_msgs::PoseStamped pre_goal = frame_pre_;
-        const geometry_msgs::PoseStamped post_goal = frame_post_;
-        ROS_INFO("[frame_cross_demo] Locked frame goals. pre=(%.2f %.2f %.2f) post=(%.2f %.2f %.2f)",
-                 pre_goal.pose.position.x, pre_goal.pose.position.y, pre_goal.pose.position.z,
-                 post_goal.pose.position.x, post_goal.pose.position.y, post_goal.pose.position.z);
+        geometry_msgs::PoseStamped pre_goal = normalizeWorldGoal(frame_pre_);
+        geometry_msgs::PoseStamped post_goal = normalizeWorldGoal(frame_post_);
+        if (!validateGoal(pre_goal, "pre") || !validateGoal(post_goal, "post")) {
+            handleFailure("invalid_frame_goal");
+            return 1;
+        }
+        logGoal("locked_pre", frame_pre_, pre_goal);
+        logGoal("locked_post", frame_post_, post_goal);
+
+        warnIfPlannerGoalZIgnored();
 
         bool ok = false;
         if (control_method_ == "override") {
@@ -173,13 +188,13 @@ private:
     void framePreCb(const geometry_msgs::PoseStamped::ConstPtr& msg) {
         frame_pre_ = *msg;
         have_pre_ = true;
-        frame_goal_stamp_ = ros::Time::now();
+        frame_pre_stamp_ = ros::Time::now();
     }
 
     void framePostCb(const geometry_msgs::PoseStamped::ConstPtr& msg) {
         frame_post_ = *msg;
         have_post_ = true;
-        frame_goal_stamp_ = ros::Time::now();
+        frame_post_stamp_ = ros::Time::now();
     }
 
     bool waitReady() {
@@ -283,11 +298,110 @@ private:
                have_pre_ &&
                have_post_ &&
                (now - frame_status_stamp_).toSec() < valid_max_age_ &&
-               (now - frame_goal_stamp_).toSec() < valid_max_age_;
+               (now - frame_pre_stamp_).toSec() < valid_max_age_ &&
+               (now - frame_post_stamp_).toSec() < valid_max_age_;
     }
 
-    bool runPlannerCross(const geometry_msgs::PoseStamped& pre_goal,
-                         const geometry_msgs::PoseStamped& post_goal) {
+    geometry_msgs::PoseStamped normalizeWorldGoal(const geometry_msgs::PoseStamped& goal) const {
+        geometry_msgs::PoseStamped out = goal;
+        out.header.frame_id = goal_frame_id_;
+        return out;
+    }
+
+    Eigen::Vector2d bodyRelativeXY(const Eigen::Vector3d& target) const {
+        const double dx = target.x() - odom_pos_.x();
+        const double dy = target.y() - odom_pos_.y();
+        const double c = std::cos(odom_yaw_);
+        const double s = std::sin(odom_yaw_);
+        return Eigen::Vector2d(c * dx + s * dy, -s * dx + c * dy);
+    }
+
+    bool validateGoal(const geometry_msgs::PoseStamped& goal, const std::string& label) const {
+        const Eigen::Vector3d target = posePosition(goal);
+        const double dist = (target - odom_pos_).norm();
+        if (!std::isfinite(target.x()) || !std::isfinite(target.y()) || !std::isfinite(target.z())) {
+            ROS_ERROR("[frame_cross_demo] %s goal has non-finite position.", label.c_str());
+            return false;
+        }
+        if (dist > max_goal_distance_) {
+            ROS_ERROR("[frame_cross_demo] %s goal too far dist=%.2f max=%.2f target=(%.2f %.2f %.2f) odom=(%.2f %.2f %.2f)",
+                      label.c_str(), dist, max_goal_distance_,
+                      target.x(), target.y(), target.z(),
+                      odom_pos_.x(), odom_pos_.y(), odom_pos_.z());
+            return false;
+        }
+        if (target.z() < min_goal_z_ || target.z() > max_goal_z_) {
+            ROS_ERROR("[frame_cross_demo] %s goal z out of range z=%.2f allowed=[%.2f %.2f]",
+                      label.c_str(), target.z(), min_goal_z_, max_goal_z_);
+            return false;
+        }
+        return true;
+    }
+
+    void logGoal(const std::string& label,
+                 const geometry_msgs::PoseStamped& raw,
+                 const geometry_msgs::PoseStamped& world) const {
+        const Eigen::Vector3d target = posePosition(world);
+        const Eigen::Vector2d rel = bodyRelativeXY(target);
+        ROS_INFO("[frame_cross_demo] %s raw_frame=%s world=(%.2f %.2f %.2f) body_rel=(%.2f %.2f %.2f) yaw=%.2f",
+                 label.c_str(), raw.header.frame_id.c_str(),
+                 target.x(), target.y(), target.z(),
+                 rel.x(), rel.y(), target.z() - odom_pos_.z(),
+                 yawFromPose(world));
+    }
+
+    void warnIfPlannerGoalZIgnored() const {
+        if (control_method_ != "planner") return;
+
+        bool use_goal_msg_z = false;
+        if (ros::param::get(ego_use_goal_msg_z_param_, use_goal_msg_z)) {
+            if (!use_goal_msg_z) {
+                ROS_WARN("[frame_cross_demo] EGO parameter %s is false; planner may ignore frame goal z. Launch EGO with use_goal_msg_z:=true.",
+                         ego_use_goal_msg_z_param_.c_str());
+            }
+        } else {
+            ROS_WARN("[frame_cross_demo] Could not read %s. For auto frame height, launch EGO with use_goal_msg_z:=true.",
+                     ego_use_goal_msg_z_param_.c_str());
+        }
+    }
+
+    bool refreshFrameGoals(geometry_msgs::PoseStamped& pre_goal,
+                           geometry_msgs::PoseStamped& post_goal,
+                           double timeout,
+                           const std::string& reason) {
+        const ros::Time start = ros::Time::now();
+        ros::Rate rate(20);
+        int valid_count = 0;
+        while (ros::ok()) {
+            ros::spinOnce();
+            if (freshFrame()) {
+                ++valid_count;
+                if (valid_count >= valid_required_frames_) {
+                    pre_goal = normalizeWorldGoal(frame_pre_);
+                    post_goal = normalizeWorldGoal(frame_post_);
+                    if (!validateGoal(pre_goal, reason + "_pre") ||
+                        !validateGoal(post_goal, reason + "_post")) {
+                        return false;
+                    }
+                    logGoal(reason + "_pre", frame_pre_, pre_goal);
+                    logGoal(reason + "_post", frame_post_, post_goal);
+                    return true;
+                }
+            } else {
+                valid_count = 0;
+            }
+            if ((ros::Time::now() - start).toSec() > timeout) {
+                ROS_ERROR("[frame_cross_demo] refresh frame goals timeout reason=%s status=%s",
+                          reason.c_str(), frame_status_.c_str());
+                return false;
+            }
+            rate.sleep();
+        }
+        return false;
+    }
+
+    bool runPlannerCross(geometry_msgs::PoseStamped pre_goal,
+                         geometry_msgs::PoseStamped post_goal) {
         if (control_method_ != "planner" && control_method_ != "override") {
             ROS_WARN("[frame_cross_demo] Unknown control_method=%s, fallback to planner.",
                      control_method_.c_str());
@@ -301,17 +415,34 @@ private:
         ROS_INFO("[frame_cross_demo] ===== GO_PRE planner =====");
         if (!sendPlannerGoalAndWait(pre_goal, pre_timeout_, "pre")) return false;
 
+        ROS_INFO("[frame_cross_demo] ===== HOLD_AT_PRE planner =====");
+        holdCurrent(hold_at_pre_);
+        if (refresh_before_pass_ &&
+            !refreshFrameGoals(pre_goal, post_goal,
+                               std::min(5.0, detect_timeout_), "refresh_before_pass")) {
+            return false;
+        }
+
         ROS_INFO("[frame_cross_demo] ===== PASS_FRAME planner =====");
         if (!sendPlannerGoalAndWait(post_goal, post_timeout_, "post")) return false;
         return true;
     }
 
-    bool runOverrideCross(const geometry_msgs::PoseStamped& pre_goal,
-                          const geometry_msgs::PoseStamped& post_goal) {
+    bool runOverrideCross(geometry_msgs::PoseStamped pre_goal,
+                          geometry_msgs::PoseStamped post_goal) {
         if (!enableOverride()) return false;
 
         ROS_INFO("[frame_cross_demo] ===== GO_PRE override =====");
         if (!moveToOverride(pre_goal, pre_timeout_, "pre")) {
+            disableOverride();
+            return false;
+        }
+
+        ROS_INFO("[frame_cross_demo] ===== HOLD_AT_PRE override =====");
+        holdCurrent(hold_at_pre_);
+        if (refresh_before_pass_ &&
+            !refreshFrameGoals(pre_goal, post_goal,
+                               std::min(5.0, detect_timeout_), "refresh_before_pass")) {
             disableOverride();
             return false;
         }
@@ -322,7 +453,6 @@ private:
             return false;
         }
 
-        holdCurrent(hold_after_pass_);
         return disableOverride();
     }
 
@@ -342,6 +472,7 @@ private:
                 last_pub = ros::Time::now();
                 geometry_msgs::PoseStamped out = goal;
                 out.header.stamp = ros::Time::now();
+                out.header.frame_id = goal_frame_id_;
                 planner_goal_pub_.publish(out);
                 target_point_pub_.publish(out);
                 if (!first_pub_time.isValid()) {
@@ -442,7 +573,7 @@ private:
     void sendPositionCmd(const Eigen::Vector3d& target, double yaw) {
         quadrotor_msgs::PositionCommand cmd;
         cmd.header.stamp = ros::Time::now();
-        cmd.header.frame_id = "world";
+        cmd.header.frame_id = goal_frame_id_;
         cmd.position.x = target.x();
         cmd.position.y = target.y();
         cmd.position.z = target.z();
@@ -470,7 +601,7 @@ private:
     void sendVelocityCmd(double vx, double vy, double vz, double yaw_rate) {
         quadrotor_msgs::PositionCommand cmd;
         cmd.header.stamp = ros::Time::now();
-        cmd.header.frame_id = "world";
+        cmd.header.frame_id = goal_frame_id_;
         cmd.position.x = odom_pos_.x();
         cmd.position.y = odom_pos_.y();
         cmd.position.z = odom_pos_.z();
@@ -567,17 +698,24 @@ private:
     std::string odom_topic_;
     std::string control_method_ = "planner";
     std::string failure_action_ = "land";
+    std::string goal_frame_id_ = "world";
+    std::string ego_use_goal_msg_z_param_ = "/drone_0_ego_planner_node/fsm/use_goal_msg_z";
     double takeoff_timeout_ = 35.0;
     double detect_timeout_ = 20.0;
     double pre_timeout_ = 30.0;
     double post_timeout_ = 35.0;
     double command_publish_timeout_ = 4.0;
     double reach_threshold_ = 0.20;
+    double max_goal_distance_ = 5.0;
+    double min_goal_z_ = 0.35;
+    double max_goal_z_ = 1.8;
     int valid_required_frames_ = 5;
     double valid_max_age_ = 0.6;
     double hover_before_detect_ = 1.0;
+    double hold_at_pre_ = 1.0;
     double hold_after_pass_ = 5.0;
     double land_timeout_ = 35.0;
+    bool refresh_before_pass_ = true;
     double z_kp_ = 0.9;
     double max_vz_ = 0.15;
 
@@ -591,7 +729,8 @@ private:
     std::string frame_status_ = "unknown";
     ros::Time odom_stamp_;
     ros::Time frame_status_stamp_;
-    ros::Time frame_goal_stamp_;
+    ros::Time frame_pre_stamp_;
+    ros::Time frame_post_stamp_;
     Eigen::Vector3d odom_pos_ = Eigen::Vector3d::Zero();
     Eigen::Vector3d odom_vel_ = Eigen::Vector3d::Zero();
     double odom_yaw_ = 0.0;

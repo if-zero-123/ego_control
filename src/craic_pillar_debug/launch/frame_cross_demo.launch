@@ -4,15 +4,17 @@
   <arg name="failure_action" default="land" />
   <arg name="bridge_ns" default="/ego_bridge" />
   <arg name="odom_topic" default="/mavros/local_position/odom" />
+  <arg name="goal_frame_id" default="world" />
+  <arg name="ego_use_goal_msg_z_param" default="/drone_0_ego_planner_node/fsm/use_goal_msg_z" />
 
   <arg name="cloud_topic" default="/cloud_registered" />
   <arg name="frame_id" default="" />
   <arg name="flight_z" default="0.9" />
-  <arg name="height_mode" default="fixed" />
+  <arg name="height_mode" default="auto" />
   <arg name="gate_center_z" default="0.9" />
   <arg name="crossing_z" default="0.9" />
-  <arg name="use_detected_center_z" default="false" />
-  <arg name="goal_z_follows_center" default="false" />
+  <arg name="use_detected_center_z" default="true" />
+  <arg name="goal_z_follows_center" default="true" />
   <arg name="detected_center_z_bias" default="0.0" />
   <arg name="goal_z_bias" default="0.0" />
   <arg name="clamp_detected_center_z" default="false" />
@@ -20,7 +22,7 @@
   <arg name="center_z_max" default="1.20" />
   <arg name="auto_height_bottom_mode" default="detected" />
   <arg name="gate_bottom_z" default="0.15" />
-  <arg name="auto_height_top_z_max" default="1.25" />
+  <arg name="auto_height_top_z_max" default="2.20" />
   <arg name="auto_height_forward_tolerance" default="0.35" />
   <arg name="auto_height_lateral_margin" default="0.18" />
   <arg name="auto_height_post_forward_margin" default="0.12" />
@@ -77,11 +79,16 @@
   <arg name="post_timeout" default="35.0" />
   <arg name="command_publish_timeout" default="4.0" />
   <arg name="reach_threshold" default="0.20" />
+  <arg name="max_goal_distance" default="5.0" />
+  <arg name="min_goal_z" default="0.35" />
+  <arg name="max_goal_z" default="1.8" />
   <arg name="valid_required_frames" default="5" />
   <arg name="valid_max_age" default="0.6" />
   <arg name="hover_before_detect" default="1.0" />
+  <arg name="hold_at_pre" default="1.0" />
   <arg name="hold_after_pass" default="5.0" />
   <arg name="land_timeout" default="35.0" />
+  <arg name="refresh_before_pass" default="true" />
   <arg name="z_kp" default="0.9" />
   <arg name="max_vz" default="0.15" />
 
@@ -90,6 +97,7 @@
       <arg name="cloud_topic" value="$(arg cloud_topic)" />
       <arg name="odom_topic" value="$(arg odom_topic)" />
       <arg name="frame_id" value="$(arg frame_id)" />
+      <arg name="goal_frame_id" value="$(arg goal_frame_id)" />
       <arg name="flight_z" value="$(arg flight_z)" />
       <arg name="height_mode" value="$(arg height_mode)" />
       <arg name="gate_center_z" value="$(arg gate_center_z)" />
@@ -160,6 +168,8 @@
     <param name="odom_topic" value="$(arg odom_topic)" />
     <param name="control_method" value="$(arg control_method)" />
     <param name="failure_action" value="$(arg failure_action)" />
+    <param name="goal_frame_id" value="$(arg goal_frame_id)" />
+    <param name="ego_use_goal_msg_z_param" value="$(arg ego_use_goal_msg_z_param)" />
 
     <param name="takeoff_timeout" value="$(arg takeoff_timeout)" />
     <param name="detect_timeout" value="$(arg detect_timeout)" />
@@ -167,11 +177,16 @@
     <param name="post_timeout" value="$(arg post_timeout)" />
     <param name="command_publish_timeout" value="$(arg command_publish_timeout)" />
     <param name="reach_threshold" value="$(arg reach_threshold)" />
+    <param name="max_goal_distance" value="$(arg max_goal_distance)" />
+    <param name="min_goal_z" value="$(arg min_goal_z)" />
+    <param name="max_goal_z" value="$(arg max_goal_z)" />
     <param name="valid_required_frames" value="$(arg valid_required_frames)" />
     <param name="valid_max_age" value="$(arg valid_max_age)" />
     <param name="hover_before_detect" value="$(arg hover_before_detect)" />
+    <param name="hold_at_pre" value="$(arg hold_at_pre)" />
     <param name="hold_after_pass" value="$(arg hold_after_pass)" />
     <param name="land_timeout" value="$(arg land_timeout)" />
+    <param name="refresh_before_pass" value="$(arg refresh_before_pass)" />
     <param name="z_kp" value="$(arg z_kp)" />
     <param name="max_vz" value="$(arg max_vz)" />
   </node>

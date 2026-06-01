@@ -36,11 +36,23 @@ double yawFromPose(const geometry_msgs::PoseStamped& pose) {
                       1.0 - 2.0 * (q.y * q.y + q.z * q.z));
 }
 
+bool validFrameStatus(const std::string& status) {
+    return status == "valid_full" ||
+           status == "valid_weak_pair" ||
+           status == "valid_split_frame" ||
+           status == "valid_partial_left" ||
+           status == "valid_partial_right";
+}
+
+bool preferredFrameStatus(const std::string& status) {
+    return status == "valid_full";
+}
+
 // CRAIC 第一版主流程：
 // 1. 起飞并记录起飞后悬停点作为击打区返回点。
 // 2. 等待 MID360/FAST-LIO 柱子识别节点给出稳定 pre/post goal。
 // 3. 用 EGO-Planner 真实飞过柱子通道。
-// 4. 触发 override 任务，由 D435 深度图闭环穿框。
+// 4. 等待 MID360 窗框识别锁定一次 pre/post，用 EGO 直接穿框并在返程复用记录点。
 // 5. 二维码和气球任务先保留入口，后续替换成真实识别和执行逻辑。
 class CraicCompetitionDemo {
 public:
@@ -74,12 +86,30 @@ public:
         pnh_.param<double>("pillar_scan_lateral_after", pillar_scan_lateral_after_, 8.0);
         pnh_.param<double>("pillar_scan_lateral_period", pillar_scan_lateral_period_, 10.0);
         pnh_.param<double>("pillar_scan_max_vz", pillar_scan_max_vz_, 0.12);
+        pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 20.0);
+        pnh_.param<double>("frame_valid_max_age", frame_valid_max_age_, 0.6);
+        pnh_.param<int>("frame_valid_count_required", frame_valid_count_required_, 5);
+        pnh_.param<double>("frame_hold_at_pre", frame_hold_at_pre_, 1.0);
+        pnh_.param<double>("frame_max_goal_distance", frame_max_goal_distance_, 5.0);
+        pnh_.param<double>("frame_min_goal_z", frame_min_goal_z_, 0.35);
+        pnh_.param<double>("frame_max_goal_z", frame_max_goal_z_, 1.8);
+        pnh_.param<std::string>("goal_frame_id", goal_frame_id_, "world");
+        pnh_.param<double>("ego_goal_z_limit", ego_goal_z_limit_, 2.0);
+        pnh_.param<double>("ego_goal_z_fallback", ego_goal_z_fallback_, 1.0);
+        pnh_.param<double>("frame_pre_direct_timeout", frame_pre_direct_timeout_, 30.0);
+        pnh_.param<double>("frame_pre_direct_threshold", frame_pre_direct_threshold_, 0.20);
+        pnh_.param<bool>("enable_frame_opportunistic_lock", enable_frame_opportunistic_lock_, true);
+        pnh_.param<bool>("prefer_full_frame_lock", prefer_full_frame_lock_, true);
+        pnh_.param<double>("frame_full_prefer_timeout", frame_full_prefer_timeout_, 4.0);
         pnh_.param<bool>("climb_to_flight_z_before_detect", climb_to_flight_z_before_detect_, true);
         pnh_.param<bool>("land_after_finish", land_after_finish_, true);
 
         pre_sub_ = nh_.subscribe("/craic/pillar_pre_goal", 1, &CraicCompetitionDemo::preGoalCb, this);
         post_sub_ = nh_.subscribe("/craic/pillar_post_goal", 1, &CraicCompetitionDemo::postGoalCb, this);
         status_sub_ = nh_.subscribe("/craic/pillar_status", 1, &CraicCompetitionDemo::statusCb, this);
+        frame_pre_sub_ = nh_.subscribe("/craic/frame_pre_goal", 1, &CraicCompetitionDemo::framePreGoalCb, this);
+        frame_post_sub_ = nh_.subscribe("/craic/frame_post_goal", 1, &CraicCompetitionDemo::framePostGoalCb, this);
+        frame_status_sub_ = nh_.subscribe("/craic/frame_status", 1, &CraicCompetitionDemo::frameStatusCb, this);
     }
 
     int run() {
@@ -130,17 +160,37 @@ public:
         }
         yaw_forward = yawFromPose(pillar_pre_);
         const double yaw_back = normalizeYaw(yaw_forward + M_PI);
+        if (enable_frame_opportunistic_lock_) {
+            allow_frame_lock_ = true;
+            frame_lock_start_ = ros::Time::now();
+            ROS_INFO("[craic_demo] Frame opportunistic lock enabled during pillar outbound pass.");
+        }
         // 对中完成后，只给 EGO 一个柱后目标点，让规划轨迹自然穿过两柱中线。
         flyGoal("pillar_post", pillar_post_, yaw_forward);
 
+        ROS_INFO("[craic_demo] ===== DETECT_FRAME_ONCE =====");
+        if (!waitForFrameOnce()) {
+            ROS_ERROR("[craic_demo] Frame detection timeout. Abort.");
+            safeLand();
+            return 1;
+        }
+
         ROS_INFO("[craic_demo] ===== PASS_FRAME_OUTBOUND =====");
-        runOverrideTask(1, "pass_frame_forward");
+        if (!passFrameOutbound()) {
+            ROS_ERROR("[craic_demo] Frame outbound pass failed. Abort.");
+            safeLand();
+            return 1;
+        }
 
         ROS_INFO("[craic_demo] ===== QR_PLACEHOLDER =====");
         runOverrideTask(2, "qr_placeholder");
 
         ROS_INFO("[craic_demo] ===== PASS_FRAME_BACKWARD =====");
-        runOverrideTask(3, "pass_frame_backward");
+        if (!passFrameBackward()) {
+            ROS_ERROR("[craic_demo] Frame backward pass failed. Abort.");
+            safeLand();
+            return 1;
+        }
 
         ROS_INFO("[craic_demo] ===== PASS_PILLARS_BACKWARD =====");
         // 返程复用同一组柱子通道点，但 yaw 反向，避免依赖额外的固定返程航点。
@@ -247,6 +297,200 @@ private:
                (now - pillar_goal_stamp_).toSec() < pillar_valid_max_age_;
     }
 
+    bool waitForFrameOnce() {
+        if (have_locked_frame_) {
+            ROS_INFO("[craic_demo] Frame already locked before explicit wait; reuse locked goals.");
+            return true;
+        }
+        allow_frame_lock_ = true;
+        if (!frame_lock_start_.isValid()) {
+            frame_lock_start_ = ros::Time::now();
+        }
+        ros::Rate rate(20);
+        const ros::Time start = ros::Time::now();
+        while (ros::ok()) {
+            ros::spinOnce();
+            updateFrameLock();
+            if (have_locked_frame_) return true;
+
+            ROS_INFO_THROTTLE(0.8,
+                              "[craic_demo] waiting frame status=%s have_pre=%d have_post=%d valid_count=%d",
+                              frame_status_.c_str(), have_frame_pre_, have_frame_post_, frame_valid_count_);
+            if ((ros::Time::now() - start).toSec() > frame_detect_timeout_) {
+                ROS_ERROR("[craic_demo] Frame status=%s have_pre=%d have_post=%d",
+                          frame_status_.c_str(), have_frame_pre_, have_frame_post_);
+                return false;
+            }
+            rate.sleep();
+        }
+        return false;
+    }
+
+    void updateFrameLock() {
+        if (!allow_frame_lock_ || have_locked_frame_) return;
+
+        if (!freshFrame()) {
+            frame_valid_count_ = 0;
+            last_lock_candidate_status_.clear();
+            return;
+        }
+
+        if (prefer_full_frame_lock_ &&
+            !preferredFrameStatus(frame_status_) &&
+            withinFullFramePreferWindow()) {
+            frame_valid_count_ = 0;
+            ROS_INFO_THROTTLE(0.8,
+                              "[craic_demo] frame status=%s valid but waiting for valid_full prefer window %.1fs",
+                              frame_status_.c_str(), frame_full_prefer_timeout_);
+            return;
+        }
+
+        if (frame_status_ != last_lock_candidate_status_) {
+            frame_valid_count_ = 0;
+            last_lock_candidate_status_ = frame_status_;
+        }
+
+        ++frame_valid_count_;
+        if (frame_valid_count_ < frame_valid_count_required_) return;
+
+        geometry_msgs::PoseStamped pre = normalizeWorldGoal(frame_pre_);
+        geometry_msgs::PoseStamped post = normalizeWorldGoal(frame_post_);
+        if (!validateFrameGoal(pre, "frame_pre") ||
+            !validateFrameGoal(post, "frame_post")) {
+            frame_valid_count_ = 0;
+            return;
+        }
+
+        locked_frame_pre_ = pre;
+        locked_frame_post_ = post;
+        locked_frame_yaw_forward_ = yawFromPose(locked_frame_pre_);
+        locked_frame_yaw_back_ = normalizeYaw(locked_frame_yaw_forward_ + M_PI);
+        have_locked_frame_ = true;
+        logFrameGoal("locked_frame_pre", locked_frame_pre_);
+        logFrameGoal("locked_frame_post", locked_frame_post_);
+        ROS_INFO("[craic_demo] Frame locked once. status=%s valid_count=%d yaw_forward=%.2f yaw_back=%.2f",
+                 frame_status_.c_str(), frame_valid_count_,
+                 locked_frame_yaw_forward_, locked_frame_yaw_back_);
+    }
+
+    bool withinFullFramePreferWindow() const {
+        if (!frame_lock_start_.isValid()) return true;
+        return (ros::Time::now() - frame_lock_start_).toSec() < frame_full_prefer_timeout_;
+    }
+
+    bool freshFrame() const {
+        const ros::Time now = ros::Time::now();
+        return validFrameStatus(frame_status_) &&
+               have_frame_pre_ &&
+               have_frame_post_ &&
+               frame_status_stamp_.isValid() &&
+               frame_pre_stamp_.isValid() &&
+               frame_post_stamp_.isValid() &&
+               (now - frame_status_stamp_).toSec() < frame_valid_max_age_ &&
+               (now - frame_pre_stamp_).toSec() < frame_valid_max_age_ &&
+               (now - frame_post_stamp_).toSec() < frame_valid_max_age_;
+    }
+
+    geometry_msgs::PoseStamped normalizeWorldGoal(const geometry_msgs::PoseStamped& goal) const {
+        geometry_msgs::PoseStamped out = goal;
+        out.header.frame_id = goal_frame_id_;
+        return out;
+    }
+
+    bool validateFrameGoal(const geometry_msgs::PoseStamped& pose,
+                           const std::string& label) const {
+        const Eigen::Vector3d target = posePosition(pose);
+        const Eigen::Vector3d odom = api_.getOdomPosition();
+        const double dist = (target - odom).norm();
+        if (!std::isfinite(target.x()) ||
+            !std::isfinite(target.y()) ||
+            !std::isfinite(target.z())) {
+            ROS_ERROR("[craic_demo] %s has non-finite position.", label.c_str());
+            return false;
+        }
+        if (dist > frame_max_goal_distance_) {
+            ROS_ERROR("[craic_demo] %s too far dist=%.2f max=%.2f target=(%.2f %.2f %.2f) odom=(%.2f %.2f %.2f)",
+                      label.c_str(), dist, frame_max_goal_distance_,
+                      target.x(), target.y(), target.z(),
+                      odom.x(), odom.y(), odom.z());
+            return false;
+        }
+        if (target.z() < frame_min_goal_z_ || target.z() > frame_max_goal_z_) {
+            ROS_ERROR("[craic_demo] %s z out of range z=%.2f allowed=[%.2f %.2f]",
+                      label.c_str(), target.z(), frame_min_goal_z_, frame_max_goal_z_);
+            return false;
+        }
+        return true;
+    }
+
+    void logFrameGoal(const std::string& label,
+                      const geometry_msgs::PoseStamped& pose) const {
+        const Eigen::Vector3d target = posePosition(pose);
+        const Eigen::Vector3d odom = api_.getOdomPosition();
+        const double yaw = api_.getOdomYaw();
+        const double dx = target.x() - odom.x();
+        const double dy = target.y() - odom.y();
+        const double c = std::cos(yaw);
+        const double s = std::sin(yaw);
+        const double forward = c * dx + s * dy;
+        const double lateral = -s * dx + c * dy;
+        ROS_INFO("[craic_demo] %s frame=%s world=(%.2f %.2f %.2f) body_rel=(%.2f %.2f %.2f) yaw=%.2f",
+                 label.c_str(), pose.header.frame_id.c_str(),
+                 target.x(), target.y(), target.z(),
+                 forward, lateral, target.z() - odom.z(), yawFromPose(pose));
+    }
+
+    bool passFrameOutbound() {
+        if (!have_locked_frame_) {
+            ROS_ERROR("[craic_demo] No locked frame goals for outbound pass.");
+            return false;
+        }
+        logFrameGoal("outbound_frame_pre", locked_frame_pre_);
+        logFrameGoal("outbound_frame_post", locked_frame_post_);
+        if (!moveToFramePreDirect()) return false;
+        ros::Duration(frame_hold_at_pre_).sleep();
+        return flyGoal("frame_post", locked_frame_post_, locked_frame_yaw_forward_);
+    }
+
+    bool moveToFramePreDirect() {
+        geometry_msgs::PoseStamped pre = locked_frame_pre_;
+        pre.pose.position.z = sanitizeEgoGoalZ(pre.pose.position.z, "frame_pre_direct");
+        logFrameGoal("frame_pre_direct_override", pre);
+
+        if (!api_.enableOverride()) {
+            ROS_ERROR("[craic_demo] Cannot enter override for frame_pre direct move.");
+            return false;
+        }
+
+        const bool reached = api_.moveToOverride(pre.pose.position.x,
+                                                 pre.pose.position.y,
+                                                 pre.pose.position.z,
+                                                 locked_frame_yaw_forward_,
+                                                 frame_pre_direct_threshold_,
+                                                 frame_pre_direct_timeout_);
+        const bool disabled = api_.disableOverride();
+        if (!reached) {
+            ROS_ERROR("[craic_demo] frame_pre direct move timeout.");
+        }
+        if (!disabled) {
+            ROS_ERROR("[craic_demo] failed to leave override after frame_pre direct move.");
+        }
+        return reached && disabled;
+    }
+
+    bool passFrameBackward() {
+        if (!have_locked_frame_) {
+            ROS_ERROR("[craic_demo] No locked frame goals for backward pass.");
+            return false;
+        }
+        ROS_INFO("[craic_demo] Reusing locked frame goals for backward pass; no frame re-detect.");
+        logFrameGoal("backward_frame_post_prepare", locked_frame_post_);
+        logFrameGoal("backward_frame_pre", locked_frame_pre_);
+        if (!flyGoal("frame_post_return_prepare", locked_frame_post_, locked_frame_yaw_back_)) return false;
+        ros::Duration(frame_hold_at_pre_).sleep();
+        return flyGoal("frame_pre_return", locked_frame_pre_, locked_frame_yaw_back_);
+    }
+
     void sendPillarActiveScanCmd(double elapsed) {
         const Eigen::Vector3d pos = api_.getOdomPosition();
         const double z_err = flight_z_ - pos.z();
@@ -275,18 +519,29 @@ private:
         api_.disableOverride();
     }
 
-    void flyGoal(const std::string& label, const geometry_msgs::PoseStamped& pose, double yaw) {
+    bool flyGoal(const std::string& label, const geometry_msgs::PoseStamped& pose, double yaw) {
+        const double z = sanitizeEgoGoalZ(pose.pose.position.z, label);
         ROS_INFO("[craic_demo] Goal %s: (%.2f, %.2f, %.2f), yaw=%.2f",
                  label.c_str(),
-                 pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, yaw);
+                 pose.pose.position.x, pose.pose.position.y, z, yaw);
         const bool reached = api_.sendGoalWithYaw(pose.pose.position.x,
                                                   pose.pose.position.y,
-                                                  pose.pose.position.z,
+                                                  z,
                                                   yaw,
                                                   goal_timeout_);
         if (!reached) {
-            ROS_WARN("[craic_demo] Goal %s timeout, continue mission.", label.c_str());
+            ROS_WARN("[craic_demo] Goal %s timeout.", label.c_str());
         }
+        return reached;
+    }
+
+    double sanitizeEgoGoalZ(double z, const std::string& label) const {
+        if (std::isfinite(z) && z <= ego_goal_z_limit_) {
+            return z;
+        }
+        ROS_WARN("[craic_demo] %s z=%.2f exceeds ego limit %.2f, send fallback z=%.2f",
+                 label.c_str(), z, ego_goal_z_limit_, ego_goal_z_fallback_);
+        return ego_goal_z_fallback_;
     }
 
     bool overrideClimbToFlightZ() {
@@ -487,12 +742,35 @@ private:
         pillar_status_stamp_ = ros::Time::now();
     }
 
+    void framePreGoalCb(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+        frame_pre_ = *msg;
+        have_frame_pre_ = true;
+        frame_pre_stamp_ = ros::Time::now();
+        updateFrameLock();
+    }
+
+    void framePostGoalCb(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+        frame_post_ = *msg;
+        have_frame_post_ = true;
+        frame_post_stamp_ = ros::Time::now();
+        updateFrameLock();
+    }
+
+    void frameStatusCb(const std_msgs::String::ConstPtr& msg) {
+        frame_status_ = msg->data;
+        frame_status_stamp_ = ros::Time::now();
+        updateFrameLock();
+    }
+
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_;
     EgoApi api_;
     ros::Subscriber pre_sub_;
     ros::Subscriber post_sub_;
     ros::Subscriber status_sub_;
+    ros::Subscriber frame_pre_sub_;
+    ros::Subscriber frame_post_sub_;
+    ros::Subscriber frame_status_sub_;
 
     double flight_z_ = 0.9;
     double takeoff_timeout_ = 30.0;
@@ -522,16 +800,48 @@ private:
     double pillar_scan_lateral_after_ = 8.0;
     double pillar_scan_lateral_period_ = 10.0;
     double pillar_scan_max_vz_ = 0.12;
+    double frame_detect_timeout_ = 20.0;
+    double frame_valid_max_age_ = 0.6;
+    int frame_valid_count_required_ = 5;
+    double frame_hold_at_pre_ = 1.0;
+    double frame_max_goal_distance_ = 5.0;
+    double frame_min_goal_z_ = 0.35;
+    double frame_max_goal_z_ = 1.8;
+    std::string goal_frame_id_ = "world";
+    double ego_goal_z_limit_ = 2.0;
+    double ego_goal_z_fallback_ = 1.0;
+    double frame_pre_direct_timeout_ = 30.0;
+    double frame_pre_direct_threshold_ = 0.20;
+    bool enable_frame_opportunistic_lock_ = true;
+    bool prefer_full_frame_lock_ = true;
+    double frame_full_prefer_timeout_ = 4.0;
     bool land_after_finish_ = true;
     bool climb_to_flight_z_before_detect_ = true;
 
     bool have_pre_ = false;
     bool have_post_ = false;
+    bool have_frame_pre_ = false;
+    bool have_frame_post_ = false;
+    bool have_locked_frame_ = false;
+    bool allow_frame_lock_ = false;
+    int frame_valid_count_ = 0;
+    std::string last_lock_candidate_status_;
     std::string pillar_status_ = "unknown";
+    std::string frame_status_ = "unknown";
     ros::Time pillar_status_stamp_;
     ros::Time pillar_goal_stamp_;
+    ros::Time frame_status_stamp_;
+    ros::Time frame_pre_stamp_;
+    ros::Time frame_post_stamp_;
+    ros::Time frame_lock_start_;
     geometry_msgs::PoseStamped pillar_pre_;
     geometry_msgs::PoseStamped pillar_post_;
+    geometry_msgs::PoseStamped frame_pre_;
+    geometry_msgs::PoseStamped frame_post_;
+    geometry_msgs::PoseStamped locked_frame_pre_;
+    geometry_msgs::PoseStamped locked_frame_post_;
+    double locked_frame_yaw_forward_ = 0.0;
+    double locked_frame_yaw_back_ = 0.0;
     Eigen::Vector3d home_hover_ = Eigen::Vector3d::Zero();
 };
 

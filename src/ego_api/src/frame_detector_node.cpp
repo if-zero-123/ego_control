@@ -122,9 +122,9 @@ struct HeightEstimate {
     std::string source = "none";
 };
 
-class FrameCloudDebugNode {
+class FrameDetectorNode {
 public:
-    FrameCloudDebugNode() : nh_(), pnh_("~") {
+    FrameDetectorNode() : nh_(), pnh_("~") {
         pnh_.param<std::string>("cloud_topic", cloud_topic_, "/cloud_registered");
         pnh_.param<std::string>("odom_topic", odom_topic_, "/mavros/local_position/odom");
         pnh_.param<std::string>("frame_id", configured_frame_id_, "");
@@ -190,7 +190,7 @@ public:
         pnh_.param<double>("pair_forward_tolerance", pair_forward_tolerance_, 0.35);
         pnh_.param<bool>("allow_weak_single_partial", allow_weak_single_partial_, true);
 
-        pnh_.param<double>("pre_offset", pre_offset_, 0.60);
+        pnh_.param<double>("pre_offset", pre_offset_, 0.70);
         pnh_.param<double>("post_offset", post_offset_, 1.00);
         pnh_.param<double>("stability_threshold", stability_threshold_, 0.18);
         pnh_.param<int>("stable_frames", stable_frames_, 3);
@@ -198,16 +198,16 @@ public:
         pnh_.param<double>("debug_log_period", debug_log_period_, 1.0);
         pnh_.param<int>("debug_top_clusters", debug_top_clusters_, 6);
 
-        cloud_sub_ = nh_.subscribe(cloud_topic_, 1, &FrameCloudDebugNode::cloudCb, this);
-        odom_sub_ = nh_.subscribe(odom_topic_, 20, &FrameCloudDebugNode::odomCb, this);
+        cloud_sub_ = nh_.subscribe(cloud_topic_, 1, &FrameDetectorNode::cloudCb, this);
+        odom_sub_ = nh_.subscribe(odom_topic_, 20, &FrameDetectorNode::odomCb, this);
 
-        status_pub_ = nh_.advertise<std_msgs::String>("/craic_debug/frame_cloud_status", 1, true);
-        center_pub_ = nh_.advertise<geometry_msgs::PointStamped>("/craic_debug/frame_cloud_center", 1, true);
-        pre_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic_debug/frame_cloud_pre_goal", 1, true);
-        post_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic_debug/frame_cloud_post_goal", 1, true);
-        marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/craic_debug/frame_cloud_markers", 1, true);
+        status_pub_ = nh_.advertise<std_msgs::String>("/craic/frame_status", 1, true);
+        center_pub_ = nh_.advertise<geometry_msgs::PointStamped>("/craic/frame_center", 1, true);
+        pre_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic/frame_pre_goal", 1, true);
+        post_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic/frame_post_goal", 1, true);
+        marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/craic/frame_markers", 1, true);
 
-        ROS_INFO("[frame_cloud_debug] cloud=%s odom=%s marker_frame=%s goal_frame=%s flight_z=%.2f height_mode=%s gate_center_z=%.2f crossing_z=%.2f detected_z=%d goal_z_follows_center=%d center_z_bias=%.2f goal_z_bias=%.2f clamp_z=%d center_z_safety=[%.2f %.2f] bottom_mode=%s gate_bottom_z=%.2f auto_top_z_max=%.2f auto_gate_tol=%.2f auto_post_margin=(%.2f %.2f) q=[%.2f %.2f] min_span=%.2f min_pts=%d local_rule_roi=%d field=%.2fx%.2f gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f] post_z_max=%.2f fallback=front[%.2f %.2f] lat=+/-%.2f weak_single=%d",
+        ROS_INFO("[frame_detector] cloud=%s odom=%s marker_frame=%s goal_frame=%s flight_z=%.2f height_mode=%s gate_center_z=%.2f crossing_z=%.2f detected_z=%d goal_z_follows_center=%d center_z_bias=%.2f goal_z_bias=%.2f clamp_z=%d center_z_safety=[%.2f %.2f] bottom_mode=%s gate_bottom_z=%.2f auto_top_z_max=%.2f auto_gate_tol=%.2f auto_post_margin=(%.2f %.2f) q=[%.2f %.2f] min_span=%.2f min_pts=%d local_rule_roi=%d field=%.2fx%.2f gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f] post_z_max=%.2f fallback=front[%.2f %.2f] lat=+/-%.2f weak_single=%d",
                  cloud_topic_.c_str(), odom_topic_.c_str(),
                  configured_frame_id_.empty() ? "<cloud>" : configured_frame_id_.c_str(),
                  goal_frame_id_.c_str(), flight_z_,
@@ -223,7 +223,7 @@ public:
                  field_length_, field_width_, gate_search_x_min_, gate_search_x_max_,
                  gate_search_y_min_, gate_search_y_max_, roi_z_min_, roi_z_max_, post_extract_z_max_,
                  roi_forward_min_, roi_forward_max_, roi_lateral_abs_, allow_weak_single_partial_);
-        ROS_INFO("[frame_cloud_debug] cluster leaf=%.2f tol=%.2f min=%d post_width=[%.2f %.2f] weak_width<=%.2f frame_width=[%.2f %.2f] post_h>=%.2f weak_h>=%.2f gate_width=[%.2f %.2f] forward_tol=%.2f",
+        ROS_INFO("[frame_detector] cluster leaf=%.2f tol=%.2f min=%d post_width=[%.2f %.2f] weak_width<=%.2f frame_width=[%.2f %.2f] post_h>=%.2f weak_h>=%.2f gate_width=[%.2f %.2f] forward_tol=%.2f",
                  voxel_leaf_, cluster_tolerance_, min_cluster_size_,
                  gate_post_min_width_, gate_post_max_width_, gate_post_weak_max_width_,
                  gate_frame_cluster_min_width_, gate_frame_cluster_max_width_,
@@ -244,7 +244,7 @@ private:
             home_pos_ = odom_pos_;
             home_yaw_ = odom_yaw_;
             have_home_ = true;
-            ROS_INFO("[frame_cloud_debug] home locked at (%.2f %.2f %.2f), yaw=%.2f",
+            ROS_INFO("[frame_detector] home locked at (%.2f %.2f %.2f), yaw=%.2f",
                      home_pos_.x(), home_pos_.y(), home_pos_.z(), home_yaw_);
         }
     }
@@ -254,13 +254,13 @@ private:
         if (!have_odom_) {
             publishStatus("waiting_odom");
             clearMarkers(frame_id, msg->header.stamp);
-            ROS_WARN_THROTTLE(debug_log_period_, "[frame_cloud_debug] waiting_odom");
+            ROS_WARN_THROTTLE(debug_log_period_, "[frame_detector] waiting_odom");
             return;
         }
         if (use_local_rule_roi_ && !have_home_) {
             publishStatus("waiting_odom");
             clearMarkers(frame_id, msg->header.stamp);
-            ROS_WARN_THROTTLE(debug_log_period_, "[frame_cloud_debug] waiting_odom for local rule ROI");
+            ROS_WARN_THROTTLE(debug_log_period_, "[frame_detector] waiting_odom for local rule ROI");
             return;
         }
 
@@ -269,7 +269,7 @@ private:
         if (input->empty()) {
             publishStatus("no_cloud");
             clearMarkers(frame_id, msg->header.stamp);
-            ROS_WARN_THROTTLE(debug_log_period_, "[frame_cloud_debug] no_cloud on %s", cloud_topic_.c_str());
+            ROS_WARN_THROTTLE(debug_log_period_, "[frame_detector] no_cloud on %s", cloud_topic_.c_str());
             return;
         }
 
@@ -301,7 +301,7 @@ private:
             debug_candidates_.clear();
             publishCandidateMarkers(frame_id, msg->header.stamp);
             ROS_WARN_THROTTLE(debug_log_period_,
-                              "[frame_cloud_debug] empty_roi input=%zu down=%zu roi=0 local_rule=%d gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f]",
+                              "[frame_detector] empty_roi input=%zu down=%zu roi=0 local_rule=%d gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f]",
                               input->size(), down->size(), use_local_rule_roi_,
                               gate_search_x_min_, gate_search_x_max_, gate_search_y_min_, gate_search_y_max_,
                               roi_z_min_, roi_z_max_);
@@ -312,7 +312,7 @@ private:
             debug_candidates_.clear();
             publishCandidateMarkers(frame_id, msg->header.stamp);
             ROS_WARN_THROTTLE(debug_log_period_,
-                              "[frame_cloud_debug] empty_post_roi input=%zu down=%zu roi=%zu",
+                              "[frame_detector] empty_post_roi input=%zu down=%zu roi=%zu",
                               input->size(), down->size(), roi->size());
             return;
         }
@@ -1280,7 +1280,7 @@ private:
         if (!shouldLog()) return;
 
         std::ostringstream oss;
-        oss << "[frame_cloud_debug] status=" << status
+        oss << "[frame_detector] status=" << status
             << " frame=" << msg.header.frame_id
             << " input=" << input_size
             << " down=" << down_size
@@ -1615,7 +1615,7 @@ private:
     double gate_width_expected_ = 1.00;
     double pair_forward_tolerance_ = 0.35;
     bool allow_weak_single_partial_ = true;
-    double pre_offset_ = 0.60;
+    double pre_offset_ = 0.70;
     double post_offset_ = 1.00;
     double stability_threshold_ = 0.18;
     int stable_frames_ = 3;
@@ -1638,8 +1638,8 @@ private:
 }  // namespace
 
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "frame_cloud_debug_node");
-    FrameCloudDebugNode node;
+    ros::init(argc, argv, "craic_frame_detector");
+    FrameDetectorNode node;
     ros::spin();
     return 0;
 }
