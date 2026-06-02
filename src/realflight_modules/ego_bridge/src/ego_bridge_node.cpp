@@ -107,6 +107,7 @@ struct Params {
 
     // ── 调试 ──
     bool debug_enable;               // 是否发布 debug 话题
+    bool verbose_info;               // 是否打印普通 INFO 日志
 
     void load(ros::NodeHandle& nh) {
         nh.param("ctrl_freq",                   ctrl_freq,            50.0);
@@ -141,6 +142,7 @@ struct Params {
         nh.param("override/cmd_timeout",        override_cmd_timeout, 0.5);
 
         nh.param("debug/enable",                debug_enable,         false);
+        nh.param("log/info",                    verbose_info,         true);
     }
 };
 
@@ -183,7 +185,9 @@ public:
         timer_ = nh_.createTimer(ros::Duration(1.0 / params_.ctrl_freq),
                                  &EgoBridgeNode::mainLoop, this);
 
-        ROS_INFO("[ego_bridge] Initialized. ctrl_freq=%.1f Hz", params_.ctrl_freq);
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] Initialized. ctrl_freq=%.1f Hz", params_.ctrl_freq);
+        }
     }
 
 private:
@@ -314,14 +318,18 @@ private:
     void takeoffLandCb(const quadrotor_msgs::TakeoffLand::ConstPtr& msg) {
         if (msg->takeoff_land_cmd == quadrotor_msgs::TakeoffLand::TAKEOFF) {
             if (state_ == State::IDLE) {
-                ROS_INFO("[ego_bridge] TAKEOFF command received");
+                if (params_.verbose_info) {
+                    ROS_INFO("[ego_bridge] TAKEOFF command received");
+                }
                 enterPreOffboard();  // 只有 IDLE 状态才接受起飞
             } else {
                 ROS_WARN("[ego_bridge] TAKEOFF ignored: state=%s", stateStr(state_));
             }
         } else if (msg->takeoff_land_cmd == quadrotor_msgs::TakeoffLand::LAND) {
             if (state_ == State::HOVER || state_ == State::TRACKING) {
-                ROS_INFO("[ego_bridge] LAND command received");
+                if (params_.verbose_info) {
+                    ROS_INFO("[ego_bridge] LAND command received");
+                }
                 enterLanding();  // 只有悬停/跟踪状态才接受降落
             } else {
                 ROS_WARN("[ego_bridge] LAND ignored: state=%s", stateStr(state_));
@@ -344,8 +352,10 @@ private:
             rst.data = 0;
             pub_reach_.publish(rst);
         }
-        ROS_INFO("[ego_bridge] New target point: (%.2f, %.2f, %.2f)",
-                 target_point_.x(), target_point_.y(), target_point_.z());
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] New target point: (%.2f, %.2f, %.2f)",
+                     target_point_.x(), target_point_.y(), target_point_.z());
+        }
     }
 
     /// 【回调】切换控制模式：1=进入 OVERRIDE，0=退出 OVERRIDE → HOVER(wait_new_traj)
@@ -358,11 +368,15 @@ private:
             (state_ == State::TRACKING || state_ == State::HOVER)) {
             // 进入 OVERRIDE 子模式（当前必须在 TRACKING 或 HOVER）
             control_mode_ = 1;
-            ROS_INFO("[ego_bridge] Entering OVERRIDE mode (state=%s)", stateStr(state_));
+            if (params_.verbose_info) {
+                ROS_INFO("[ego_bridge] Entering OVERRIDE mode (state=%s)", stateStr(state_));
+            }
         } else if (msg->data == 0 && control_mode_ == 1) {
             // 退出 OVERRIDE → 回到 HOVER，并等待新的轨迹 ID 再进 TRACKING
             control_mode_ = 0;
-            ROS_INFO("[ego_bridge] Exiting OVERRIDE → HOVER (wait_new_traj)");
+            if (params_.verbose_info) {
+                ROS_INFO("[ego_bridge] Exiting OVERRIDE -> HOVER (wait_new_traj)");
+            }
             enterHoverFromOverride();
         }
     }
@@ -391,7 +405,9 @@ private:
         pre_send_counter_   = 0;
         offboard_requested_ = false;
         offboard_first_try_time_ = ros::Time(0);
-        ROS_INFO("[ego_bridge] → PRE_OFFBOARD");
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> PRE_OFFBOARD");
+        }
     }
 
     /// 进入 TAKEOFF：记录起始位置，计算目标高度，启动预热计时
@@ -406,7 +422,9 @@ private:
         takeoff_start_time_ = ros::Time::now();
         warmup_done_        = false;
         trigger_sent_       = false;
-        ROS_INFO("[ego_bridge] → TAKEOFF (target_z=%.2f)", takeoff_target_z_);
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> TAKEOFF target_z=%.2f", takeoff_target_z_);
+        }
     }
 
     /// 进入 HOVER：锁定当前位置作为悬停点
@@ -417,8 +435,10 @@ private:
         hover_enter_time_ = ros::Time::now();
         wait_new_traj_ = false;
         control_mode_  = 0;
-        ROS_INFO("[ego_bridge] → HOVER at (%.2f, %.2f, %.2f)",
-                 hover_pos_.x(), hover_pos_.y(), hover_pos_.z());
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> HOVER pos=(%.2f %.2f %.2f)",
+                     hover_pos_.x(), hover_pos_.y(), hover_pos_.z());
+        }
     }
 
     /// 从 OVERRIDE 退出进 HOVER：锁定当前位 + 设 wait_new_traj 等待新轨迹 ID
@@ -430,8 +450,10 @@ private:
         wait_new_traj_ = true;
         old_traj_id_   = latest_cmd_.trajectory_id;
         control_mode_  = 0;
-        ROS_INFO("[ego_bridge] → HOVER (wait_new_traj, old_id=%u) at (%.2f, %.2f, %.2f)",
-                 old_traj_id_, hover_pos_.x(), hover_pos_.y(), hover_pos_.z());
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> HOVER wait_new_traj=yes old_id=%u pos=(%.2f %.2f %.2f)",
+                     old_traj_id_, hover_pos_.x(), hover_pos_.y(), hover_pos_.z());
+        }
     }
 
     /// 进入 TRACKING：重置控制模式和到达检测
@@ -440,7 +462,9 @@ private:
         control_mode_ = 0;
         reach_detecting_ = false;
         last_reach_status_ = 0;
-        ROS_INFO("[ego_bridge] → TRACKING");
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> TRACKING");
+        }
     }
 
     /// 进入 LANDING：记录当前高度作为降落起点
@@ -451,7 +475,9 @@ private:
         landing_start_time_ = ros::Time::now();
         land_detect_active_ = false;
         control_mode_ = 0;
-        ROS_INFO("[ego_bridge] → LANDING from z=%.2f", landing_start_z_);
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> LANDING from_z=%.2f", landing_start_z_);
+        }
     }
 
     /// 进入 IDLE：重置所有标志
@@ -459,7 +485,9 @@ private:
         state_ = State::IDLE;
         control_mode_ = 0;
         emergency_stop_ = false;
-        ROS_INFO("[ego_bridge] → IDLE");
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> IDLE");
+        }
     }
 
     // ────────────────────────────────────────────
@@ -540,7 +568,9 @@ private:
         mavros_msgs::SetMode req;
         req.request.custom_mode = "OFFBOARD";
         if (srv_set_mode_.call(req) && req.response.mode_sent) {
-            ROS_INFO("[ego_bridge] OFFBOARD mode set");
+            if (params_.verbose_info) {
+                ROS_INFO("[ego_bridge] OFFBOARD mode set");
+            }
             return true;
         }
         ROS_WARN("[ego_bridge] Failed to set OFFBOARD mode");
@@ -552,7 +582,9 @@ private:
         mavros_msgs::CommandBool req;
         req.request.value = true;
         if (srv_arming_.call(req) && req.response.success) {
-            ROS_INFO("[ego_bridge] Armed");
+            if (params_.verbose_info) {
+                ROS_INFO("[ego_bridge] Armed");
+            }
             return true;
         }
         ROS_WARN("[ego_bridge] Failed to ARM");
@@ -564,7 +596,9 @@ private:
         mavros_msgs::CommandBool req;
         req.request.value = false;
         if (srv_arming_.call(req) && req.response.success) {
-            ROS_INFO("[ego_bridge] Disarmed");
+            if (params_.verbose_info) {
+                ROS_INFO("[ego_bridge] Disarmed");
+            }
             return true;
         }
         ROS_WARN("[ego_bridge] Failed to DISARM");
@@ -587,7 +621,7 @@ private:
         // ── 安全检查②：里程计超时 → 停发 setpoint 触发 PX4 failsafe ──
         if (state_ != State::IDLE && odom_received_) {
             if ((now - odom_stamp_).toSec() > params_.odom_timeout) {
-                ROS_ERROR("[ego_bridge] Odom timeout! Stopping setpoints → PX4 failsafe");
+                ROS_ERROR("[ego_bridge] Odom timeout! Stopping setpoints; PX4 failsafe");
                 // Don't send setpoint, PX4 will handle failsafe
                 publishStatus();
                 return;
@@ -762,7 +796,9 @@ private:
                 trig.pose.position.z = odom_pos_.z();
                 trig.pose.orientation.w = 1.0;
                 pub_trigger_.publish(trig);
-                ROS_INFO("[ego_bridge] Published /traj_start_trigger");
+                if (params_.verbose_info) {
+                    ROS_INFO("[ego_bridge] Published /traj_start_trigger");
+                }
             }
         }
 
@@ -776,8 +812,10 @@ private:
             if (wait_new_traj_) {
                 // 从 OVERRIDE 回来时，必须等到新 trajectory_id 才进 TRACKING
                 if (latest_cmd_.trajectory_id != old_traj_id_ && has_velocity) {
-                    ROS_INFO("[ego_bridge] New trajectory_id=%u (old=%u), entering TRACKING",
-                             latest_cmd_.trajectory_id, old_traj_id_);
+                    if (params_.verbose_info) {
+                        ROS_INFO("[ego_bridge] New trajectory_id=%u (old=%u), entering TRACKING",
+                                 latest_cmd_.trajectory_id, old_traj_id_);
+                    }
                     enterTracking();
                 }
             } else {
@@ -800,7 +838,7 @@ private:
         // 正常 EGO 跟踪：检查命令是否超时
         if (!cmd_received_ || (now - cmd_stamp_).toSec() > params_.cmd_timeout) {
             // EGO 命令超时 → 立即悬停
-            ROS_WARN("[ego_bridge] EGO cmd timeout → HOVER");
+            ROS_WARN("[ego_bridge] EGO cmd timeout -> HOVER");
             enterHover();
             trigger_sent_ = true;  // 超时回 HOVER 不需要重新触发 EGO
             return;
@@ -842,7 +880,9 @@ private:
         if (extended_state_.landed_state ==
             mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND)
         {
-            ROS_INFO("[ego_bridge] PX4 reports ON_GROUND");
+            if (params_.verbose_info) {
+                ROS_INFO("[ego_bridge] PX4 reports ON_GROUND");
+            }
             completeLanding();
             return;
         }
@@ -860,7 +900,9 @@ private:
                 land_detect_active_ = true;
                 land_detect_start_  = now;
             } else if ((now - land_detect_start_).toSec() >= params_.land_hold_time) {
-                ROS_INFO("[ego_bridge] Landing detected (pressed below, vz hold)");
+                if (params_.verbose_info) {
+                    ROS_INFO("[ego_bridge] Landing detected (pressed below, vz hold)");
+                }
                 completeLanding();
                 return;
             }
@@ -907,7 +949,9 @@ private:
                     std_msgs::UInt8 msg;
                     msg.data = 1;
                     pub_reach_.publish(msg);
-                    ROS_INFO("[ego_bridge] Reached target!");
+                    if (params_.verbose_info) {
+                        ROS_INFO("[ego_bridge] Reached target!");
+                    }
                 }
             }
         } else {

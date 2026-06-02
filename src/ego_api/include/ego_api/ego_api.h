@@ -178,6 +178,7 @@ public:
 private:
     ros::NodeHandle nh_;       // ROS 句柄
     std::string bridge_ns_;    // ego_bridge 命名空间（默认 "/ego_bridge"）
+    bool verbose_ = true;      // 是否打印 EgoApi 内部 INFO 日志
 
     // ── 订阅者：从 ego_bridge 接收状态更新 ──
     ros::Subscriber sub_flight_state_;      // FSM 状态字符串

@@ -131,6 +131,8 @@ public:
         pnh_.param<double>("stability_threshold", stability_threshold_, 0.15);
         pnh_.param<int>("stable_frames", stable_frames_, 3);
         pnh_.param<int>("history_size", history_size_, 5);
+        pnh_.param<bool>("readable_logs", readable_logs_, false);
+        pnh_.param<double>("readable_log_period", readable_log_period_, 2.0);
 
         cloud_sub_ = nh_.subscribe(cloud_topic_, 1, &PillarDetectorNode::cloudCb, this);
         odom_sub_ = nh_.subscribe(odom_topic_, 10, &PillarDetectorNode::odomCb, this);
@@ -141,14 +143,16 @@ public:
         // Marker 只用于 RViz 调试，不参与飞控闭环。
         marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/craic/pillar_markers", 1, true);
 
-        ROS_INFO("[pillar_detector] cloud=%s odom=%s frame=%s flight_z=%.2f local_rule_roi=%d abs_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f]",
-                 cloud_topic_.c_str(), odom_topic_.c_str(), frame_id_.c_str(),
-                 flight_z_, use_local_rule_roi_, roi_x_min_, roi_x_max_,
-                 roi_y_min_, roi_y_max_, roi_z_min_, roi_z_max_);
-        ROS_INFO("[pillar_detector] cluster leaf=%.2f tol=%.2f min=%d strong_height=%.2f pair_gap=[%.2f %.2f] forward_tol=%.2f stable=%d/%d thr=%.2f",
-                 voxel_leaf_, cluster_tolerance_, min_cluster_size_,
-                 pillar_min_strong_height_, pillar_pair_gap_min_, pillar_pair_gap_max_,
-                 pair_forward_tolerance_, stable_frames_, history_size_, stability_threshold_);
+        if (!readable_logs_) {
+            ROS_INFO("[pillar_detector] cloud=%s odom=%s frame=%s flight_z=%.2f local_rule_roi=%d abs_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f]",
+                     cloud_topic_.c_str(), odom_topic_.c_str(), frame_id_.c_str(),
+                     flight_z_, use_local_rule_roi_, roi_x_min_, roi_x_max_,
+                     roi_y_min_, roi_y_max_, roi_z_min_, roi_z_max_);
+            ROS_INFO("[pillar_detector] cluster leaf=%.2f tol=%.2f min=%d strong_height=%.2f pair_gap=[%.2f %.2f] forward_tol=%.2f stable=%d/%d thr=%.2f",
+                     voxel_leaf_, cluster_tolerance_, min_cluster_size_,
+                     pillar_min_strong_height_, pillar_pair_gap_min_, pillar_pair_gap_max_,
+                     pair_forward_tolerance_, stable_frames_, history_size_, stability_threshold_);
+        }
     }
 
 private:
@@ -159,8 +163,10 @@ private:
                                     msg->pose.pose.position.z);
         home_yaw_ = yawFromQuat(msg->pose.pose.orientation);
         have_home_ = true;
-        ROS_INFO("[pillar_detector] home locked at (%.2f %.2f %.2f), yaw=%.2f",
-                 home_pos_.x(), home_pos_.y(), home_pos_.z(), home_yaw_);
+        if (!readable_logs_) {
+            ROS_INFO("[pillar_detector] home locked at (%.2f %.2f %.2f), yaw=%.2f",
+                     home_pos_.x(), home_pos_.y(), home_pos_.z(), home_yaw_);
+        }
     }
 
     Eigen::Vector2d worldToLocalXY(const Eigen::Vector3d& world) const {
@@ -186,7 +192,11 @@ private:
         pcl::fromROSMsg(*msg, *input);
         if (input->empty()) {
             publishStatus("no_cloud");
-            ROS_WARN_THROTTLE(1.0, "[pillar_detector] no_cloud on %s", cloud_topic_.c_str());
+            if (readable_logs_) {
+                logReadable("no_cloud", input->size(), 0, 0, 0, 0, nullptr);
+            } else {
+                ROS_WARN_THROTTLE(1.0, "[pillar_detector] no_cloud on %s", cloud_topic_.c_str());
+            }
             return;
         }
 
@@ -202,7 +212,11 @@ private:
         if (use_local_rule_roi_) {
             if (!have_home_) {
                 publishStatus("waiting_odom");
-                ROS_WARN_THROTTLE(1.0, "[pillar_detector] waiting_odom before local rule ROI can run");
+                if (readable_logs_) {
+                    logReadable("waiting_odom", input->size(), down->size(), 0, 0, 0, nullptr);
+                } else {
+                    ROS_WARN_THROTTLE(1.0, "[pillar_detector] waiting_odom before local rule ROI can run");
+                }
                 return;
             }
             roi->header = down->header;
@@ -225,11 +239,15 @@ private:
         }
         if (roi->empty()) {
             publishStatus("empty_roi");
-            ROS_WARN_THROTTLE(1.0,
-                              "[pillar_detector] empty_roi input=%zu down=%zu frame=%s local_rule=%d roi=[forward %.2f..%.2f lateral +/-%.2f z %.2f..%.2f]",
-                              input->size(), down->size(), msg->header.frame_id.c_str(),
-                              use_local_rule_roi_, search_forward_min_, search_forward_max_,
-                              search_lateral_abs_, roi_z_min_, roi_z_max_);
+            if (readable_logs_) {
+                logReadable("empty_roi", input->size(), down->size(), roi->size(), 0, 0, nullptr);
+            } else {
+                ROS_WARN_THROTTLE(1.0,
+                                  "[pillar_detector] empty_roi input=%zu down=%zu frame=%s local_rule=%d roi=[forward %.2f..%.2f lateral +/-%.2f z %.2f..%.2f]",
+                                  input->size(), down->size(), msg->header.frame_id.c_str(),
+                                  use_local_rule_roi_, search_forward_min_, search_forward_max_,
+                                  search_lateral_abs_, roi_z_min_, roi_z_max_);
+            }
             return;
         }
 
@@ -258,11 +276,16 @@ private:
 
         if (candidates.size() < 2) {
             publishStatus("not_enough_candidates");
-            ROS_WARN_THROTTLE(1.0,
-                              "[pillar_detector] not_enough_candidates input=%zu down=%zu roi=%zu clusters=%zu accepted=%zu frame=%s",
-                              input->size(), down->size(), roi->size(), cluster_indices.size(), candidates.size(),
-                              msg->header.frame_id.c_str());
-            logClusterSummary(*roi, cluster_indices);
+            if (readable_logs_) {
+                logReadable("not_enough_candidates", input->size(), down->size(), roi->size(),
+                            cluster_indices.size(), candidates.size(), nullptr);
+            } else {
+                ROS_WARN_THROTTLE(1.0,
+                                  "[pillar_detector] not_enough_candidates input=%zu down=%zu roi=%zu clusters=%zu accepted=%zu frame=%s",
+                                  input->size(), down->size(), roi->size(), cluster_indices.size(), candidates.size(),
+                                  msg->header.frame_id.c_str());
+                logClusterSummary(*roi, cluster_indices);
+            }
             return;
         }
 
@@ -272,15 +295,24 @@ private:
         Eigen::Vector3d right_center;
         if (!selectBestPair(candidates, left_candidate, right_candidate, left_center, right_center)) {
             publishStatus("invalid_pair");
-            ROS_WARN_THROTTLE(1.0,
-                              "[pillar_detector] invalid_pair accepted=%zu gap=[%.2f..%.2f] forward_tol=%.2f",
-                              candidates.size(), pillar_pair_gap_min_, pillar_pair_gap_max_, pair_forward_tolerance_);
+            if (readable_logs_) {
+                logReadable("invalid_pair", input->size(), down->size(), roi->size(),
+                            cluster_indices.size(), candidates.size(), nullptr);
+            } else {
+                ROS_WARN_THROTTLE(1.0,
+                                  "[pillar_detector] invalid_pair accepted=%zu gap=[%.2f..%.2f] forward_tol=%.2f",
+                                  candidates.size(), pillar_pair_gap_min_, pillar_pair_gap_max_, pair_forward_tolerance_);
+            }
             return;
         }
 
         Detection detection = makeDetection(left_center, right_center, msg->header.stamp);
         if (!detection.valid) {
             publishStatus("invalid_geometry");
+            if (readable_logs_) {
+                logReadable("invalid_geometry", input->size(), down->size(), roi->size(),
+                            cluster_indices.size(), candidates.size(), nullptr);
+            }
             return;
         }
 
@@ -293,6 +325,10 @@ private:
         if (!isStable()) {
             publishStatus("stabilizing");
             publishMarkers(detection, frame_id, msg->header.stamp, false);
+            if (readable_logs_) {
+                logReadable("stabilizing", input->size(), down->size(), roi->size(),
+                            cluster_indices.size(), candidates.size(), &detection);
+            }
             return;
         }
 
@@ -300,6 +336,10 @@ private:
         publishGoals(latest_, frame_id, msg->header.stamp);
         publishMarkers(latest_, frame_id, msg->header.stamp, true);
         publishStatus("valid");
+        if (readable_logs_) {
+            logReadable("valid", input->size(), down->size(), roi->size(),
+                        cluster_indices.size(), candidates.size(), &latest_);
+        }
     }
 
     std::string outputFrame(const sensor_msgs::PointCloud2& msg) const {
@@ -502,7 +542,7 @@ private:
             }
         }
 
-        if (found) {
+        if (found && !readable_logs_) {
             ROS_INFO_THROTTLE(1.0,
                               "[pillar_detector] selected pair %s/%s center_a=(%.2f %.2f %.2f) center_b=(%.2f %.2f %.2f) gap=%.2f score=%.2f",
                               candidateKindName(out_a.kind).c_str(),
@@ -647,12 +687,14 @@ private:
         d.post_goal.z() = flight_z_;
         d.valid = true;
 
-        ROS_INFO_THROTTLE(1.0,
-                          "[pillar_detector] goals corridor=(%.2f %.2f %.2f) pre=(%.2f %.2f %.2f) post=(%.2f %.2f %.2f) yaw=%.2f",
-                          d.corridor.x(), d.corridor.y(), d.corridor.z(),
-                          d.pre_goal.x(), d.pre_goal.y(), d.pre_goal.z(),
-                          d.post_goal.x(), d.post_goal.y(), d.post_goal.z(),
-                          d.yaw);
+        if (!readable_logs_) {
+            ROS_INFO_THROTTLE(1.0,
+                              "[pillar_detector] goals corridor=(%.2f %.2f %.2f) pre=(%.2f %.2f %.2f) post=(%.2f %.2f %.2f) yaw=%.2f",
+                              d.corridor.x(), d.corridor.y(), d.corridor.z(),
+                              d.pre_goal.x(), d.pre_goal.y(), d.pre_goal.z(),
+                              d.post_goal.x(), d.post_goal.y(), d.post_goal.z(),
+                              d.yaw);
+        }
         return d;
     }
 
@@ -723,6 +765,56 @@ private:
         std_msgs::String msg;
         msg.data = status;
         status_pub_.publish(msg);
+    }
+
+    int stableHistoryCount() const {
+        if (history_.empty()) return 0;
+        const Detection& ref = history_.back();
+        int stable = 0;
+        for (const auto& d : history_) {
+            if ((d.corridor - ref.corridor).norm() < stability_threshold_) ++stable;
+        }
+        return stable;
+    }
+
+    bool shouldReadableLog() const {
+        if (readable_log_period_ <= 0.0) return false;
+        const ros::Time now = ros::Time::now();
+        if (!last_readable_log_time_.isValid() ||
+            (now - last_readable_log_time_).toSec() >= readable_log_period_) {
+            last_readable_log_time_ = now;
+            return true;
+        }
+        return false;
+    }
+
+    void logReadable(const std::string& status,
+                     size_t input_size,
+                     size_t down_size,
+                     size_t roi_size,
+                     size_t cluster_count,
+                     size_t accepted_count,
+                     const Detection* detection) const {
+        if (!detection || !detection->valid) {
+            (void)status;
+            (void)input_size;
+            (void)down_size;
+            (void)roi_size;
+            (void)cluster_count;
+            (void)accepted_count;
+            return;
+        }
+        if (!shouldReadableLog()) return;
+
+        const int stable_count = stableHistoryCount();
+        const double gap = (detection->right - detection->left).norm();
+        ROS_INFO("[pillar_detector] DETECT pillar status=%s stable=%d/%d center=(%.2f %.2f %.2f) pre=(%.2f %.2f %.2f) post=(%.2f %.2f %.2f) offset_before=%.2f offset_after=%.2f gap=%.2f yaw=%.2f",
+                 status.c_str(), stable_count, stable_frames_,
+                 detection->corridor.x(), detection->corridor.y(), detection->corridor.z(),
+                 detection->pre_goal.x(), detection->pre_goal.y(), detection->pre_goal.z(),
+                 detection->post_goal.x(), detection->post_goal.y(), detection->post_goal.z(),
+                 goal_offset_, goal_offset_,
+                 gap, detection->yaw);
     }
 
     visualization_msgs::Marker makeSphereMarker(int id,
@@ -825,10 +917,13 @@ private:
     double stability_threshold_;
     int stable_frames_;
     int history_size_;
+    bool readable_logs_ = false;
+    double readable_log_period_ = 2.0;
 
     std::deque<Detection> history_;
     Detection latest_;
     std::vector<Eigen::Vector3d> debug_hypotheses_;
+    mutable ros::Time last_readable_log_time_;
 };
 
 }  // namespace

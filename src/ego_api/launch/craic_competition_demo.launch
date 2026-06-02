@@ -7,6 +7,14 @@
     <arg name="land_after_finish" default="true" />
     <arg name="start_ego_planner" default="true" />
     <arg name="start_ego_bridge" default="true" />
+    <arg name="readable_logs" default="true" />
+    <arg name="mission_log_period" default="1.0" />
+    <arg name="simple_logs" default="true" />
+    <arg name="ego_fsm_verbose" default="false" />
+    <arg name="ego_bridge_info_logs" default="false" />
+    <arg name="detector_readable_log_period" default="0.0" />
+    <arg name="cloud_filter_log_period" default="0.0" />
+    <arg name="ego_api_verbose" default="false" />
     <arg name="climb_to_flight_z_before_detect" default="true" />
     <arg name="override_climb_timeout" default="10.0" />
     <arg name="override_climb_speed" default="0.18" />
@@ -67,6 +75,7 @@
     <arg name="pillar_pair_forward_tolerance" default="1.0" />
     <arg name="pillar_goal_offset" default="0.90" />
     <arg name="pillar_frame_switch_after_distance" default="0.60" />
+    <arg name="pillar_return_switch_after_distance" default="0.45" />
     <arg name="pillar_stable_frames" default="3" />
     <arg name="pillar_history_size" default="5" />
     <arg name="pillar_stability_threshold" default="0.15" />
@@ -80,7 +89,8 @@
     <arg name="frame_max_goal_distance" default="5.0" />
     <arg name="frame_min_goal_z" default="0.35" />
     <arg name="frame_max_goal_z" default="1.8" />
-    <arg name="frame_goal_fixed_z" default="0.9" />
+    <arg name="frame_goal_fixed_z" default="1.00" />
+    <arg name="frame_auto_goal_z_min" default="1.00" />
     <arg name="frame_auto_goal_z_max" default="1.65" />
     <arg name="frame_auto_goal_z_fallback" default="1.1" />
     <arg name="ego_goal_z_limit" default="2.0" />
@@ -90,9 +100,25 @@
     <arg name="enable_frame_opportunistic_lock" default="true" />
     <arg name="prefer_full_frame_lock" default="true" />
     <arg name="frame_full_prefer_timeout" default="4.0" />
+    <arg name="frame_use_override_direct_pass" default="false" />
+    <arg name="frame_override_timeout" default="20.0" />
+    <arg name="frame_override_speed" default="0.18" />
+    <arg name="frame_override_lateral_kp" default="0.8" />
+    <arg name="frame_override_max_lateral_speed" default="0.12" />
+    <arg name="frame_override_z_kp" default="0.8" />
+    <arg name="frame_override_max_vz" default="0.10" />
+    <arg name="frame_override_yaw_kp" default="0.7" />
+    <arg name="frame_override_max_yaw_rate" default="0.25" />
+    <arg name="frame_override_lateral_threshold" default="0.15" />
+    <arg name="frame_override_z_threshold" default="0.12" />
+    <arg name="frame_override_yaw_threshold" default="0.25" />
+    <arg name="enable_frame_yaw_align_override" default="true" />
+    <arg name="frame_yaw_align_timeout" default="4.0" />
+    <arg name="frame_yaw_align_threshold" default="0.12" />
+    <arg name="frame_yaw_align_hold_time" default="0.25" />
     <arg name="frame_height_mode" default="auto" />
     <arg name="frame_gate_center_z" default="0.9" />
-    <arg name="frame_crossing_z" default="0.9" />
+    <arg name="frame_crossing_z" default="1.0" />
     <arg name="frame_use_detected_center_z" default="true" />
     <arg name="frame_goal_z_follows_center" default="true" />
     <arg name="frame_detected_center_z_bias" default="0.0" />
@@ -142,13 +168,18 @@
     <arg name="frame_gate_width_expected" default="1.00" />
     <arg name="frame_pair_forward_tolerance" default="0.35" />
     <arg name="frame_allow_weak_single_partial" default="true" />
-    <arg name="frame_pre_offset" default="0.70" />
+    <arg name="frame_pre_offset" default="0.80" />
     <arg name="frame_post_offset" default="0.70" />
+    <arg name="enable_qr_ego_scan" default="true" />
+    <arg name="qr_gate_half_width" default="0.50" />
+    <arg name="qr_forward_offset" default="1.00" />
+    <arg name="qr_left_offset" default="1.00" />
+    <arg name="qr_hold_time" default="2.0" />
     <arg name="frame_stable_frames" default="3" />
     <arg name="frame_history_size" default="5" />
     <arg name="frame_stability_threshold" default="0.18" />
     <arg name="frame_debug_log_period" default="1.0" />
-    <arg name="frame_debug_top_clusters" default="6" />
+    <arg name="frame_debug_top_clusters" default="0" />
 
     <!-- 先过滤 MID360/FAST-LIO 点云里的机体附近点和异常高度点，避免 EGO 把自身刷成障碍。 -->
     <node pkg="ego_api" type="craic_cloud_self_filter" name="craic_cloud_self_filter" output="screen">
@@ -159,6 +190,7 @@
         <param name="self_radius_z" value="0.45" />
         <param name="min_z" value="0.03" />
         <param name="max_z" value="2.2" />
+        <param name="log_period" value="$(arg cloud_filter_log_period)" />
     </node>
 
     <!-- 拉起 EGO-Planner。当前仿真话题已经对齐：
@@ -168,6 +200,7 @@
         <arg name="cloud_topic" value="$(arg ego_cloud_topic)" />
         <arg name="use_goal_msg_z" value="true" />
         <arg name="fixed_goal_z" value="$(arg flight_z)" />
+        <arg name="fsm_verbose" value="$(arg ego_fsm_verbose)" />
     </include>
 
     <!-- 这里直接拉起 ego_bridge_node，而不是 include ego_bridge.launch。
@@ -178,6 +211,7 @@
         <node pkg="ego_bridge" type="ego_bridge_node" name="ego_bridge" output="screen">
             <!-- api.takeoff() 的真正起飞完成高度：这里只控制起飞悬停高度，不等同于后续任务 flight_z。 -->
             <param name="takeoff/height" value="$(arg takeoff_height)" />
+            <param name="log/info" value="$(arg ego_bridge_info_logs)" />
             <remap from="~odom" to="/mavros/local_position/odom" />
             <remap from="~cmd" to="/position_cmd" />
         </node>
@@ -223,6 +257,8 @@
         <param name="stable_frames" value="$(arg pillar_stable_frames)" />
         <param name="history_size" value="$(arg pillar_history_size)" />
         <param name="stability_threshold" value="$(arg pillar_stability_threshold)" />
+        <param name="readable_logs" value="$(arg readable_logs)" />
+        <param name="readable_log_period" value="$(arg detector_readable_log_period)" />
     </node>
 
     <!-- MID360/FAST-LIO 点云窗框识别：发布 world 坐标下的 /craic/frame_pre_goal 和 post_goal。 -->
@@ -292,11 +328,14 @@
         <param name="stability_threshold" value="$(arg frame_stability_threshold)" />
         <param name="debug_log_period" value="$(arg frame_debug_log_period)" />
         <param name="debug_top_clusters" value="$(arg frame_debug_top_clusters)" />
+        <param name="readable_logs" value="$(arg readable_logs)" />
+        <param name="readable_log_period" value="$(arg detector_readable_log_period)" />
     </node>
 
     <!-- override 任务节点：负责 D435 穿框，以及二维码/气球占位任务。 -->
     <node pkg="ego_api" type="override_task_demo" name="override_task_demo" output="screen">
         <param name="bridge_ns" value="$(arg bridge_ns)" />
+        <param name="ego_api_verbose" value="$(arg ego_api_verbose)" />
         <param name="flight_z" value="$(arg flight_z)" />
         <param name="depth_topic" value="$(arg depth_topic)" />
         <param name="camera_info_topic" value="$(arg camera_info_topic)" />
@@ -305,6 +344,9 @@
     <!-- 比赛主流程：起飞、等柱子、过柱、穿框、返程、回击打区、降落。 -->
     <node pkg="ego_api" type="craic_competition_demo" name="craic_competition_demo" output="screen">
         <param name="bridge_ns" value="$(arg bridge_ns)" />
+        <param name="ego_api_verbose" value="$(arg ego_api_verbose)" />
+        <param name="mission_log_period" value="$(arg mission_log_period)" />
+        <param name="simple_logs" value="$(arg simple_logs)" />
         <param name="flight_z" value="$(arg flight_z)" />
         <param name="goal_frame_id" value="$(arg frame_goal_frame_id)" />
         <param name="land_after_finish" value="$(arg land_after_finish)" />
@@ -324,6 +366,7 @@
         <param name="pillar_align_yaw_threshold" value="$(arg pillar_align_yaw_threshold)" />
         <param name="pillar_align_hold_time" value="$(arg pillar_align_hold_time)" />
         <param name="pillar_frame_switch_after_distance" value="$(arg pillar_frame_switch_after_distance)" />
+        <param name="pillar_return_switch_after_distance" value="$(arg pillar_return_switch_after_distance)" />
         <param name="enable_pillar_active_scan" value="$(arg enable_pillar_active_scan)" />
         <param name="pillar_active_scan_delay" value="$(arg pillar_active_scan_delay)" />
         <param name="pillar_scan_yaw_rate" value="$(arg pillar_scan_yaw_rate)" />
@@ -336,6 +379,7 @@
         <param name="frame_min_goal_z" value="$(arg frame_min_goal_z)" />
         <param name="frame_max_goal_z" value="$(arg frame_max_goal_z)" />
         <param name="frame_goal_fixed_z" value="$(arg frame_goal_fixed_z)" />
+        <param name="frame_auto_goal_z_min" value="$(arg frame_auto_goal_z_min)" />
         <param name="frame_auto_goal_z_max" value="$(arg frame_auto_goal_z_max)" />
         <param name="frame_auto_goal_z_fallback" value="$(arg frame_auto_goal_z_fallback)" />
         <param name="ego_goal_z_limit" value="$(arg ego_goal_z_limit)" />
@@ -345,5 +389,28 @@
         <param name="enable_frame_opportunistic_lock" value="$(arg enable_frame_opportunistic_lock)" />
         <param name="prefer_full_frame_lock" value="$(arg prefer_full_frame_lock)" />
         <param name="frame_full_prefer_timeout" value="$(arg frame_full_prefer_timeout)" />
+        <param name="frame_use_override_direct_pass" value="$(arg frame_use_override_direct_pass)" />
+        <param name="frame_override_timeout" value="$(arg frame_override_timeout)" />
+        <param name="frame_override_speed" value="$(arg frame_override_speed)" />
+        <param name="frame_override_lateral_kp" value="$(arg frame_override_lateral_kp)" />
+        <param name="frame_override_max_lateral_speed" value="$(arg frame_override_max_lateral_speed)" />
+        <param name="frame_override_z_kp" value="$(arg frame_override_z_kp)" />
+        <param name="frame_override_max_vz" value="$(arg frame_override_max_vz)" />
+        <param name="frame_override_yaw_kp" value="$(arg frame_override_yaw_kp)" />
+        <param name="frame_override_max_yaw_rate" value="$(arg frame_override_max_yaw_rate)" />
+        <param name="frame_override_lateral_threshold" value="$(arg frame_override_lateral_threshold)" />
+        <param name="frame_override_z_threshold" value="$(arg frame_override_z_threshold)" />
+        <param name="frame_override_yaw_threshold" value="$(arg frame_override_yaw_threshold)" />
+        <param name="enable_frame_yaw_align_override" value="$(arg enable_frame_yaw_align_override)" />
+        <param name="frame_yaw_align_timeout" value="$(arg frame_yaw_align_timeout)" />
+        <param name="frame_yaw_align_threshold" value="$(arg frame_yaw_align_threshold)" />
+        <param name="frame_yaw_align_hold_time" value="$(arg frame_yaw_align_hold_time)" />
+        <param name="frame_pre_offset" value="$(arg frame_pre_offset)" />
+        <param name="frame_post_offset" value="$(arg frame_post_offset)" />
+        <param name="enable_qr_ego_scan" value="$(arg enable_qr_ego_scan)" />
+        <param name="qr_gate_half_width" value="$(arg qr_gate_half_width)" />
+        <param name="qr_forward_offset" value="$(arg qr_forward_offset)" />
+        <param name="qr_left_offset" value="$(arg qr_left_offset)" />
+        <param name="qr_hold_time" value="$(arg qr_hold_time)" />
     </node>
 </launch>

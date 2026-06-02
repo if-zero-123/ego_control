@@ -197,6 +197,8 @@ public:
         pnh_.param<int>("history_size", history_size_, 5);
         pnh_.param<double>("debug_log_period", debug_log_period_, 1.0);
         pnh_.param<int>("debug_top_clusters", debug_top_clusters_, 6);
+        pnh_.param<bool>("readable_logs", readable_logs_, false);
+        pnh_.param<double>("readable_log_period", readable_log_period_, 2.0);
 
         cloud_sub_ = nh_.subscribe(cloud_topic_, 1, &FrameDetectorNode::cloudCb, this);
         odom_sub_ = nh_.subscribe(odom_topic_, 20, &FrameDetectorNode::odomCb, this);
@@ -207,28 +209,30 @@ public:
         post_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic/frame_post_goal", 1, true);
         marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/craic/frame_markers", 1, true);
 
-        ROS_INFO("[frame_detector] cloud=%s odom=%s marker_frame=%s goal_frame=%s flight_z=%.2f height_mode=%s gate_center_z=%.2f crossing_z=%.2f detected_z=%d goal_z_follows_center=%d center_z_bias=%.2f goal_z_bias=%.2f clamp_z=%d center_z_safety=[%.2f %.2f] bottom_mode=%s gate_bottom_z=%.2f auto_top_z_max=%.2f auto_gate_tol=%.2f auto_post_margin=(%.2f %.2f) q=[%.2f %.2f] min_span=%.2f min_pts=%d local_rule_roi=%d field=%.2fx%.2f gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f] post_z_max=%.2f fallback=front[%.2f %.2f] lat=+/-%.2f weak_single=%d",
-                 cloud_topic_.c_str(), odom_topic_.c_str(),
-                 configured_frame_id_.empty() ? "<cloud>" : configured_frame_id_.c_str(),
-                 goal_frame_id_.c_str(), flight_z_,
-                 height_mode_.c_str(), gate_center_z_, crossing_z_,
-                 use_detected_center_z_, goal_z_follows_center_,
-                 detected_center_z_bias_, goal_z_bias_, clamp_detected_center_z_,
-                 center_z_min_, center_z_max_, auto_height_bottom_mode_.c_str(), gate_bottom_z_,
-                 auto_height_top_z_max_,
-                 auto_height_forward_tolerance_, auto_height_post_forward_margin_,
-                 auto_height_post_lateral_margin_, auto_height_low_quantile_,
-                 auto_height_high_quantile_, auto_height_min_span_, auto_height_min_points_,
-                 use_local_rule_roi_,
-                 field_length_, field_width_, gate_search_x_min_, gate_search_x_max_,
-                 gate_search_y_min_, gate_search_y_max_, roi_z_min_, roi_z_max_, post_extract_z_max_,
-                 roi_forward_min_, roi_forward_max_, roi_lateral_abs_, allow_weak_single_partial_);
-        ROS_INFO("[frame_detector] cluster leaf=%.2f tol=%.2f min=%d post_width=[%.2f %.2f] weak_width<=%.2f frame_width=[%.2f %.2f] post_h>=%.2f weak_h>=%.2f gate_width=[%.2f %.2f] forward_tol=%.2f",
-                 voxel_leaf_, cluster_tolerance_, min_cluster_size_,
-                 gate_post_min_width_, gate_post_max_width_, gate_post_weak_max_width_,
-                 gate_frame_cluster_min_width_, gate_frame_cluster_max_width_,
-                 gate_post_min_height_, gate_post_weak_min_height_,
-                 gate_width_min_, gate_width_max_, pair_forward_tolerance_);
+        if (!readable_logs_) {
+            ROS_INFO("[frame_detector] cloud=%s odom=%s marker_frame=%s goal_frame=%s flight_z=%.2f height_mode=%s gate_center_z=%.2f crossing_z=%.2f detected_z=%d goal_z_follows_center=%d center_z_bias=%.2f goal_z_bias=%.2f clamp_z=%d center_z_safety=[%.2f %.2f] bottom_mode=%s gate_bottom_z=%.2f auto_top_z_max=%.2f auto_gate_tol=%.2f auto_post_margin=(%.2f %.2f) q=[%.2f %.2f] min_span=%.2f min_pts=%d local_rule_roi=%d field=%.2fx%.2f gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f] post_z_max=%.2f fallback=front[%.2f %.2f] lat=+/-%.2f weak_single=%d",
+                     cloud_topic_.c_str(), odom_topic_.c_str(),
+                     configured_frame_id_.empty() ? "<cloud>" : configured_frame_id_.c_str(),
+                     goal_frame_id_.c_str(), flight_z_,
+                     height_mode_.c_str(), gate_center_z_, crossing_z_,
+                     use_detected_center_z_, goal_z_follows_center_,
+                     detected_center_z_bias_, goal_z_bias_, clamp_detected_center_z_,
+                     center_z_min_, center_z_max_, auto_height_bottom_mode_.c_str(), gate_bottom_z_,
+                     auto_height_top_z_max_,
+                     auto_height_forward_tolerance_, auto_height_post_forward_margin_,
+                     auto_height_post_lateral_margin_, auto_height_low_quantile_,
+                     auto_height_high_quantile_, auto_height_min_span_, auto_height_min_points_,
+                     use_local_rule_roi_,
+                     field_length_, field_width_, gate_search_x_min_, gate_search_x_max_,
+                     gate_search_y_min_, gate_search_y_max_, roi_z_min_, roi_z_max_, post_extract_z_max_,
+                     roi_forward_min_, roi_forward_max_, roi_lateral_abs_, allow_weak_single_partial_);
+            ROS_INFO("[frame_detector] cluster leaf=%.2f tol=%.2f min=%d post_width=[%.2f %.2f] weak_width<=%.2f frame_width=[%.2f %.2f] post_h>=%.2f weak_h>=%.2f gate_width=[%.2f %.2f] forward_tol=%.2f",
+                     voxel_leaf_, cluster_tolerance_, min_cluster_size_,
+                     gate_post_min_width_, gate_post_max_width_, gate_post_weak_max_width_,
+                     gate_frame_cluster_min_width_, gate_frame_cluster_max_width_,
+                     gate_post_min_height_, gate_post_weak_min_height_,
+                     gate_width_min_, gate_width_max_, pair_forward_tolerance_);
+        }
     }
 
 private:
@@ -244,8 +248,10 @@ private:
             home_pos_ = odom_pos_;
             home_yaw_ = odom_yaw_;
             have_home_ = true;
-            ROS_INFO("[frame_detector] home locked at (%.2f %.2f %.2f), yaw=%.2f",
-                     home_pos_.x(), home_pos_.y(), home_pos_.z(), home_yaw_);
+            if (!readable_logs_) {
+                ROS_INFO("[frame_detector] home locked at (%.2f %.2f %.2f), yaw=%.2f",
+                         home_pos_.x(), home_pos_.y(), home_pos_.z(), home_yaw_);
+            }
         }
     }
 
@@ -254,13 +260,23 @@ private:
         if (!have_odom_) {
             publishStatus("waiting_odom");
             clearMarkers(frame_id, msg->header.stamp);
-            ROS_WARN_THROTTLE(debug_log_period_, "[frame_detector] waiting_odom");
+            if (readable_logs_) {
+                logFrame("waiting_odom", *msg, 0, 0, 0, 0, 0, 0,
+                         std::vector<ClusterDebugInfo>(), nullptr);
+            } else {
+                ROS_WARN_THROTTLE(debug_log_period_, "[frame_detector] waiting_odom");
+            }
             return;
         }
         if (use_local_rule_roi_ && !have_home_) {
             publishStatus("waiting_odom");
             clearMarkers(frame_id, msg->header.stamp);
-            ROS_WARN_THROTTLE(debug_log_period_, "[frame_detector] waiting_odom for local rule ROI");
+            if (readable_logs_) {
+                logFrame("waiting_home", *msg, 0, 0, 0, 0, 0, 0,
+                         std::vector<ClusterDebugInfo>(), nullptr);
+            } else {
+                ROS_WARN_THROTTLE(debug_log_period_, "[frame_detector] waiting_odom for local rule ROI");
+            }
             return;
         }
 
@@ -269,7 +285,12 @@ private:
         if (input->empty()) {
             publishStatus("no_cloud");
             clearMarkers(frame_id, msg->header.stamp);
-            ROS_WARN_THROTTLE(debug_log_period_, "[frame_detector] no_cloud on %s", cloud_topic_.c_str());
+            if (readable_logs_) {
+                logFrame("no_cloud", *msg, 0, 0, 0, 0, 0, 0,
+                         std::vector<ClusterDebugInfo>(), nullptr);
+            } else {
+                ROS_WARN_THROTTLE(debug_log_period_, "[frame_detector] no_cloud on %s", cloud_topic_.c_str());
+            }
             return;
         }
 
@@ -300,20 +321,30 @@ private:
             publishStatus("empty_roi");
             debug_candidates_.clear();
             publishCandidateMarkers(frame_id, msg->header.stamp);
-            ROS_WARN_THROTTLE(debug_log_period_,
-                              "[frame_detector] empty_roi input=%zu down=%zu roi=0 local_rule=%d gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f]",
-                              input->size(), down->size(), use_local_rule_roi_,
-                              gate_search_x_min_, gate_search_x_max_, gate_search_y_min_, gate_search_y_max_,
-                              roi_z_min_, roi_z_max_);
+            if (readable_logs_) {
+                logFrame("empty_roi", *msg, input->size(), down->size(), roi->size(), post_roi->size(),
+                         0, 0, std::vector<ClusterDebugInfo>(), nullptr);
+            } else {
+                ROS_WARN_THROTTLE(debug_log_period_,
+                                  "[frame_detector] empty_roi input=%zu down=%zu roi=0 local_rule=%d gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f]",
+                                  input->size(), down->size(), use_local_rule_roi_,
+                                  gate_search_x_min_, gate_search_x_max_, gate_search_y_min_, gate_search_y_max_,
+                                  roi_z_min_, roi_z_max_);
+            }
             return;
         }
         if (post_roi->empty()) {
             publishStatus("empty_post_roi");
             debug_candidates_.clear();
             publishCandidateMarkers(frame_id, msg->header.stamp);
-            ROS_WARN_THROTTLE(debug_log_period_,
-                              "[frame_detector] empty_post_roi input=%zu down=%zu roi=%zu",
-                              input->size(), down->size(), roi->size());
+            if (readable_logs_) {
+                logFrame("empty_post_roi", *msg, input->size(), down->size(), roi->size(), post_roi->size(),
+                         0, 0, std::vector<ClusterDebugInfo>(), nullptr);
+            } else {
+                ROS_WARN_THROTTLE(debug_log_period_,
+                                  "[frame_detector] empty_post_roi input=%zu down=%zu roi=%zu",
+                                  input->size(), down->size(), roi->size());
+            }
             return;
         }
 
@@ -1232,6 +1263,18 @@ private:
         return avg;
     }
 
+    int stableHistoryCount() const {
+        if (history_.empty()) return 0;
+        const GateDetection& ref = history_.back();
+        int stable = 0;
+        for (const auto& d : history_) {
+            if ((d.center - ref.center).norm() < stability_threshold_) {
+                ++stable;
+            }
+        }
+        return stable;
+    }
+
     ClusterDebugInfo makeDebugInfo(const GatePostCandidate& c) const {
         ClusterDebugInfo info;
         info.points = c.points;
@@ -1277,7 +1320,36 @@ private:
                   const std::vector<ClusterDebugInfo>& cluster_debug,
                   const GateDetection* detection,
                   double pair_score = 0.0) const {
+        if (readable_logs_ && (!detection || !detection->valid)) return;
         if (!shouldLog()) return;
+
+        if (readable_logs_) {
+            int stable_count = stableHistoryCount();
+            if (detection && detection->valid && status.find("valid_") == 0 && stable_count == 0) {
+                stable_count = stable_frames_;
+            }
+
+            if (detection && detection->valid) {
+                ROS_INFO("[frame_detector] DETECT frame status=%s stable=%d/%d center=(%.2f %.2f %.2f) pre=(%.2f %.2f %.2f) post=(%.2f %.2f %.2f) offset_before=%.2f offset_after=%.2f detected_z=%.2f height_source=%s yaw=%.2f",
+                         status.c_str(), stable_count, stable_frames_,
+                         detection->center.x(), detection->center.y(), detection->center.z(),
+                         detection->pre_goal.x(), detection->pre_goal.y(), detection->pre_goal.z(),
+                         detection->post_goal.x(), detection->post_goal.y(), detection->post_goal.z(),
+                         pre_offset_, post_offset_,
+                         detection->post_goal.z(), detection->height_source.c_str(), detection->yaw);
+                return;
+            }
+
+            (void)status;
+            (void)input_size;
+            (void)down_size;
+            (void)roi_size;
+            (void)post_roi_size;
+            (void)cluster_count;
+            (void)accepted_count;
+            (void)pair_score;
+            return;
+        }
 
         std::ostringstream oss;
         oss << "[frame_detector] status=" << status
@@ -1333,9 +1405,11 @@ private:
     }
 
     bool shouldLog() const {
+        if (readable_logs_ && readable_log_period_ <= 0.0) return false;
         const ros::Time now = ros::Time::now();
+        const double period = readable_logs_ ? readable_log_period_ : debug_log_period_;
         if (!last_log_time_.isValid() ||
-            (now - last_log_time_).toSec() >= debug_log_period_) {
+            (now - last_log_time_).toSec() >= period) {
             last_log_time_ = now;
             return true;
         }
@@ -1622,6 +1696,8 @@ private:
     int history_size_ = 5;
     double debug_log_period_ = 1.0;
     int debug_top_clusters_ = 6;
+    bool readable_logs_ = false;
+    double readable_log_period_ = 2.0;
 
     bool have_odom_ = false;
     bool have_home_ = false;

@@ -8,6 +8,9 @@
 EgoApi::EgoApi(ros::NodeHandle& nh, const std::string& bridge_ns)
     : nh_(nh), bridge_ns_(bridge_ns)
 {
+    ros::NodeHandle pnh("~");
+    pnh.param<bool>("ego_api_verbose", verbose_, true);
+
     // ── 订阅者：接收 ego_bridge 的状态反馈 ──
     sub_flight_state_    = nh_.subscribe(bridge_ns_ + "/flight_state",    10, &EgoApi::flightStateCb, this);   // FSM 状态
     sub_reach_status_    = nh_.subscribe(bridge_ns_ + "/reach_status",    10, &EgoApi::reachStatusCb, this);   // 到达状态
@@ -27,7 +30,9 @@ EgoApi::EgoApi(ros::NodeHandle& nh, const std::string& bridge_ns)
     // 等待连接建立
     ros::Duration(0.5).sleep();
 
-    ROS_INFO("[EgoApi] Initialized. bridge_ns=%s", bridge_ns_.c_str());
+    if (verbose_) {
+        ROS_INFO("[EgoApi] Initialized. bridge_ns=%s", bridge_ns_.c_str());
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -101,7 +106,9 @@ void EgoApi::publishGoal(double x, double y, double z, double yaw) {
     // 发给 ego_bridge（用于到达检测）
     pub_target_point_.publish(goal);
 
-    ROS_INFO("[EgoApi] Goal published: (%.2f, %.2f, %.2f) yaw=%.2f", x, y, z, yaw);
+    if (verbose_) {
+        ROS_INFO("[EgoApi] Goal published: (%.2f, %.2f, %.2f) yaw=%.2f", x, y, z, yaw);
+    }
 }
 
 /// 构建一帧 PositionCommand（仅填 pos/vel/yaw，加速度全零）
@@ -134,7 +141,9 @@ quadrotor_msgs::PositionCommand EgoApi::buildPositionCmd(
 
 /// 起飞：发 TAKEOFF 指令 → 轮询等待 flight_state 变为 HOVER
 bool EgoApi::takeoff(double timeout) {
-    ROS_INFO("[EgoApi] Sending TAKEOFF command...");
+    if (verbose_) {
+        ROS_INFO("[EgoApi] Sending TAKEOFF command...");
+    }
 
     quadrotor_msgs::TakeoffLand msg;
     msg.takeoff_land_cmd = quadrotor_msgs::TakeoffLand::TAKEOFF;
@@ -146,7 +155,9 @@ bool EgoApi::takeoff(double timeout) {
     while (ros::ok()) {
         ros::spinOnce();
         if (flight_state_ == "HOVER") {
-            ROS_INFO("[EgoApi] Takeoff complete: HOVER");
+            if (verbose_) {
+                ROS_INFO("[EgoApi] Takeoff complete: HOVER");
+            }
             return true;
         }
         if ((ros::Time::now() - start).toSec() > timeout) {
@@ -160,7 +171,9 @@ bool EgoApi::takeoff(double timeout) {
 
 /// 降落：发 LAND 指令 → 轮询等待 flight_state 变为 IDLE
 bool EgoApi::land(double timeout) {
-    ROS_INFO("[EgoApi] Sending LAND command...");
+    if (verbose_) {
+        ROS_INFO("[EgoApi] Sending LAND command...");
+    }
 
     quadrotor_msgs::TakeoffLand msg;
     msg.takeoff_land_cmd = quadrotor_msgs::TakeoffLand::LAND;
@@ -172,7 +185,9 @@ bool EgoApi::land(double timeout) {
     while (ros::ok()) {
         ros::spinOnce();
         if (flight_state_ == "IDLE") {
-            ROS_INFO("[EgoApi] Landing complete: IDLE");
+            if (verbose_) {
+                ROS_INFO("[EgoApi] Landing complete: IDLE");
+            }
             return true;
         }
         if ((ros::Time::now() - start).toSec() > timeout) {
@@ -191,8 +206,10 @@ bool EgoApi::sendGoal(double x, double y, double z, double timeout) {
 
 /// 发送目标点（指定 yaw）：发布目标 → 轮询 reach_status → 到达/超时
 bool EgoApi::sendGoalWithYaw(double x, double y, double z, double yaw, double timeout) {
-    ROS_INFO("[EgoApi] sendGoalWithYaw(%.2f, %.2f, %.2f, yaw=%.2f, timeout=%.1f)",
-             x, y, z, yaw, timeout);
+    if (verbose_) {
+        ROS_INFO("[EgoApi] sendGoalWithYaw(%.2f, %.2f, %.2f, yaw=%.2f, timeout=%.1f)",
+                 x, y, z, yaw, timeout);
+    }
 
     publishGoal(x, y, z, yaw);
 
@@ -208,7 +225,9 @@ bool EgoApi::sendGoalWithYaw(double x, double y, double z, double yaw, double ti
         }
 
         if (saw_reach_reset && reach_status_ == 1) {
-            ROS_INFO("[EgoApi] Goal reached!");
+            if (verbose_) {
+                ROS_INFO("[EgoApi] Goal reached!");
+            }
             return true;
         }
 
@@ -233,7 +252,9 @@ void EgoApi::publishGoalOnly(double x, double y, double z, double yaw) {
 
 /// 请求进入 OVERRIDE：持续发 set_control_mode=1 直到 control_mode_ 确认
 bool EgoApi::enableOverride() {
-    ROS_INFO("[EgoApi] Requesting OVERRIDE mode...");
+    if (verbose_) {
+        ROS_INFO("[EgoApi] Requesting OVERRIDE mode...");
+    }
 
     std_msgs::UInt8 msg;
     msg.data = 1;
@@ -247,7 +268,9 @@ bool EgoApi::enableOverride() {
         pub_set_ctrl_mode_.publish(msg);
 
         if (control_mode_ == 1) {
-            ROS_INFO("[EgoApi] OVERRIDE enabled.");
+            if (verbose_) {
+                ROS_INFO("[EgoApi] OVERRIDE enabled.");
+            }
             return true;
         }
         if ((ros::Time::now() - start).toSec() > confirm_timeout) {
@@ -262,7 +285,9 @@ bool EgoApi::enableOverride() {
 
 /// 退出 OVERRIDE：持续发 set_control_mode=0 直到 control_mode_ 确认
 bool EgoApi::disableOverride() {
-    ROS_INFO("[EgoApi] Exiting OVERRIDE mode...");
+    if (verbose_) {
+        ROS_INFO("[EgoApi] Exiting OVERRIDE mode...");
+    }
 
     std_msgs::UInt8 msg;
     msg.data = 0;
@@ -276,7 +301,9 @@ bool EgoApi::disableOverride() {
         pub_set_ctrl_mode_.publish(msg);
 
         if (control_mode_ == 0) {
-            ROS_INFO("[EgoApi] OVERRIDE disabled, control returned.");
+            if (verbose_) {
+                ROS_INFO("[EgoApi] OVERRIDE disabled, control returned.");
+            }
             return true;
         }
         if ((ros::Time::now() - start).toSec() > confirm_timeout) {
@@ -324,8 +351,10 @@ void EgoApi::sendVelocityCmd(double vx, double vy, double vz, double yaw_rate) {
 bool EgoApi::moveToOverride(double x, double y, double z, double yaw,
                              double pos_threshold, double timeout)
 {
-    ROS_INFO("[EgoApi] moveToOverride(%.2f, %.2f, %.2f, yaw=%.2f, thresh=%.2f)",
-             x, y, z, yaw, pos_threshold);
+    if (verbose_) {
+        ROS_INFO("[EgoApi] moveToOverride(%.2f, %.2f, %.2f, yaw=%.2f, thresh=%.2f)",
+                 x, y, z, yaw, pos_threshold);
+    }
 
     ros::Rate rate(50);  // 50Hz 发送频率
     ros::Time start = ros::Time::now();
@@ -341,7 +370,9 @@ bool EgoApi::moveToOverride(double x, double y, double z, double yaw,
         Eigen::Vector3d target(x, y, z);
         double dist = (odom_pos_ - target).norm();
         if (dist < pos_threshold) {
-            ROS_INFO("[EgoApi] moveToOverride reached (dist=%.3f)", dist);
+            if (verbose_) {
+                ROS_INFO("[EgoApi] moveToOverride reached (dist=%.3f)", dist);
+            }
             return true;
         }
 
@@ -361,7 +392,9 @@ bool EgoApi::moveToOverride(double x, double y, double z, double yaw,
 
 /// 主示例调用：发布任务触发信号，override 示例会收到并执行对应任务
 void EgoApi::triggerOverrideTask(int task_id) {
-    ROS_INFO("[EgoApi] Triggering override task %d", task_id);
+    if (verbose_) {
+        ROS_INFO("[EgoApi] Triggering override task %d", task_id);
+    }
     std_msgs::Int32 msg;
     msg.data = task_id;
     pub_override_trigger_.publish(msg);
@@ -369,7 +402,9 @@ void EgoApi::triggerOverrideTask(int task_id) {
 
 /// override 示例调用：阻塞等待触发信号，返回任务 ID
 int EgoApi::waitForOverrideTrigger(double timeout) {
-    ROS_INFO("[EgoApi] Waiting for override trigger...");
+    if (verbose_) {
+        ROS_INFO("[EgoApi] Waiting for override trigger...");
+    }
 
     trigger_received_ = false;
     pending_task_id_ = -1;
@@ -384,7 +419,9 @@ int EgoApi::waitForOverrideTrigger(double timeout) {
             int id = pending_task_id_;
             trigger_received_ = false;
             pending_task_id_ = -1;
-            ROS_INFO("[EgoApi] Override trigger received: task_id=%d", id);
+            if (verbose_) {
+                ROS_INFO("[EgoApi] Override trigger received: task_id=%d", id);
+            }
             return id;
         }
 
@@ -400,7 +437,9 @@ int EgoApi::waitForOverrideTrigger(double timeout) {
 
 /// 主示例调用：阻塞等待 override 完成（control_mode 回到 0）
 bool EgoApi::waitOverrideComplete(double timeout) {
-    ROS_INFO("[EgoApi] Waiting for override to complete...");
+    if (verbose_) {
+        ROS_INFO("[EgoApi] Waiting for override to complete...");
+    }
 
     ros::Rate rate(10);
     ros::Time start = ros::Time::now();
@@ -414,7 +453,9 @@ bool EgoApi::waitOverrideComplete(double timeout) {
         }
 
         if (saw_override && control_mode_ == 0) {
-            ROS_INFO("[EgoApi] Override complete (control_mode=0).");
+            if (verbose_) {
+                ROS_INFO("[EgoApi] Override complete (control_mode=0).");
+            }
             return true;
         }
 

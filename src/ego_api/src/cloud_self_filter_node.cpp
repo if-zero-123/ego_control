@@ -20,14 +20,17 @@ public:
         pnh_.param<double>("self_radius_z", self_radius_z_, 0.45);
         pnh_.param<double>("min_z", min_z_, 0.03);
         pnh_.param<double>("max_z", max_z_, 2.2);
+        pnh_.param<double>("log_period", log_period_, 1.0);
 
         cloud_sub_ = nh_.subscribe(input_cloud_topic_, 1, &CloudSelfFilterNode::cloudCb, this);
         odom_sub_ = nh_.subscribe(odom_topic_, 10, &CloudSelfFilterNode::odomCb, this);
         cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>(output_cloud_topic_, 1);
 
-        ROS_INFO("[cloud_self_filter] input=%s output=%s odom=%s self_radius_xy=%.2f self_radius_z=%.2f z=[%.2f %.2f]",
-                 input_cloud_topic_.c_str(), output_cloud_topic_.c_str(), odom_topic_.c_str(),
-                 self_radius_xy_, self_radius_z_, min_z_, max_z_);
+        if (log_period_ > 0.0) {
+            ROS_INFO("[cloud_self_filter] input=%s output=%s odom=%s self_radius_xy=%.2f self_radius_z=%.2f z=[%.2f %.2f]",
+                     input_cloud_topic_.c_str(), output_cloud_topic_.c_str(), odom_topic_.c_str(),
+                     self_radius_xy_, self_radius_z_, min_z_, max_z_);
+        }
     }
 
 private:
@@ -66,7 +69,9 @@ private:
         out_msg.header = msg->header;
         cloud_pub_.publish(out_msg);
 
-        ROS_INFO_THROTTLE(1.0, "[cloud_self_filter] cloud %zu -> %zu points", input.size(), output.size());
+        if (log_period_ > 0.0) {
+            ROS_INFO_THROTTLE(log_period_, "[cloud_self_filter] cloud %zu -> %zu points", input.size(), output.size());
+        }
     }
 
     ros::NodeHandle nh_;
@@ -82,6 +87,7 @@ private:
     double self_radius_z_ = 0.45;
     double min_z_ = 0.03;
     double max_z_ = 2.2;
+    double log_period_ = 1.0;
 
     bool have_odom_ = false;
     double odom_x_ = 0.0;

@@ -23,6 +23,7 @@ namespace ego_planner
     nh.param("fsm/fixed_goal_z", fixed_goal_z_, 1.0);
     nh.param("fsm/realworld_experiment", flag_realworld_experiment_, false);
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
+    nh.param("fsm/verbose", verbose_fsm_, true);
 
     have_trigger_ = !flag_realworld_experiment_;
 
@@ -206,7 +207,8 @@ namespace ego_planner
   void EGOReplanFSM::triggerCallback(const geometry_msgs::PoseStampedPtr &msg)
   {
     have_trigger_ = true;
-    cout << "Triggered!" << endl;
+    if (verbose_fsm_)
+      cout << "Triggered!" << endl;
     init_pt_ = odom_pos_;
   }
 
@@ -215,15 +217,17 @@ namespace ego_planner
     if (msg->pose.position.z < -0.1)
       return;
 
-    cout << "Triggered!" << endl;
+    if (verbose_fsm_)
+      cout << "Triggered!" << endl;
     // trigger_ = true;
     init_pt_ = odom_pos_;
 
     double goal_z = use_goal_msg_z_ ? msg->pose.position.z : fixed_goal_z_;
     Eigen::Vector3d end_wp(msg->pose.position.x, msg->pose.position.y, goal_z);
-    ROS_INFO("[EGO FSM] Goal height mode: %s, target=(%.2f, %.2f, %.2f)",
-             use_goal_msg_z_ ? "message" : "fixed",
-             end_wp.x(), end_wp.y(), end_wp.z());
+    if (verbose_fsm_)
+      ROS_INFO("[EGO FSM] Goal height mode: %s, target=(%.2f, %.2f, %.2f)",
+               use_goal_msg_z_ ? "message" : "fixed",
+               end_wp.x(), end_wp.y(), end_wp.z());
 
     planNextWaypoint(end_wp);
   }
@@ -419,7 +423,8 @@ namespace ego_planner
     static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
     int pre_s = int(exec_state_);
     exec_state_ = new_state;
-    cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
+    if (verbose_fsm_)
+      cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
   }
 
   std::pair<int, EGOReplanFSM::FSM_EXEC_STATE> EGOReplanFSM::timesOfConsecutiveStateCalls()
@@ -429,6 +434,8 @@ namespace ego_planner
 
   void EGOReplanFSM::printFSMExecState()
   {
+    if (!verbose_fsm_)
+      return;
     static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
 
     cout << "[FSM]: state: " + state_str[int(exec_state_)] << endl;
@@ -443,9 +450,9 @@ namespace ego_planner
     if (fsm_num == 100)
     {
       printFSMExecState();
-      if (!have_odom_)
+      if (verbose_fsm_ && !have_odom_)
         cout << "no odom." << endl;
-      if (!have_target_)
+      if (verbose_fsm_ && !have_target_)
         cout << "wait for goal or trigger." << endl;
       fsm_num = 0;
     }
@@ -767,7 +774,8 @@ namespace ego_planner
         planner_manager_->reboundReplan(start_pt_, start_vel_, start_acc_, local_target_pt_, local_target_vel_, (have_new_target_ || flag_use_poly_init), flag_randomPolyTraj);
     have_new_target_ = false;
 
-    cout << "refine_success=" << plan_and_refine_success << endl;
+    if (verbose_fsm_)
+      cout << "refine_success=" << plan_and_refine_success << endl;
 
     if (plan_and_refine_success)
     {
@@ -919,7 +927,8 @@ namespace ego_planner
           {
             pos_t = pos_t_temp;
             dist = (pos_t - start_pt_).norm();
-            cout << "Escape cornor case \"getLocalTarget\"" << endl;
+            if (verbose_fsm_)
+              cout << "Escape cornor case \"getLocalTarget\"" << endl;
             break;
           }
         }

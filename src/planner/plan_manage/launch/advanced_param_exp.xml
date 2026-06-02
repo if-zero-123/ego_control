@@ -41,6 +41,7 @@
        use_goal_msg_z=true ：x/y/z 全部使用消息里的值，适合 ego_api 或手动 rostopic 发送完整目标点 -->
   <arg name="use_goal_msg_z" default="false"/>
   <arg name="fixed_goal_z" default="1.0"/>
+  <arg name="fsm_verbose" default="true"/>
   <arg name="use_distinctive_trajs"/>
 
   <arg name="obj_num_set"/>
@@ -74,6 +75,7 @@
     <!-- 目标点高度模式：false 保持官方固定高度行为；true 使用传入目标点的 z。 -->
     <param name="fsm/use_goal_msg_z" value="$(arg use_goal_msg_z)" type="bool"/>
     <param name="fsm/fixed_goal_z" value="$(arg fixed_goal_z)" type="double"/>
+    <param name="fsm/verbose" value="$(arg fsm_verbose)" type="bool"/>
     <param name="fsm/realworld_experiment" value="true"/>
     <param name="fsm/fail_safe" value="true"/>
 
@@ -102,7 +104,7 @@
     <param name="grid_map/local_update_range_x"  value="5.5" /> 
     <param name="grid_map/local_update_range_y"  value="5.5" /> 
     <param name="grid_map/local_update_range_z"  value="4.5" /> 
-    <param name="grid_map/obstacles_inflation"     value="0.255" />
+    <param name="grid_map/obstacles_inflation"     value="0.205" />
     <param name="grid_map/local_map_margin" value="10"/>
     <param name="grid_map/ground_height"        value="-0.01"/>
     <!-- camera parameter -->
