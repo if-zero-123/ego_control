@@ -7,6 +7,7 @@
     <arg name="land_after_finish" default="true" />
     <arg name="start_ego_planner" default="true" />
     <arg name="start_ego_bridge" default="true" />
+    <arg name="start_cloud_self_filter" default="false" />
     <arg name="readable_logs" default="true" />
     <arg name="mission_log_period" default="1.0" />
     <arg name="simple_logs" default="true" />
@@ -35,10 +36,10 @@
     <arg name="pillar_scan_yaw_rate" default="0.35" />
     <arg name="pillar_scan_lateral_speed" default="0.06" />
 
-    <arg name="raw_cloud_topic" default="/cloud_registered_aligned" />
+    <arg name="raw_cloud_topic" default="/cloud_registered" />
     <arg name="cloud_topic" default="/craic/cloud_filtered" />
-    <arg name="ego_cloud_topic" default="/cloud_registered_aligned" />
-    <arg name="pillar_cloud_topic" default="/cloud_registered_aligned" />
+    <arg name="ego_cloud_topic" default="/cloud_registered" />
+    <arg name="pillar_cloud_topic" default="/cloud_registered" />
     <arg name="odom_topic" default="/mavros/local_position/odom" />
     <arg name="depth_topic" default="/d435/depth/image_raw" />
     <arg name="camera_info_topic" default="/d435/depth/camera_info" />
@@ -80,7 +81,7 @@
     <arg name="pillar_history_size" default="5" />
     <arg name="pillar_stability_threshold" default="0.15" />
 
-    <arg name="frame_cloud_topic" default="/cloud_registered_aligned" />
+    <arg name="frame_cloud_topic" default="/cloud_registered" />
     <arg name="frame_goal_frame_id" default="world" />
     <arg name="frame_detect_timeout" default="20.0" />
     <arg name="frame_valid_max_age" default="0.6" />
@@ -181,8 +182,9 @@
     <arg name="frame_debug_log_period" default="1.0" />
     <arg name="frame_debug_top_clusters" default="0" />
 
-    <!-- 先过滤 MID360/FAST-LIO 点云里的机体附近点和异常高度点，避免 EGO 把自身刷成障碍。 -->
-    <node pkg="ego_api" type="craic_cloud_self_filter" name="craic_cloud_self_filter" output="screen">
+    <!-- 可选：调试用点云自滤波输出。默认飞行链路直接使用 /cloud_registered。 -->
+    <node pkg="ego_api" type="craic_cloud_self_filter" name="craic_cloud_self_filter" output="screen"
+          if="$(arg start_cloud_self_filter)">
         <param name="input_cloud_topic" value="$(arg raw_cloud_topic)" />
         <param name="output_cloud_topic" value="$(arg cloud_topic)" />
         <param name="odom_topic" value="$(arg odom_topic)" />
@@ -193,8 +195,8 @@
         <param name="log_period" value="$(arg cloud_filter_log_period)" />
     </node>
 
-    <!-- 拉起 EGO-Planner。当前仿真话题已经对齐：
-         odom=/mavros/local_position/odom，cloud=/cloud_registered_aligned。 -->
+    <!-- 拉起 EGO-Planner。当前实机话题：
+         odom=/mavros/local_position/odom，cloud=/cloud_registered。 -->
     <include file="$(find ego_planner)/launch/single_run_in_exp.launch"
              if="$(arg start_ego_planner)">
         <arg name="cloud_topic" value="$(arg ego_cloud_topic)" />

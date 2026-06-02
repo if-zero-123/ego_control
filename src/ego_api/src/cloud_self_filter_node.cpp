@@ -13,7 +13,7 @@ namespace {
 class CloudSelfFilterNode {
 public:
     CloudSelfFilterNode() : nh_(), pnh_("~") {
-        pnh_.param<std::string>("input_cloud_topic", input_cloud_topic_, "/cloud_registered_aligned");
+        pnh_.param<std::string>("input_cloud_topic", input_cloud_topic_, "/cloud_registered");
         pnh_.param<std::string>("odom_topic", odom_topic_, "/mavros/local_position/odom");
         pnh_.param<std::string>("output_cloud_topic", output_cloud_topic_, "/craic/cloud_filtered");
         pnh_.param<double>("self_radius_xy", self_radius_xy_, 0.45);

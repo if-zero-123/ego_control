@@ -10,7 +10,7 @@
     <!-- 规划虚拟天花板高度：EGO planner 会把该高度附近当成障碍，避免主动规划飞过 2m。 -->
     <arg name="virtual_ceil_height" value="2.0"/>
     <arg name="odom_topic" value="/mavros/local_position/odom"/>
-    <arg name="cloud_topic" default="/cloud_registered_aligned"/>
+    <arg name="cloud_topic" default="/cloud_registered"/>
     <!-- /move_base_simple/goal 目标点高度模式：
          默认 false = 固定高度，适合 RViz 2D Nav Goal；发送完整 x/y/z 目标点时设为 true。 -->
     <arg name="use_goal_msg_z" default="false"/>
