@@ -95,6 +95,8 @@ public:
         pnh_.param<double>("frame_min_goal_z", frame_min_goal_z_, 0.35);
         pnh_.param<double>("frame_max_goal_z", frame_max_goal_z_, 1.8);
         pnh_.param<double>("frame_goal_fixed_z", frame_goal_fixed_z_, 0.9);
+        pnh_.param<double>("frame_auto_goal_z_max", frame_auto_goal_z_max_, 1.65);
+        pnh_.param<double>("frame_auto_goal_z_fallback", frame_auto_goal_z_fallback_, 1.1);
         pnh_.param<std::string>("goal_frame_id", goal_frame_id_, "world");
         pnh_.param<double>("ego_goal_z_limit", ego_goal_z_limit_, 2.0);
         pnh_.param<double>("ego_goal_z_fallback", ego_goal_z_fallback_, 0.9);
@@ -361,6 +363,7 @@ private:
 
         geometry_msgs::PoseStamped pre = normalizeWorldGoal(frame_pre_);
         geometry_msgs::PoseStamped post = normalizeWorldGoal(frame_post_);
+        applyFrameHeightProtection(pre, post);
         if (!validateFrameGoal(pre, "frame_pre") ||
             !validateFrameGoal(post, "frame_post")) {
             frame_valid_count_ = 0;
@@ -446,6 +449,19 @@ private:
                  forward, lateral, target.z() - odom.z(), yawFromPose(pose));
     }
 
+    void applyFrameHeightProtection(geometry_msgs::PoseStamped& pre,
+                                    geometry_msgs::PoseStamped& post) const {
+        double z = post.pose.position.z;
+        if (!std::isfinite(z)) z = pre.pose.position.z;
+        if (!std::isfinite(z) || z > frame_auto_goal_z_max_) {
+            ROS_WARN("[craic_demo] frame auto goal z=%.2f invalid/above %.2f, use fallback %.2f",
+                     z, frame_auto_goal_z_max_, frame_auto_goal_z_fallback_);
+            z = frame_auto_goal_z_fallback_;
+        }
+        pre.pose.position.z = z;
+        post.pose.position.z = z;
+    }
+
     bool passFrameOutbound() {
         if (!have_locked_frame_) {
             ROS_ERROR("[craic_demo] No locked frame goals for outbound pass.");
@@ -455,11 +471,11 @@ private:
         logFrameGoal("outbound_frame_post", locked_frame_post_);
         if (!moveToFramePreEgo()) return false;
         ros::Duration(frame_hold_at_pre_).sleep();
-        return flyFrameGoalFixedZ("frame_post", locked_frame_post_, locked_frame_yaw_forward_);
+        return flyGoal("frame_post", locked_frame_post_, locked_frame_yaw_forward_);
     }
 
     bool moveToFramePreEgo() {
-        return flyFrameGoalFixedZ("frame_pre", locked_frame_pre_, api_.getOdomYaw());
+        return flyGoal("frame_pre", locked_frame_pre_, api_.getOdomYaw());
     }
 
     bool passFrameBackward() {
@@ -469,7 +485,7 @@ private:
         }
         ROS_INFO("[craic_demo] Reusing locked frame goals for backward pass; no frame re-detect.");
         logFrameGoal("backward_frame_pre", locked_frame_pre_);
-        return flyFrameGoalFixedZ("frame_pre_return", locked_frame_pre_, locked_frame_yaw_back_);
+        return flyGoal("frame_pre_return", locked_frame_pre_, locked_frame_yaw_back_);
     }
 
     void sendPillarActiveScanCmd(double elapsed) {
@@ -514,12 +530,6 @@ private:
             ROS_WARN("[craic_demo] Goal %s timeout.", label.c_str());
         }
         return reached;
-    }
-
-    bool flyFrameGoalFixedZ(const std::string& label, const geometry_msgs::PoseStamped& pose, double yaw) {
-        geometry_msgs::PoseStamped fixed = pose;
-        fixed.pose.position.z = frame_goal_fixed_z_;
-        return flyGoal(label, fixed, yaw);
     }
 
     bool flyPillarPostUntilCrossOrReached(double yaw) {
@@ -853,6 +863,8 @@ private:
     double frame_min_goal_z_ = 0.35;
     double frame_max_goal_z_ = 1.8;
     double frame_goal_fixed_z_ = 0.9;
+    double frame_auto_goal_z_max_ = 1.65;
+    double frame_auto_goal_z_fallback_ = 1.1;
     std::string goal_frame_id_ = "world";
     double ego_goal_z_limit_ = 2.0;
     double ego_goal_z_fallback_ = 0.9;

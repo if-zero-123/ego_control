@@ -81,6 +81,8 @@
     <arg name="frame_min_goal_z" default="0.35" />
     <arg name="frame_max_goal_z" default="1.8" />
     <arg name="frame_goal_fixed_z" default="0.9" />
+    <arg name="frame_auto_goal_z_max" default="1.65" />
+    <arg name="frame_auto_goal_z_fallback" default="1.1" />
     <arg name="ego_goal_z_limit" default="2.0" />
     <arg name="ego_goal_z_fallback" default="0.9" />
     <arg name="frame_pre_direct_timeout" default="30.0" />
@@ -334,6 +336,8 @@
         <param name="frame_min_goal_z" value="$(arg frame_min_goal_z)" />
         <param name="frame_max_goal_z" value="$(arg frame_max_goal_z)" />
         <param name="frame_goal_fixed_z" value="$(arg frame_goal_fixed_z)" />
+        <param name="frame_auto_goal_z_max" value="$(arg frame_auto_goal_z_max)" />
+        <param name="frame_auto_goal_z_fallback" value="$(arg frame_auto_goal_z_fallback)" />
         <param name="ego_goal_z_limit" value="$(arg ego_goal_z_limit)" />
         <param name="ego_goal_z_fallback" value="$(arg ego_goal_z_fallback)" />
         <param name="frame_pre_direct_timeout" value="$(arg frame_pre_direct_timeout)" />
