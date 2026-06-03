@@ -40,6 +40,17 @@
   <arg name="roi_z_min" default="0.15" />
   <arg name="roi_z_max" default="2.20" />
   <arg name="post_extract_z_max" default="2.00" />
+  <arg name="use_fixed_center_roi" default="true" />
+  <arg name="fixed_roi_center_x" default="2.70" />
+  <arg name="fixed_roi_center_y" default="-1.50" />
+  <arg name="fixed_roi_center_z" default="1.40" />
+  <arg name="fixed_roi_radius" default="2.65" />
+  <arg name="use_body_exclusion" default="false" />
+  <arg name="body_exclusion_forward_min" default="-0.55" />
+  <arg name="body_exclusion_forward_max" default="0.45" />
+  <arg name="body_exclusion_lateral_abs" default="0.45" />
+  <arg name="body_exclusion_z_min" default="-0.45" />
+  <arg name="body_exclusion_z_max" default="0.35" />
 
   <arg name="voxel_leaf" default="0.05" />
   <arg name="cluster_tolerance" default="0.22" />
@@ -51,6 +62,12 @@
   <arg name="gate_post_weak_max_width" default="0.55" />
   <arg name="gate_frame_cluster_min_width" default="0.75" />
   <arg name="gate_frame_cluster_max_width" default="1.40" />
+  <arg name="prefer_frame_cluster" default="true" />
+  <arg name="frame_cluster_forward_width_min" default="0.02" />
+  <arg name="frame_cluster_forward_width_max" default="0.30" />
+  <arg name="frame_cluster_min_height" default="0.80" />
+  <arg name="frame_cluster_max_height" default="2.20" />
+  <arg name="frame_cluster_min_points" default="80" />
   <arg name="gate_split_side_band" default="0.22" />
   <arg name="gate_post_min_height" default="0.40" />
   <arg name="gate_post_weak_min_height" default="0.18" />
@@ -62,6 +79,11 @@
   <arg name="gate_width_max" default="1.35" />
   <arg name="gate_width_expected" default="1.00" />
   <arg name="pair_forward_tolerance" default="0.35" />
+  <arg name="enforce_gate_center_constraint" default="true" />
+  <arg name="gate_center_y_tolerance" default="0.45" />
+  <arg name="partial_center_y_tolerance" default="0.65" />
+  <arg name="pair_max_height_delta" default="0.60" />
+  <arg name="pair_min_height_overlap" default="0.15" />
   <arg name="allow_weak_single_partial" default="true" />
 
   <arg name="pre_offset" default="0.60" />
@@ -115,6 +137,17 @@
     <param name="roi_z_min" value="$(arg roi_z_min)" />
     <param name="roi_z_max" value="$(arg roi_z_max)" />
     <param name="post_extract_z_max" value="$(arg post_extract_z_max)" />
+    <param name="use_fixed_center_roi" value="$(arg use_fixed_center_roi)" />
+    <param name="fixed_roi_center_x" value="$(arg fixed_roi_center_x)" />
+    <param name="fixed_roi_center_y" value="$(arg fixed_roi_center_y)" />
+    <param name="fixed_roi_center_z" value="$(arg fixed_roi_center_z)" />
+    <param name="fixed_roi_radius" value="$(arg fixed_roi_radius)" />
+    <param name="use_body_exclusion" value="$(arg use_body_exclusion)" />
+    <param name="body_exclusion_forward_min" value="$(arg body_exclusion_forward_min)" />
+    <param name="body_exclusion_forward_max" value="$(arg body_exclusion_forward_max)" />
+    <param name="body_exclusion_lateral_abs" value="$(arg body_exclusion_lateral_abs)" />
+    <param name="body_exclusion_z_min" value="$(arg body_exclusion_z_min)" />
+    <param name="body_exclusion_z_max" value="$(arg body_exclusion_z_max)" />
 
     <param name="voxel_leaf" value="$(arg voxel_leaf)" />
     <param name="cluster_tolerance" value="$(arg cluster_tolerance)" />
@@ -126,6 +159,12 @@
     <param name="gate_post_weak_max_width" value="$(arg gate_post_weak_max_width)" />
     <param name="gate_frame_cluster_min_width" value="$(arg gate_frame_cluster_min_width)" />
     <param name="gate_frame_cluster_max_width" value="$(arg gate_frame_cluster_max_width)" />
+    <param name="prefer_frame_cluster" value="$(arg prefer_frame_cluster)" />
+    <param name="frame_cluster_forward_width_min" value="$(arg frame_cluster_forward_width_min)" />
+    <param name="frame_cluster_forward_width_max" value="$(arg frame_cluster_forward_width_max)" />
+    <param name="frame_cluster_min_height" value="$(arg frame_cluster_min_height)" />
+    <param name="frame_cluster_max_height" value="$(arg frame_cluster_max_height)" />
+    <param name="frame_cluster_min_points" value="$(arg frame_cluster_min_points)" />
     <param name="gate_split_side_band" value="$(arg gate_split_side_band)" />
     <param name="gate_post_min_height" value="$(arg gate_post_min_height)" />
     <param name="gate_post_weak_min_height" value="$(arg gate_post_weak_min_height)" />
@@ -137,6 +176,11 @@
     <param name="gate_width_max" value="$(arg gate_width_max)" />
     <param name="gate_width_expected" value="$(arg gate_width_expected)" />
     <param name="pair_forward_tolerance" value="$(arg pair_forward_tolerance)" />
+    <param name="enforce_gate_center_constraint" value="$(arg enforce_gate_center_constraint)" />
+    <param name="gate_center_y_tolerance" value="$(arg gate_center_y_tolerance)" />
+    <param name="partial_center_y_tolerance" value="$(arg partial_center_y_tolerance)" />
+    <param name="pair_max_height_delta" value="$(arg pair_max_height_delta)" />
+    <param name="pair_min_height_overlap" value="$(arg pair_min_height_overlap)" />
     <param name="allow_weak_single_partial" value="$(arg allow_weak_single_partial)" />
 
     <param name="pre_offset" value="$(arg pre_offset)" />

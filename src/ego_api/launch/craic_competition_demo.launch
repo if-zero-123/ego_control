@@ -1,188 +1,132 @@
-<!-- CRAIC 比赛第一版：真实调用 EgoApi 飞行，MID360 点云识别柱子，
-     D435 深度图通过 override 任务闭环穿框。 -->
+<!-- CRAIC known-field mission: EGO for frame/attack-zone goals, ego_bridge override for direct moves,
+     QR search, low attack posture, and balloon puncture. -->
 <launch>
     <arg name="bridge_ns" default="/ego_bridge" />
-    <arg name="flight_z" default="0.9" />
-    <arg name="takeoff_height" default="0.65" />
+    <arg name="flight_z" default="1.0" />
+    <arg name="takeoff_height" default="1.0" />
     <arg name="land_after_finish" default="true" />
+
     <arg name="start_ego_planner" default="true" />
     <arg name="start_ego_bridge" default="true" />
     <arg name="start_cloud_self_filter" default="false" />
+    <arg name="start_frame_detector" default="true" />
+    <arg name="start_pillar_detector" default="false" />
+    <arg name="start_override_task_demo" default="false" />
+    <arg name="start_usb_aruco" default="true" />
+    <arg name="start_d435_balloon" default="true" />
+
     <arg name="readable_logs" default="true" />
     <arg name="mission_log_period" default="1.0" />
     <arg name="simple_logs" default="true" />
     <arg name="ego_fsm_verbose" default="false" />
     <arg name="ego_bridge_info_logs" default="false" />
+    <arg name="ego_api_verbose" default="false" />
     <arg name="detector_readable_log_period" default="0.0" />
     <arg name="cloud_filter_log_period" default="0.0" />
-    <arg name="ego_api_verbose" default="false" />
-    <arg name="climb_to_flight_z_before_detect" default="true" />
-    <arg name="override_climb_timeout" default="10.0" />
-    <arg name="override_climb_speed" default="0.18" />
-    <arg name="pillar_valid_max_age" default="0.5" />
-    <arg name="pillar_valid_count_required" default="5" />
-    <arg name="pillar_align_timeout" default="25.0" />
-    <arg name="pillar_align_threshold" default="0.12" />
-    <arg name="pillar_align_speed" default="0.10" />
-    <arg name="pillar_align_kp" default="0.65" />
-    <arg name="pillar_align_z_kp" default="0.9" />
-    <arg name="pillar_align_max_vz" default="0.12" />
-    <arg name="pillar_align_yaw_kp" default="0.6" />
-    <arg name="pillar_align_max_yaw_rate" default="0.25" />
-    <arg name="pillar_align_yaw_threshold" default="0.20" />
-    <arg name="pillar_align_hold_time" default="0.8" />
-    <arg name="enable_pillar_active_scan" default="true" />
-    <arg name="pillar_active_scan_delay" default="3.0" />
-    <arg name="pillar_scan_yaw_rate" default="0.35" />
-    <arg name="pillar_scan_lateral_speed" default="0.06" />
 
     <arg name="raw_cloud_topic" default="/cloud_registered" />
     <arg name="cloud_topic" default="/craic/cloud_filtered" />
     <arg name="ego_cloud_topic" default="/cloud_registered" />
-    <arg name="pillar_cloud_topic" default="/cloud_registered" />
     <arg name="odom_topic" default="/mavros/local_position/odom" />
-    <arg name="depth_topic" default="/d435/depth/image_raw" />
-    <arg name="camera_info_topic" default="/d435/depth/camera_info" />
-    <arg name="use_local_rule_roi" default="false" />
-    <arg name="field_length" default="6.0" />
-    <arg name="field_width" default="5.0" />
-    <arg name="pillar_search_forward_min" default="-0.25" />
-    <arg name="pillar_search_forward_max" default="6.5" />
-    <arg name="pillar_search_lateral_abs" default="3.0" />
-    <arg name="pillar_roi_x_min" default="-0.3" />
-    <arg name="pillar_roi_x_max" default="4.0" />
-    <arg name="pillar_roi_y_min" default="-2.5" />
-    <arg name="pillar_roi_y_max" default="2.5" />
-    <arg name="pillar_roi_z_min" default="0.05" />
-    <arg name="pillar_roi_z_max" default="1.9" />
-    <arg name="pillar_voxel_leaf" default="0.06" />
-    <arg name="pillar_width" default="0.50" />
-    <arg name="pillar_min_visible_height" default="0.32" />
-    <arg name="pillar_min_strong_height" default="0.50" />
-    <arg name="pillar_full_min_width" default="0.25" />
-    <arg name="pillar_full_max_width" default="0.75" />
-    <arg name="pillar_face_span_min" default="0.25" />
-    <arg name="pillar_face_span_max" default="0.75" />
-    <arg name="pillar_thin_face_max_width" default="0.22" />
-    <arg name="pillar_corner_max_width" default="0.28" />
-    <arg name="pillar_long_reject_width" default="0.85" />
-    <arg name="pillar_min_vertical_bins" default="2" />
-    <arg name="pillar_min_cluster_size" default="10" />
-    <arg name="pillar_max_cluster_size" default="8000" />
-    <arg name="pillar_cluster_tolerance" default="0.28" />
-    <arg name="pillar_pair_gap_min" default="0.8" />
-    <arg name="pillar_pair_gap_max" default="2.8" />
-    <arg name="pillar_pair_expected_gap" default="1.6" />
-    <arg name="pillar_pair_forward_tolerance" default="1.0" />
-    <arg name="pillar_goal_offset" default="0.90" />
-    <arg name="pillar_frame_switch_after_distance" default="0.60" />
-    <arg name="pillar_return_switch_after_distance" default="0.45" />
-    <arg name="pillar_stable_frames" default="3" />
-    <arg name="pillar_history_size" default="5" />
-    <arg name="pillar_stability_threshold" default="0.15" />
+
+    <arg name="initial_wait_x" default="0.0" />
+    <arg name="initial_wait_y" default="-0.85" />
+    <arg name="initial_wait_z" default="1.0" />
+    <arg name="expected_frame_x" default="2.7" />
+    <arg name="expected_frame_y" default="-1.5" />
+    <arg name="expected_frame_z" default="1.3" />
+    <arg name="frame_center_reject_distance" default="0.7" />
+    <arg name="frame_post_x_offset" default="1.0" />
+    <arg name="frame_detect_timeout" default="20.0" />
+    <arg name="frame_valid_max_age" default="0.8" />
+
+    <arg name="qr_goal_x" default="3.6" />
+    <arg name="qr_goal_y" default="0.25" />
+    <arg name="qr_goal_z" default="1.3" />
+    <arg name="qr_initial_wait" default="1.0" />
+    <arg name="qr_search_timeout" default="10.0" />
+    <arg name="qr_search_raise_z" default="0.2" />
+    <arg name="qr_search_offset" default="0.3" />
+    <arg name="qr_search_hold" default="0.35" />
+
+    <arg name="attack_zone_x" default="0.2" />
+    <arg name="attack_zone_y" default="-0.9" />
+    <arg name="attack_zone_z" default="1.0" />
+    <arg name="attack_height" default="0.3" />
+    <arg name="balloon_wait_timeout" default="8.0" />
+    <arg name="balloon_valid_max_age" default="0.8" />
+    <arg name="balloon_standoff" default="0.35" />
+    <arg name="balloon_puncture_distance" default="0.28" />
+    <arg name="balloon_puncture_speed" default="0.10" />
+    <arg name="balloon_approach_timeout" default="8.0" />
+    <arg name="balloon_align_timeout" default="6.0" />
+    <arg name="balloon_align_lateral_threshold" default="0.06" />
+    <arg name="balloon_align_forward_threshold" default="0.08" />
+    <arg name="balloon_align_z_threshold" default="0.06" />
+    <arg name="balloon_align_hold_time" default="0.35" />
+    <arg name="balloon_center_z_bias" default="0.0" />
+    <arg name="balloon_align_z_min" default="0.25" />
+    <arg name="balloon_align_z_max" default="0.60" />
+    <arg name="balloon_needle_length" default="0.18" />
+    <arg name="balloon_puncture_extra" default="0.04" />
+
+    <arg name="override_move_timeout" default="30.0" />
+    <arg name="override_pos_threshold" default="0.16" />
+    <arg name="override_yaw_timeout" default="5.0" />
+    <arg name="override_yaw_threshold" default="0.10" />
+    <arg name="override_yaw_hold_time" default="0.25" />
 
     <arg name="frame_cloud_topic" default="/cloud_registered" />
     <arg name="frame_goal_frame_id" default="world" />
-    <arg name="frame_detect_timeout" default="20.0" />
-    <arg name="frame_valid_max_age" default="0.6" />
-    <arg name="frame_valid_count_required" default="5" />
-    <arg name="frame_hold_at_pre" default="1.0" />
-    <arg name="frame_max_goal_distance" default="5.0" />
-    <arg name="frame_min_goal_z" default="0.35" />
-    <arg name="frame_max_goal_z" default="1.8" />
-    <arg name="frame_goal_fixed_z" default="1.00" />
-    <arg name="frame_auto_goal_z_min" default="1.00" />
-    <arg name="frame_auto_goal_z_max" default="1.65" />
-    <arg name="frame_auto_goal_z_fallback" default="1.1" />
-    <arg name="ego_goal_z_limit" default="2.0" />
-    <arg name="ego_goal_z_fallback" default="0.9" />
-    <arg name="frame_pre_direct_timeout" default="30.0" />
-    <arg name="frame_pre_direct_threshold" default="0.20" />
-    <arg name="enable_frame_opportunistic_lock" default="true" />
-    <arg name="prefer_full_frame_lock" default="true" />
-    <arg name="frame_full_prefer_timeout" default="4.0" />
-    <arg name="frame_use_override_direct_pass" default="false" />
-    <arg name="frame_override_timeout" default="20.0" />
-    <arg name="frame_override_speed" default="0.18" />
-    <arg name="frame_override_lateral_kp" default="0.8" />
-    <arg name="frame_override_max_lateral_speed" default="0.12" />
-    <arg name="frame_override_z_kp" default="0.8" />
-    <arg name="frame_override_max_vz" default="0.10" />
-    <arg name="frame_override_yaw_kp" default="0.7" />
-    <arg name="frame_override_max_yaw_rate" default="0.25" />
-    <arg name="frame_override_lateral_threshold" default="0.15" />
-    <arg name="frame_override_z_threshold" default="0.12" />
-    <arg name="frame_override_yaw_threshold" default="0.25" />
-    <arg name="enable_frame_yaw_align_override" default="true" />
-    <arg name="frame_yaw_align_timeout" default="4.0" />
-    <arg name="frame_yaw_align_threshold" default="0.12" />
-    <arg name="frame_yaw_align_hold_time" default="0.25" />
     <arg name="frame_height_mode" default="auto" />
-    <arg name="frame_gate_center_z" default="0.9" />
-    <arg name="frame_crossing_z" default="1.0" />
+    <arg name="frame_gate_center_z" default="1.3" />
+    <arg name="frame_crossing_z" default="1.3" />
     <arg name="frame_use_detected_center_z" default="true" />
     <arg name="frame_goal_z_follows_center" default="true" />
-    <arg name="frame_detected_center_z_bias" default="0.0" />
-    <arg name="frame_goal_z_bias" default="0.0" />
-    <arg name="frame_clamp_detected_center_z" default="false" />
-    <arg name="frame_center_z_min" default="0.45" />
-    <arg name="frame_center_z_max" default="1.20" />
-    <arg name="frame_auto_height_bottom_mode" default="detected" />
-    <arg name="frame_gate_bottom_z" default="0.15" />
-    <arg name="frame_auto_height_top_z_max" default="2.20" />
-    <arg name="frame_auto_height_forward_tolerance" default="0.35" />
-    <arg name="frame_auto_height_lateral_margin" default="0.18" />
-    <arg name="frame_auto_height_post_forward_margin" default="0.12" />
-    <arg name="frame_auto_height_post_lateral_margin" default="0.12" />
-    <arg name="frame_auto_height_low_quantile" default="0.05" />
-    <arg name="frame_auto_height_high_quantile" default="0.95" />
-    <arg name="frame_auto_height_min_span" default="0.45" />
-    <arg name="frame_auto_height_min_points" default="18" />
     <arg name="frame_use_local_rule_roi" default="true" />
+    <arg name="field_length" default="6.0" />
+    <arg name="field_width" default="5.0" />
     <arg name="frame_gate_search_x_min" default="-0.5" />
     <arg name="frame_gate_search_x_max" default="4.2" />
     <arg name="frame_gate_search_y_min" default="-2.5" />
     <arg name="frame_gate_search_y_max" default="2.5" />
-    <arg name="frame_roi_forward_min" default="0.20" />
-    <arg name="frame_roi_forward_max" default="5.00" />
-    <arg name="frame_roi_lateral_abs" default="2.50" />
     <arg name="frame_roi_z_min" default="0.15" />
     <arg name="frame_roi_z_max" default="2.20" />
-    <arg name="frame_post_extract_z_max" default="2.00" />
-    <arg name="frame_voxel_leaf" default="0.05" />
-    <arg name="frame_cluster_tolerance" default="0.22" />
-    <arg name="frame_min_cluster_size" default="8" />
-    <arg name="frame_max_cluster_size" default="5000" />
-    <arg name="frame_gate_post_min_width" default="0.05" />
-    <arg name="frame_gate_post_max_width" default="0.42" />
-    <arg name="frame_gate_post_weak_max_width" default="0.55" />
-    <arg name="frame_gate_frame_cluster_min_width" default="0.75" />
-    <arg name="frame_gate_frame_cluster_max_width" default="1.40" />
-    <arg name="frame_gate_split_side_band" default="0.22" />
-    <arg name="frame_gate_post_min_height" default="0.40" />
-    <arg name="frame_gate_post_weak_min_height" default="0.18" />
-    <arg name="frame_vertical_bin_size" default="0.18" />
-    <arg name="frame_gate_post_min_vertical_bins" default="2" />
-    <arg name="frame_gate_post_weak_min_vertical_bins" default="2" />
-    <arg name="frame_gate_width_min" default="0.85" />
-    <arg name="frame_gate_width_max" default="1.35" />
+    <arg name="frame_use_fixed_center_roi" default="true" />
+    <arg name="frame_fixed_roi_center_x" default="2.70" />
+    <arg name="frame_fixed_roi_center_y" default="-1.50" />
+    <arg name="frame_fixed_roi_center_z" default="1.30" />
+    <arg name="frame_fixed_roi_radius" default="2.65" />
     <arg name="frame_gate_width_expected" default="1.00" />
-    <arg name="frame_pair_forward_tolerance" default="0.35" />
-    <arg name="frame_allow_weak_single_partial" default="true" />
-    <arg name="frame_pre_offset" default="0.80" />
-    <arg name="frame_post_offset" default="0.70" />
-    <arg name="enable_qr_ego_scan" default="true" />
-    <arg name="qr_gate_half_width" default="0.50" />
-    <arg name="qr_forward_offset" default="1.00" />
-    <arg name="qr_left_offset" default="1.00" />
-    <arg name="qr_hold_time" default="2.0" />
     <arg name="frame_stable_frames" default="3" />
     <arg name="frame_history_size" default="5" />
     <arg name="frame_stability_threshold" default="0.18" />
     <arg name="frame_debug_log_period" default="1.0" />
     <arg name="frame_debug_top_clusters" default="0" />
 
-    <!-- 可选：调试用点云自滤波输出。默认飞行链路直接使用 /cloud_registered。 -->
+    <arg name="usb_camera_ns" default="usb_camera_vision" />
+    <arg name="usb_video_device" default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0" />
+    <arg name="usb_image_width" default="640" />
+    <arg name="usb_image_height" default="480" />
+    <arg name="usb_framerate" default="30" />
+    <arg name="usb_pixel_format" default="yuyv" />
+    <arg name="usb_aruco_preprocess_mode" default="gray" />
+
+    <arg name="d435_camera" default="camera" />
+    <arg name="d435_initial_reset" default="true" />
+    <arg name="d435_color_width" default="640" />
+    <arg name="d435_color_height" default="480" />
+    <arg name="d435_color_fps" default="30" />
+    <arg name="d435_depth_width" default="640" />
+    <arg name="d435_depth_height" default="480" />
+    <arg name="d435_depth_fps" default="30" />
+    <arg name="balloon_rgb_topic" default="/$(arg d435_camera)/color/image_raw" />
+    <arg name="balloon_depth_topic" default="/$(arg d435_camera)/aligned_depth_to_color/image_raw" />
+    <arg name="balloon_camera_info_topic" default="/$(arg d435_camera)/color/camera_info" />
+    <arg name="balloon_camera_body_x" default="0.0" />
+    <arg name="balloon_camera_body_y" default="0.0" />
+    <arg name="balloon_camera_body_z" default="0.0" />
+
     <node pkg="ego_api" type="craic_cloud_self_filter" name="craic_cloud_self_filter" output="screen"
           if="$(arg start_cloud_self_filter)">
         <param name="input_cloud_topic" value="$(arg raw_cloud_topic)" />
@@ -195,8 +139,6 @@
         <param name="log_period" value="$(arg cloud_filter_log_period)" />
     </node>
 
-    <!-- 拉起 EGO-Planner。当前实机话题：
-         odom=/mavros/local_position/odom，cloud=/cloud_registered。 -->
     <include file="$(find ego_planner)/launch/single_run_in_exp.launch"
              if="$(arg start_ego_planner)">
         <arg name="cloud_topic" value="$(arg ego_cloud_topic)" />
@@ -205,13 +147,10 @@
         <arg name="fsm_verbose" value="$(arg ego_fsm_verbose)" />
     </include>
 
-    <!-- 这里直接拉起 ego_bridge_node，而不是 include ego_bridge.launch。
-         原 launch 还会 include 当前仿真环境里不存在的 lidar_to_mavros。 -->
     <group if="$(arg start_ego_bridge)">
         <rosparam file="$(find ego_bridge)/config/ego_bridge_param.yaml" command="load"
                   ns="ego_bridge" />
         <node pkg="ego_bridge" type="ego_bridge_node" name="ego_bridge" output="screen">
-            <!-- api.takeoff() 的真正起飞完成高度：这里只控制起飞悬停高度，不等同于后续任务 flight_z。 -->
             <param name="takeoff/height" value="$(arg takeoff_height)" />
             <param name="log/info" value="$(arg ego_bridge_info_logs)" />
             <remap from="~odom" to="/mavros/local_position/odom" />
@@ -219,52 +158,17 @@
         </node>
     </group>
 
-    <!-- MID360/FAST-LIO 点云柱子识别，稳定后发布 /craic/pillar_pre_goal 和 post_goal。 -->
-    <node pkg="ego_api" type="craic_pillar_detector" name="craic_pillar_detector" output="screen">
-        <param name="cloud_topic" value="$(arg pillar_cloud_topic)" />
+    <node pkg="ego_api" type="craic_pillar_detector" name="craic_pillar_detector" output="screen"
+          if="$(arg start_pillar_detector)">
+        <param name="cloud_topic" value="$(arg raw_cloud_topic)" />
         <param name="odom_topic" value="$(arg odom_topic)" />
         <param name="flight_z" value="$(arg flight_z)" />
-        <param name="use_local_rule_roi" value="$(arg use_local_rule_roi)" />
-        <param name="field_length" value="$(arg field_length)" />
-        <param name="field_width" value="$(arg field_width)" />
-        <param name="search_forward_min" value="$(arg pillar_search_forward_min)" />
-        <param name="search_forward_max" value="$(arg pillar_search_forward_max)" />
-        <param name="search_lateral_abs" value="$(arg pillar_search_lateral_abs)" />
-        <param name="roi_x_min" value="$(arg pillar_roi_x_min)" />
-        <param name="roi_x_max" value="$(arg pillar_roi_x_max)" />
-        <param name="roi_y_min" value="$(arg pillar_roi_y_min)" />
-        <param name="roi_y_max" value="$(arg pillar_roi_y_max)" />
-        <param name="roi_z_min" value="$(arg pillar_roi_z_min)" />
-        <param name="roi_z_max" value="$(arg pillar_roi_z_max)" />
-        <param name="voxel_leaf" value="$(arg pillar_voxel_leaf)" />
-        <param name="pillar_width" value="$(arg pillar_width)" />
-        <param name="pillar_min_visible_height" value="$(arg pillar_min_visible_height)" />
-        <param name="pillar_min_strong_height" value="$(arg pillar_min_strong_height)" />
-        <param name="pillar_full_min_width" value="$(arg pillar_full_min_width)" />
-        <param name="pillar_full_max_width" value="$(arg pillar_full_max_width)" />
-        <param name="pillar_face_span_min" value="$(arg pillar_face_span_min)" />
-        <param name="pillar_face_span_max" value="$(arg pillar_face_span_max)" />
-        <param name="pillar_thin_face_max_width" value="$(arg pillar_thin_face_max_width)" />
-        <param name="pillar_corner_max_width" value="$(arg pillar_corner_max_width)" />
-        <param name="pillar_long_reject_width" value="$(arg pillar_long_reject_width)" />
-        <param name="pillar_min_vertical_bins" value="$(arg pillar_min_vertical_bins)" />
-        <param name="min_cluster_size" value="$(arg pillar_min_cluster_size)" />
-        <param name="max_cluster_size" value="$(arg pillar_max_cluster_size)" />
-        <param name="cluster_tolerance" value="$(arg pillar_cluster_tolerance)" />
-        <param name="pillar_pair_gap_min" value="$(arg pillar_pair_gap_min)" />
-        <param name="pillar_pair_gap_max" value="$(arg pillar_pair_gap_max)" />
-        <param name="pillar_pair_expected_gap" value="$(arg pillar_pair_expected_gap)" />
-        <param name="pair_forward_tolerance" value="$(arg pillar_pair_forward_tolerance)" />
-        <param name="goal_offset" value="$(arg pillar_goal_offset)" />
-        <param name="stable_frames" value="$(arg pillar_stable_frames)" />
-        <param name="history_size" value="$(arg pillar_history_size)" />
-        <param name="stability_threshold" value="$(arg pillar_stability_threshold)" />
         <param name="readable_logs" value="$(arg readable_logs)" />
         <param name="readable_log_period" value="$(arg detector_readable_log_period)" />
     </node>
 
-    <!-- MID360/FAST-LIO 点云窗框识别：发布 world 坐标下的 /craic/frame_pre_goal 和 post_goal。 -->
-    <node pkg="ego_api" type="craic_frame_detector" name="craic_frame_detector" output="screen">
+    <node pkg="ego_api" type="craic_frame_detector" name="craic_frame_detector" output="screen"
+          if="$(arg start_frame_detector)">
         <param name="cloud_topic" value="$(arg frame_cloud_topic)" />
         <param name="odom_topic" value="$(arg odom_topic)" />
         <param name="goal_frame_id" value="$(arg frame_goal_frame_id)" />
@@ -274,22 +178,6 @@
         <param name="crossing_z" value="$(arg frame_crossing_z)" />
         <param name="use_detected_center_z" value="$(arg frame_use_detected_center_z)" />
         <param name="goal_z_follows_center" value="$(arg frame_goal_z_follows_center)" />
-        <param name="detected_center_z_bias" value="$(arg frame_detected_center_z_bias)" />
-        <param name="goal_z_bias" value="$(arg frame_goal_z_bias)" />
-        <param name="clamp_detected_center_z" value="$(arg frame_clamp_detected_center_z)" />
-        <param name="center_z_min" value="$(arg frame_center_z_min)" />
-        <param name="center_z_max" value="$(arg frame_center_z_max)" />
-        <param name="auto_height_bottom_mode" value="$(arg frame_auto_height_bottom_mode)" />
-        <param name="gate_bottom_z" value="$(arg frame_gate_bottom_z)" />
-        <param name="auto_height_top_z_max" value="$(arg frame_auto_height_top_z_max)" />
-        <param name="auto_height_forward_tolerance" value="$(arg frame_auto_height_forward_tolerance)" />
-        <param name="auto_height_lateral_margin" value="$(arg frame_auto_height_lateral_margin)" />
-        <param name="auto_height_post_forward_margin" value="$(arg frame_auto_height_post_forward_margin)" />
-        <param name="auto_height_post_lateral_margin" value="$(arg frame_auto_height_post_lateral_margin)" />
-        <param name="auto_height_low_quantile" value="$(arg frame_auto_height_low_quantile)" />
-        <param name="auto_height_high_quantile" value="$(arg frame_auto_height_high_quantile)" />
-        <param name="auto_height_min_span" value="$(arg frame_auto_height_min_span)" />
-        <param name="auto_height_min_points" value="$(arg frame_auto_height_min_points)" />
         <param name="use_local_rule_roi" value="$(arg frame_use_local_rule_roi)" />
         <param name="field_length" value="$(arg field_length)" />
         <param name="field_width" value="$(arg field_width)" />
@@ -297,34 +185,14 @@
         <param name="gate_search_x_max" value="$(arg frame_gate_search_x_max)" />
         <param name="gate_search_y_min" value="$(arg frame_gate_search_y_min)" />
         <param name="gate_search_y_max" value="$(arg frame_gate_search_y_max)" />
-        <param name="roi_forward_min" value="$(arg frame_roi_forward_min)" />
-        <param name="roi_forward_max" value="$(arg frame_roi_forward_max)" />
-        <param name="roi_lateral_abs" value="$(arg frame_roi_lateral_abs)" />
         <param name="roi_z_min" value="$(arg frame_roi_z_min)" />
         <param name="roi_z_max" value="$(arg frame_roi_z_max)" />
-        <param name="post_extract_z_max" value="$(arg frame_post_extract_z_max)" />
-        <param name="voxel_leaf" value="$(arg frame_voxel_leaf)" />
-        <param name="cluster_tolerance" value="$(arg frame_cluster_tolerance)" />
-        <param name="min_cluster_size" value="$(arg frame_min_cluster_size)" />
-        <param name="max_cluster_size" value="$(arg frame_max_cluster_size)" />
-        <param name="gate_post_min_width" value="$(arg frame_gate_post_min_width)" />
-        <param name="gate_post_max_width" value="$(arg frame_gate_post_max_width)" />
-        <param name="gate_post_weak_max_width" value="$(arg frame_gate_post_weak_max_width)" />
-        <param name="gate_frame_cluster_min_width" value="$(arg frame_gate_frame_cluster_min_width)" />
-        <param name="gate_frame_cluster_max_width" value="$(arg frame_gate_frame_cluster_max_width)" />
-        <param name="gate_split_side_band" value="$(arg frame_gate_split_side_band)" />
-        <param name="gate_post_min_height" value="$(arg frame_gate_post_min_height)" />
-        <param name="gate_post_weak_min_height" value="$(arg frame_gate_post_weak_min_height)" />
-        <param name="vertical_bin_size" value="$(arg frame_vertical_bin_size)" />
-        <param name="gate_post_min_vertical_bins" value="$(arg frame_gate_post_min_vertical_bins)" />
-        <param name="gate_post_weak_min_vertical_bins" value="$(arg frame_gate_post_weak_min_vertical_bins)" />
-        <param name="gate_width_min" value="$(arg frame_gate_width_min)" />
-        <param name="gate_width_max" value="$(arg frame_gate_width_max)" />
+        <param name="use_fixed_center_roi" value="$(arg frame_use_fixed_center_roi)" />
+        <param name="fixed_roi_center_x" value="$(arg frame_fixed_roi_center_x)" />
+        <param name="fixed_roi_center_y" value="$(arg frame_fixed_roi_center_y)" />
+        <param name="fixed_roi_center_z" value="$(arg frame_fixed_roi_center_z)" />
+        <param name="fixed_roi_radius" value="$(arg frame_fixed_roi_radius)" />
         <param name="gate_width_expected" value="$(arg frame_gate_width_expected)" />
-        <param name="pair_forward_tolerance" value="$(arg frame_pair_forward_tolerance)" />
-        <param name="allow_weak_single_partial" value="$(arg frame_allow_weak_single_partial)" />
-        <param name="pre_offset" value="$(arg frame_pre_offset)" />
-        <param name="post_offset" value="$(arg frame_post_offset)" />
         <param name="stable_frames" value="$(arg frame_stable_frames)" />
         <param name="history_size" value="$(arg frame_history_size)" />
         <param name="stability_threshold" value="$(arg frame_stability_threshold)" />
@@ -334,85 +202,92 @@
         <param name="readable_log_period" value="$(arg detector_readable_log_period)" />
     </node>
 
-    <!-- override 任务节点：负责 D435 穿框，以及二维码/气球占位任务。 -->
-    <node pkg="ego_api" type="override_task_demo" name="override_task_demo" output="screen">
+    <include file="$(find usb_camera_vision)/launch/usb_camera.launch"
+             if="$(arg start_usb_aruco)">
+        <arg name="camera_ns" value="$(arg usb_camera_ns)" />
+        <arg name="video_device" value="$(arg usb_video_device)" />
+        <arg name="image_width" value="$(arg usb_image_width)" />
+        <arg name="image_height" value="$(arg usb_image_height)" />
+        <arg name="framerate" value="$(arg usb_framerate)" />
+        <arg name="pixel_format" value="$(arg usb_pixel_format)" />
+        <arg name="enable_aruco" value="true" />
+        <arg name="aruco_preprocess_mode" value="$(arg usb_aruco_preprocess_mode)" />
+    </include>
+
+    <include file="$(find usb_camera_vision)/launch/d435_balloon_detector.launch"
+             if="$(arg start_d435_balloon)">
+        <arg name="camera" value="$(arg d435_camera)" />
+        <arg name="initial_reset" value="$(arg d435_initial_reset)" />
+        <arg name="color_width" value="$(arg d435_color_width)" />
+        <arg name="color_height" value="$(arg d435_color_height)" />
+        <arg name="color_fps" value="$(arg d435_color_fps)" />
+        <arg name="depth_width" value="$(arg d435_depth_width)" />
+        <arg name="depth_height" value="$(arg d435_depth_height)" />
+        <arg name="depth_fps" value="$(arg d435_depth_fps)" />
+        <arg name="rgb_topic" value="$(arg balloon_rgb_topic)" />
+        <arg name="depth_topic" value="$(arg balloon_depth_topic)" />
+        <arg name="camera_info_topic" value="$(arg balloon_camera_info_topic)" />
+        <arg name="odom_topic" value="$(arg odom_topic)" />
+        <arg name="camera_body_x" value="$(arg balloon_camera_body_x)" />
+        <arg name="camera_body_y" value="$(arg balloon_camera_body_y)" />
+        <arg name="camera_body_z" value="$(arg balloon_camera_body_z)" />
+    </include>
+
+    <node pkg="ego_api" type="override_task_demo" name="override_task_demo" output="screen"
+          if="$(arg start_override_task_demo)">
         <param name="bridge_ns" value="$(arg bridge_ns)" />
         <param name="ego_api_verbose" value="$(arg ego_api_verbose)" />
         <param name="flight_z" value="$(arg flight_z)" />
-        <param name="depth_topic" value="$(arg depth_topic)" />
-        <param name="camera_info_topic" value="$(arg camera_info_topic)" />
     </node>
 
-    <!-- 比赛主流程：起飞、等柱子、过柱、穿框、返程、回击打区、降落。 -->
     <node pkg="ego_api" type="craic_competition_demo" name="craic_competition_demo" output="screen">
         <param name="bridge_ns" value="$(arg bridge_ns)" />
         <param name="ego_api_verbose" value="$(arg ego_api_verbose)" />
         <param name="mission_log_period" value="$(arg mission_log_period)" />
         <param name="simple_logs" value="$(arg simple_logs)" />
-        <param name="flight_z" value="$(arg flight_z)" />
-        <param name="goal_frame_id" value="$(arg frame_goal_frame_id)" />
         <param name="land_after_finish" value="$(arg land_after_finish)" />
-        <param name="climb_to_flight_z_before_detect" value="$(arg climb_to_flight_z_before_detect)" />
-        <param name="override_climb_timeout" value="$(arg override_climb_timeout)" />
-        <param name="override_climb_speed" value="$(arg override_climb_speed)" />
-        <param name="pillar_valid_max_age" value="$(arg pillar_valid_max_age)" />
-        <param name="pillar_valid_count_required" value="$(arg pillar_valid_count_required)" />
-        <param name="pillar_align_timeout" value="$(arg pillar_align_timeout)" />
-        <param name="pillar_align_threshold" value="$(arg pillar_align_threshold)" />
-        <param name="pillar_align_speed" value="$(arg pillar_align_speed)" />
-        <param name="pillar_align_kp" value="$(arg pillar_align_kp)" />
-        <param name="pillar_align_z_kp" value="$(arg pillar_align_z_kp)" />
-        <param name="pillar_align_max_vz" value="$(arg pillar_align_max_vz)" />
-        <param name="pillar_align_yaw_kp" value="$(arg pillar_align_yaw_kp)" />
-        <param name="pillar_align_max_yaw_rate" value="$(arg pillar_align_max_yaw_rate)" />
-        <param name="pillar_align_yaw_threshold" value="$(arg pillar_align_yaw_threshold)" />
-        <param name="pillar_align_hold_time" value="$(arg pillar_align_hold_time)" />
-        <param name="pillar_frame_switch_after_distance" value="$(arg pillar_frame_switch_after_distance)" />
-        <param name="pillar_return_switch_after_distance" value="$(arg pillar_return_switch_after_distance)" />
-        <param name="enable_pillar_active_scan" value="$(arg enable_pillar_active_scan)" />
-        <param name="pillar_active_scan_delay" value="$(arg pillar_active_scan_delay)" />
-        <param name="pillar_scan_yaw_rate" value="$(arg pillar_scan_yaw_rate)" />
-        <param name="pillar_scan_lateral_speed" value="$(arg pillar_scan_lateral_speed)" />
+        <param name="initial_wait_x" value="$(arg initial_wait_x)" />
+        <param name="initial_wait_y" value="$(arg initial_wait_y)" />
+        <param name="initial_wait_z" value="$(arg initial_wait_z)" />
+        <param name="expected_frame_x" value="$(arg expected_frame_x)" />
+        <param name="expected_frame_y" value="$(arg expected_frame_y)" />
+        <param name="expected_frame_z" value="$(arg expected_frame_z)" />
+        <param name="frame_center_reject_distance" value="$(arg frame_center_reject_distance)" />
+        <param name="frame_post_x_offset" value="$(arg frame_post_x_offset)" />
         <param name="frame_detect_timeout" value="$(arg frame_detect_timeout)" />
         <param name="frame_valid_max_age" value="$(arg frame_valid_max_age)" />
-        <param name="frame_valid_count_required" value="$(arg frame_valid_count_required)" />
-        <param name="frame_hold_at_pre" value="$(arg frame_hold_at_pre)" />
-        <param name="frame_max_goal_distance" value="$(arg frame_max_goal_distance)" />
-        <param name="frame_min_goal_z" value="$(arg frame_min_goal_z)" />
-        <param name="frame_max_goal_z" value="$(arg frame_max_goal_z)" />
-        <param name="frame_goal_fixed_z" value="$(arg frame_goal_fixed_z)" />
-        <param name="frame_auto_goal_z_min" value="$(arg frame_auto_goal_z_min)" />
-        <param name="frame_auto_goal_z_max" value="$(arg frame_auto_goal_z_max)" />
-        <param name="frame_auto_goal_z_fallback" value="$(arg frame_auto_goal_z_fallback)" />
-        <param name="ego_goal_z_limit" value="$(arg ego_goal_z_limit)" />
-        <param name="ego_goal_z_fallback" value="$(arg ego_goal_z_fallback)" />
-        <param name="frame_pre_direct_timeout" value="$(arg frame_pre_direct_timeout)" />
-        <param name="frame_pre_direct_threshold" value="$(arg frame_pre_direct_threshold)" />
-        <param name="enable_frame_opportunistic_lock" value="$(arg enable_frame_opportunistic_lock)" />
-        <param name="prefer_full_frame_lock" value="$(arg prefer_full_frame_lock)" />
-        <param name="frame_full_prefer_timeout" value="$(arg frame_full_prefer_timeout)" />
-        <param name="frame_use_override_direct_pass" value="$(arg frame_use_override_direct_pass)" />
-        <param name="frame_override_timeout" value="$(arg frame_override_timeout)" />
-        <param name="frame_override_speed" value="$(arg frame_override_speed)" />
-        <param name="frame_override_lateral_kp" value="$(arg frame_override_lateral_kp)" />
-        <param name="frame_override_max_lateral_speed" value="$(arg frame_override_max_lateral_speed)" />
-        <param name="frame_override_z_kp" value="$(arg frame_override_z_kp)" />
-        <param name="frame_override_max_vz" value="$(arg frame_override_max_vz)" />
-        <param name="frame_override_yaw_kp" value="$(arg frame_override_yaw_kp)" />
-        <param name="frame_override_max_yaw_rate" value="$(arg frame_override_max_yaw_rate)" />
-        <param name="frame_override_lateral_threshold" value="$(arg frame_override_lateral_threshold)" />
-        <param name="frame_override_z_threshold" value="$(arg frame_override_z_threshold)" />
-        <param name="frame_override_yaw_threshold" value="$(arg frame_override_yaw_threshold)" />
-        <param name="enable_frame_yaw_align_override" value="$(arg enable_frame_yaw_align_override)" />
-        <param name="frame_yaw_align_timeout" value="$(arg frame_yaw_align_timeout)" />
-        <param name="frame_yaw_align_threshold" value="$(arg frame_yaw_align_threshold)" />
-        <param name="frame_yaw_align_hold_time" value="$(arg frame_yaw_align_hold_time)" />
-        <param name="frame_pre_offset" value="$(arg frame_pre_offset)" />
-        <param name="frame_post_offset" value="$(arg frame_post_offset)" />
-        <param name="enable_qr_ego_scan" value="$(arg enable_qr_ego_scan)" />
-        <param name="qr_gate_half_width" value="$(arg qr_gate_half_width)" />
-        <param name="qr_forward_offset" value="$(arg qr_forward_offset)" />
-        <param name="qr_left_offset" value="$(arg qr_left_offset)" />
-        <param name="qr_hold_time" value="$(arg qr_hold_time)" />
+        <param name="qr_goal_x" value="$(arg qr_goal_x)" />
+        <param name="qr_goal_y" value="$(arg qr_goal_y)" />
+        <param name="qr_goal_z" value="$(arg qr_goal_z)" />
+        <param name="qr_initial_wait" value="$(arg qr_initial_wait)" />
+        <param name="qr_search_timeout" value="$(arg qr_search_timeout)" />
+        <param name="qr_search_raise_z" value="$(arg qr_search_raise_z)" />
+        <param name="qr_search_offset" value="$(arg qr_search_offset)" />
+        <param name="qr_search_hold" value="$(arg qr_search_hold)" />
+        <param name="attack_zone_x" value="$(arg attack_zone_x)" />
+        <param name="attack_zone_y" value="$(arg attack_zone_y)" />
+        <param name="attack_zone_z" value="$(arg attack_zone_z)" />
+        <param name="attack_height" value="$(arg attack_height)" />
+        <param name="balloon_wait_timeout" value="$(arg balloon_wait_timeout)" />
+        <param name="balloon_valid_max_age" value="$(arg balloon_valid_max_age)" />
+        <param name="balloon_standoff" value="$(arg balloon_standoff)" />
+        <param name="balloon_puncture_distance" value="$(arg balloon_puncture_distance)" />
+        <param name="balloon_puncture_speed" value="$(arg balloon_puncture_speed)" />
+        <param name="balloon_approach_timeout" value="$(arg balloon_approach_timeout)" />
+        <param name="balloon_align_timeout" value="$(arg balloon_align_timeout)" />
+        <param name="balloon_align_lateral_threshold" value="$(arg balloon_align_lateral_threshold)" />
+        <param name="balloon_align_forward_threshold" value="$(arg balloon_align_forward_threshold)" />
+        <param name="balloon_align_z_threshold" value="$(arg balloon_align_z_threshold)" />
+        <param name="balloon_align_hold_time" value="$(arg balloon_align_hold_time)" />
+        <param name="balloon_center_z_bias" value="$(arg balloon_center_z_bias)" />
+        <param name="balloon_align_z_min" value="$(arg balloon_align_z_min)" />
+        <param name="balloon_align_z_max" value="$(arg balloon_align_z_max)" />
+        <param name="balloon_needle_length" value="$(arg balloon_needle_length)" />
+        <param name="balloon_puncture_extra" value="$(arg balloon_puncture_extra)" />
+        <param name="override_move_timeout" value="$(arg override_move_timeout)" />
+        <param name="override_pos_threshold" value="$(arg override_pos_threshold)" />
+        <param name="override_yaw_timeout" value="$(arg override_yaw_timeout)" />
+        <param name="override_yaw_threshold" value="$(arg override_yaw_threshold)" />
+        <param name="override_yaw_hold_time" value="$(arg override_yaw_hold_time)" />
     </node>
 </launch>

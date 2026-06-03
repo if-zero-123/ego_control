@@ -105,6 +105,7 @@ struct GateDetection {
     bool partial = false;
     bool weak_pair = false;
     bool split_frame = false;
+    bool frame_cluster = false;
     std::string height_source = "none";
     double height_low_z = 0.0;
     double height_high_z = 0.0;
@@ -120,6 +121,13 @@ struct HeightEstimate {
     double span = 0.0;
     int points = 0;
     std::string source = "none";
+};
+
+struct FrameClusterCandidate {
+    GatePostCandidate whole;
+    GatePostCandidate left;
+    GatePostCandidate right;
+    double score = -std::numeric_limits<double>::infinity();
 };
 
 class FrameCloudDebugNode {
@@ -166,6 +174,17 @@ public:
         pnh_.param<double>("roi_z_min", roi_z_min_, 0.15);
         pnh_.param<double>("roi_z_max", roi_z_max_, 2.20);
         pnh_.param<double>("post_extract_z_max", post_extract_z_max_, 2.00);
+        pnh_.param<bool>("use_fixed_center_roi", use_fixed_center_roi_, true);
+        pnh_.param<double>("fixed_roi_center_x", fixed_roi_center_x_, 2.70);
+        pnh_.param<double>("fixed_roi_center_y", fixed_roi_center_y_, -1.50);
+        pnh_.param<double>("fixed_roi_center_z", fixed_roi_center_z_, 1.40);
+        pnh_.param<double>("fixed_roi_radius", fixed_roi_radius_, 2.65);
+        pnh_.param<bool>("use_body_exclusion", use_body_exclusion_, false);
+        pnh_.param<double>("body_exclusion_forward_min", body_exclusion_forward_min_, -0.55);
+        pnh_.param<double>("body_exclusion_forward_max", body_exclusion_forward_max_, 0.45);
+        pnh_.param<double>("body_exclusion_lateral_abs", body_exclusion_lateral_abs_, 0.45);
+        pnh_.param<double>("body_exclusion_z_min", body_exclusion_z_min_, -0.45);
+        pnh_.param<double>("body_exclusion_z_max", body_exclusion_z_max_, 0.35);
 
         pnh_.param<double>("voxel_leaf", voxel_leaf_, 0.05);
         pnh_.param<double>("cluster_tolerance", cluster_tolerance_, 0.22);
@@ -177,6 +196,12 @@ public:
         pnh_.param<double>("gate_post_weak_max_width", gate_post_weak_max_width_, 0.55);
         pnh_.param<double>("gate_frame_cluster_min_width", gate_frame_cluster_min_width_, 0.75);
         pnh_.param<double>("gate_frame_cluster_max_width", gate_frame_cluster_max_width_, 1.40);
+        pnh_.param<bool>("prefer_frame_cluster", prefer_frame_cluster_, true);
+        pnh_.param<double>("frame_cluster_forward_width_min", frame_cluster_forward_width_min_, 0.02);
+        pnh_.param<double>("frame_cluster_forward_width_max", frame_cluster_forward_width_max_, 0.30);
+        pnh_.param<double>("frame_cluster_min_height", frame_cluster_min_height_, 0.80);
+        pnh_.param<double>("frame_cluster_max_height", frame_cluster_max_height_, 2.20);
+        pnh_.param<int>("frame_cluster_min_points", frame_cluster_min_points_, 80);
         pnh_.param<double>("gate_split_side_band", gate_split_side_band_, 0.22);
         pnh_.param<double>("gate_post_min_height", gate_post_min_height_, 0.40);
         pnh_.param<double>("gate_post_weak_min_height", gate_post_weak_min_height_, 0.18);
@@ -188,6 +213,11 @@ public:
         pnh_.param<double>("gate_width_max", gate_width_max_, 1.35);
         pnh_.param<double>("gate_width_expected", gate_width_expected_, 1.00);
         pnh_.param<double>("pair_forward_tolerance", pair_forward_tolerance_, 0.35);
+        pnh_.param<bool>("enforce_gate_center_constraint", enforce_gate_center_constraint_, true);
+        pnh_.param<double>("gate_center_y_tolerance", gate_center_y_tolerance_, 0.45);
+        pnh_.param<double>("partial_center_y_tolerance", partial_center_y_tolerance_, 0.65);
+        pnh_.param<double>("pair_max_height_delta", pair_max_height_delta_, 0.60);
+        pnh_.param<double>("pair_min_height_overlap", pair_min_height_overlap_, 0.15);
         pnh_.param<bool>("allow_weak_single_partial", allow_weak_single_partial_, true);
 
         pnh_.param<double>("pre_offset", pre_offset_, 0.60);
@@ -207,7 +237,7 @@ public:
         post_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic_debug/frame_cloud_post_goal", 1, true);
         marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/craic_debug/frame_cloud_markers", 1, true);
 
-        ROS_INFO("[frame_cloud_debug] cloud=%s odom=%s marker_frame=%s goal_frame=%s flight_z=%.2f height_mode=%s gate_center_z=%.2f crossing_z=%.2f detected_z=%d goal_z_follows_center=%d center_z_bias=%.2f goal_z_bias=%.2f clamp_z=%d center_z_safety=[%.2f %.2f] bottom_mode=%s gate_bottom_z=%.2f auto_top_z_max=%.2f auto_gate_tol=%.2f auto_post_margin=(%.2f %.2f) q=[%.2f %.2f] min_span=%.2f min_pts=%d local_rule_roi=%d field=%.2fx%.2f gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f] post_z_max=%.2f fallback=front[%.2f %.2f] lat=+/-%.2f weak_single=%d",
+        ROS_INFO("[frame_cloud_debug] cloud=%s odom=%s marker_frame=%s goal_frame=%s flight_z=%.2f height_mode=%s gate_center_z=%.2f crossing_z=%.2f detected_z=%d goal_z_follows_center=%d center_z_bias=%.2f goal_z_bias=%.2f clamp_z=%d center_z_safety=[%.2f %.2f] bottom_mode=%s gate_bottom_z=%.2f auto_top_z_max=%.2f auto_gate_tol=%.2f auto_post_margin=(%.2f %.2f) q=[%.2f %.2f] min_span=%.2f min_pts=%d local_rule_roi=%d field=%.2fx%.2f gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f] post_z_max=%.2f fixed_roi=%d center=(%.2f %.2f %.2f) radius=%.2f body_exclusion=%d body_box=x[%.2f %.2f] y=+/-%.2f dz[%.2f %.2f] fallback=front[%.2f %.2f] lat=+/-%.2f weak_single=%d",
                  cloud_topic_.c_str(), odom_topic_.c_str(),
                  configured_frame_id_.empty() ? "<cloud>" : configured_frame_id_.c_str(),
                  goal_frame_id_.c_str(), flight_z_,
@@ -222,13 +252,22 @@ public:
                  use_local_rule_roi_,
                  field_length_, field_width_, gate_search_x_min_, gate_search_x_max_,
                  gate_search_y_min_, gate_search_y_max_, roi_z_min_, roi_z_max_, post_extract_z_max_,
+                 use_fixed_center_roi_, fixed_roi_center_x_, fixed_roi_center_y_,
+                 fixed_roi_center_z_, fixed_roi_radius_,
+                 use_body_exclusion_, body_exclusion_forward_min_, body_exclusion_forward_max_,
+                 body_exclusion_lateral_abs_, body_exclusion_z_min_, body_exclusion_z_max_,
                  roi_forward_min_, roi_forward_max_, roi_lateral_abs_, allow_weak_single_partial_);
-        ROS_INFO("[frame_cloud_debug] cluster leaf=%.2f tol=%.2f min=%d post_width=[%.2f %.2f] weak_width<=%.2f frame_width=[%.2f %.2f] post_h>=%.2f weak_h>=%.2f gate_width=[%.2f %.2f] forward_tol=%.2f",
+        ROS_INFO("[frame_cloud_debug] cluster leaf=%.2f tol=%.2f min=%d post_width=[%.2f %.2f] weak_width<=%.2f frame_width=[%.2f %.2f] frame_forward=[%.2f %.2f] frame_h=[%.2f %.2f] frame_min_pts=%d prefer_frame=%d post_h>=%.2f weak_h>=%.2f gate_width=[%.2f %.2f] forward_tol=%.2f center_constraint=%d center_y_tol=%.2f partial_y_tol=%.2f pair_height_delta<=%.2f pair_height_overlap>=%.2f",
                  voxel_leaf_, cluster_tolerance_, min_cluster_size_,
                  gate_post_min_width_, gate_post_max_width_, gate_post_weak_max_width_,
                  gate_frame_cluster_min_width_, gate_frame_cluster_max_width_,
+                 frame_cluster_forward_width_min_, frame_cluster_forward_width_max_,
+                 frame_cluster_min_height_, frame_cluster_max_height_, frame_cluster_min_points_,
+                 prefer_frame_cluster_,
                  gate_post_min_height_, gate_post_weak_min_height_,
-                 gate_width_min_, gate_width_max_, pair_forward_tolerance_);
+                 gate_width_min_, gate_width_max_, pair_forward_tolerance_,
+                 enforce_gate_center_constraint_, gate_center_y_tolerance_,
+                 partial_center_y_tolerance_, pair_max_height_delta_, pair_min_height_overlap_);
     }
 
 private:
@@ -286,6 +325,8 @@ private:
         for (const auto& pt : down->points) {
             if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
             const Eigen::Vector3d world(pt.x, pt.y, pt.z);
+            if (!inFixedCenterRoi(world)) continue;
+            if (inBodyExclusion(world)) continue;
             if (!inSearchRoi(world)) continue;
             if (world.z() < roi_z_min_ || world.z() > roi_z_max_) continue;
             roi->points.push_back(pt);
@@ -330,32 +371,80 @@ private:
 
         std::vector<GatePostCandidate> candidates;
         std::vector<GatePostCandidate> split_candidates;
+        std::vector<FrameClusterCandidate> frame_clusters;
         std::vector<ClusterDebugInfo> cluster_debug;
         for (const auto& indices : cluster_indices) {
             GatePostCandidate candidate;
             if (!buildCandidate(*post_roi, indices, candidate)) continue;
             classifyCandidate(candidate);
-            cluster_debug.push_back(makeDebugInfo(candidate));
+            bool add_candidate_to_pairs = candidate.accepted;
             if (!candidate.accepted) {
-                GatePostCandidate split_left;
-                GatePostCandidate split_right;
-                if (splitWideFrameCluster(*post_roi, indices, split_left, split_right)) {
-                    split_candidates.push_back(split_left);
-                    split_candidates.push_back(split_right);
+                FrameClusterCandidate frame_cluster;
+                if (buildFrameClusterCandidate(*post_roi, indices, frame_cluster)) {
+                    frame_clusters.push_back(frame_cluster);
+                    split_candidates.push_back(frame_cluster.left);
+                    split_candidates.push_back(frame_cluster.right);
+                    candidate.accepted = true;
+                    candidate.strong = true;
+                    candidate.weak = false;
+                    candidate.reason = "accepted_frame_cluster";
+                    candidate.confidence = frame_cluster.score;
+                    add_candidate_to_pairs = false;
                 }
             }
-            if (candidate.accepted) {
+            cluster_debug.push_back(makeDebugInfo(candidate));
+            if (add_candidate_to_pairs) {
                 candidates.push_back(candidate);
             }
         }
         sortDebug(cluster_debug);
         std::vector<GatePostCandidate> all_debug_candidates = candidates;
         all_debug_candidates.insert(all_debug_candidates.end(), split_candidates.begin(), split_candidates.end());
+        for (const auto& frame_cluster : frame_clusters) {
+            all_debug_candidates.push_back(frame_cluster.whole);
+        }
         cacheCandidateCenters(all_debug_candidates);
 
         GatePostCandidate left_post;
         GatePostCandidate right_post;
         double pair_score = 0.0;
+
+        if (prefer_frame_cluster_ &&
+            selectBestFrameCluster(frame_clusters, left_post, right_post, pair_score)) {
+            GateDetection detection = makeFullDetection(left_post, right_post, *post_roi);
+            detection.frame_cluster = true;
+            if (!detection.valid) {
+                publishStatus("invalid_frame_cluster_geometry");
+                publishCandidateMarkers(frame_id, msg->header.stamp);
+                logFrame("invalid_frame_cluster_geometry", *msg, input->size(), down->size(), roi->size(), post_roi->size(),
+                         cluster_indices.size(), candidates.size() + split_candidates.size(), cluster_debug, nullptr);
+                return;
+            }
+
+            history_.push_back(detection);
+            while (static_cast<int>(history_.size()) > history_size_) {
+                history_.pop_front();
+            }
+
+            if (!isStable()) {
+                publishStatus("stabilizing_frame_cluster");
+                publishMarkers(detection, frame_id, msg->header.stamp, false);
+                logFrame("stabilizing_frame_cluster", *msg, input->size(), down->size(), roi->size(), post_roi->size(),
+                         cluster_indices.size(), candidates.size() + split_candidates.size(), cluster_debug,
+                         &detection, pair_score);
+                return;
+            }
+
+            latest_ = averageHistory();
+            latest_.frame_cluster = true;
+            publishOutputs(latest_, msg->header.stamp);
+            publishMarkers(latest_, frame_id, msg->header.stamp, true);
+            publishStatus("valid_frame_cluster");
+            logFrame("valid_frame_cluster", *msg, input->size(), down->size(), roi->size(), post_roi->size(),
+                     cluster_indices.size(), candidates.size() + split_candidates.size(), cluster_debug,
+                     &latest_, pair_score);
+            return;
+        }
 
         if (candidates.size() >= 2 &&
             selectBestPair(candidates, left_post, right_post, pair_score, false)) {
@@ -470,6 +559,25 @@ private:
                std::abs(local.y()) <= roi_lateral_abs_;
     }
 
+    bool inFixedCenterRoi(const Eigen::Vector3d& world) const {
+        if (!use_fixed_center_roi_) return true;
+        const Eigen::Vector3d center(fixed_roi_center_x_,
+                                     fixed_roi_center_y_,
+                                     fixed_roi_center_z_);
+        return (world - center).squaredNorm() <= fixed_roi_radius_ * fixed_roi_radius_;
+    }
+
+    bool inBodyExclusion(const Eigen::Vector3d& world) const {
+        if (!use_body_exclusion_) return false;
+        const Eigen::Vector2d body = worldToBodyLocalXY(world);
+        const double dz = world.z() - odom_pos_.z();
+        return body.x() >= body_exclusion_forward_min_ &&
+               body.x() <= body_exclusion_forward_max_ &&
+               std::abs(body.y()) <= body_exclusion_lateral_abs_ &&
+               dz >= body_exclusion_z_min_ &&
+               dz <= body_exclusion_z_max_;
+    }
+
     Eigen::Vector2d worldToLocalXY(const Eigen::Vector3d& world) const {
         return use_local_rule_roi_ ? worldToFieldLocalXY(world) : worldToBodyLocalXY(world);
     }
@@ -514,6 +622,29 @@ private:
 
     double gateSearchCenterY() const {
         return 0.5 * (gate_search_y_min_ + gate_search_y_max_);
+    }
+
+    bool passesGateCenterConstraint(double center_y, double tolerance) const {
+        if (!enforce_gate_center_constraint_) return true;
+        return std::abs(center_y - gateSearchCenterY()) <= tolerance;
+    }
+
+    double pairHeightDelta(const GatePostCandidate& a,
+                           const GatePostCandidate& b) const {
+        const double a_center_z = 0.5 * (a.low_z + a.high_z);
+        const double b_center_z = 0.5 * (b.low_z + b.high_z);
+        return std::abs(a_center_z - b_center_z);
+    }
+
+    bool pairHeightCompatible(const GatePostCandidate& a,
+                              const GatePostCandidate& b) const {
+        if (pair_max_height_delta_ >= 0.0 &&
+            pairHeightDelta(a, b) > pair_max_height_delta_) {
+            return false;
+        }
+        if (pair_min_height_overlap_ <= 0.0) return true;
+        const double overlap = std::min(a.high_z, b.high_z) - std::max(a.low_z, b.low_z);
+        return overlap >= pair_min_height_overlap_;
     }
 
     double clampCenterZ(double z) const {
@@ -995,6 +1126,92 @@ private:
         return true;
     }
 
+    bool buildFrameClusterCandidate(const pcl::PointCloud<pcl::PointXYZ>& cloud,
+                                    const pcl::PointIndices& indices,
+                                    FrameClusterCandidate& out) const {
+        if (indices.indices.empty()) return false;
+
+        GatePostCandidate whole;
+        if (!buildCandidate(cloud, indices, whole)) return false;
+
+        if (whole.points < frame_cluster_min_points_) return false;
+        if (whole.local_lateral_width < gate_frame_cluster_min_width_ ||
+            whole.local_lateral_width > gate_frame_cluster_max_width_) {
+            return false;
+        }
+        if (whole.local_forward_width < frame_cluster_forward_width_min_ ||
+            whole.local_forward_width > frame_cluster_forward_width_max_) {
+            return false;
+        }
+        if (whole.height < frame_cluster_min_height_ ||
+            whole.height > frame_cluster_max_height_) {
+            return false;
+        }
+        if (whole.vertical_bins < gate_post_min_vertical_bins_) return false;
+        if (!passesGateCenterConstraint(whole.local_center.y(), gate_center_y_tolerance_)) {
+            return false;
+        }
+
+        GatePostCandidate left;
+        GatePostCandidate right;
+        if (!splitWideFrameCluster(cloud, indices, left, right)) return false;
+
+        const double lateral_gap = std::abs(left.local_center.y() - right.local_center.y());
+        if (lateral_gap < gate_width_min_ || lateral_gap > gate_width_max_) return false;
+        const double forward_delta = std::abs(left.local_center.x() - right.local_center.x());
+        if (forward_delta > pair_forward_tolerance_) return false;
+        const double pair_center_y = 0.5 * (left.local_center.y() + right.local_center.y());
+        if (!passesGateCenterConstraint(pair_center_y, gate_center_y_tolerance_)) return false;
+        if (!pairHeightCompatible(left, right)) return false;
+
+        const double width_penalty = std::abs(lateral_gap - gate_width_expected_);
+        const double center_penalty = std::abs(pair_center_y - gateSearchCenterY());
+        const double thickness_penalty = std::max(0.0, whole.local_forward_width - 0.08);
+        const double height_bonus = std::min(1.5, whole.height);
+        const double point_bonus = 0.0005 * static_cast<double>(whole.points);
+
+        left.strong = true;
+        left.weak = false;
+        left.reason = "accepted_frame_cluster_left";
+        left.confidence += 0.35;
+        right.strong = true;
+        right.weak = false;
+        right.reason = "accepted_frame_cluster_right";
+        right.confidence += 0.35;
+        whole.accepted = true;
+        whole.strong = true;
+        whole.weak = false;
+        whole.reason = "accepted_frame_cluster";
+
+        out.whole = whole;
+        out.left = left;
+        out.right = right;
+        out.score = left.confidence + right.confidence + height_bonus + point_bonus -
+                    0.35 * width_penalty -
+                    0.25 * center_penalty -
+                    0.20 * forward_delta -
+                    1.00 * thickness_penalty;
+        return true;
+    }
+
+    bool selectBestFrameCluster(const std::vector<FrameClusterCandidate>& frame_clusters,
+                                GatePostCandidate& out_left,
+                                GatePostCandidate& out_right,
+                                double& out_score) const {
+        double best_score = -std::numeric_limits<double>::infinity();
+        bool found = false;
+        for (const auto& c : frame_clusters) {
+            if (c.score > best_score) {
+                best_score = c.score;
+                out_left = c.left;
+                out_right = c.right;
+                found = true;
+            }
+        }
+        out_score = best_score;
+        return found;
+    }
+
     bool selectBestPair(const std::vector<GatePostCandidate>& candidates,
                         GatePostCandidate& out_left,
                         GatePostCandidate& out_right,
@@ -1019,13 +1236,21 @@ private:
                 const double forward_delta = std::abs(a.local_center.x() - b.local_center.x());
                 if (forward_delta > pair_forward_tolerance_) continue;
 
+                const double pair_center_y = 0.5 * (a.local_center.y() + b.local_center.y());
+                if (!passesGateCenterConstraint(pair_center_y, gate_center_y_tolerance_)) continue;
+                if (!pairHeightCompatible(a, b)) continue;
+
                 const double avg_forward = 0.5 * (a.local_center.x() + b.local_center.x());
                 if (avg_forward < gateForwardMin() || avg_forward > gateForwardMax()) continue;
 
                 const double gap_penalty = std::abs(lateral_gap - gate_width_expected_);
+                const double center_penalty = std::abs(pair_center_y - gateSearchCenterY());
+                const double height_penalty = pairHeightDelta(a, b);
                 const double score = a.confidence + b.confidence -
                                      0.65 * forward_delta -
                                      0.35 * gap_penalty -
+                                     0.25 * center_penalty -
+                                     0.20 * height_penalty -
                                      0.08 * std::max(0.0, avg_forward) -
                                      (allow_weak ? 0.15 : 0.0);
                 if (score > best_score) {
@@ -1064,6 +1289,9 @@ private:
                                                  ? c.local_center.y() - gate_width_expected_
                                                  : c.local_center.y() + gate_width_expected_;
             const double completed_center_y = 0.5 * (c.local_center.y() + completed_other_y);
+            if (!passesGateCenterConstraint(completed_center_y, partial_center_y_tolerance_)) {
+                continue;
+            }
             if (use_local_rule_roi_ &&
                 (completed_center_y < gate_search_y_min_ || completed_center_y > gate_search_y_max_)) {
                 continue;
@@ -1141,6 +1369,9 @@ private:
 
         if (use_local_rule_roi_ &&
             (center_y < gate_search_y_min_ || center_y > gate_search_y_max_)) {
+            return d;
+        }
+        if (!passesGateCenterConstraint(center_y, partial_center_y_tolerance_)) {
             return d;
         }
 
@@ -1483,12 +1714,38 @@ private:
         return marker;
     }
 
+    visualization_msgs::Marker makeFixedCenterRoiMarker(const std::string& frame_id,
+                                                        const ros::Time& stamp) const {
+        visualization_msgs::Marker marker;
+        marker.header.frame_id = frame_id;
+        marker.header.stamp = stamp;
+        marker.ns = "fixed_center_roi";
+        marker.id = 301;
+        marker.type = visualization_msgs::Marker::SPHERE;
+        marker.action = visualization_msgs::Marker::ADD;
+        marker.pose.position.x = fixed_roi_center_x_;
+        marker.pose.position.y = fixed_roi_center_y_;
+        marker.pose.position.z = fixed_roi_center_z_;
+        marker.pose.orientation.w = 1.0;
+        marker.scale.x = 2.0 * fixed_roi_radius_;
+        marker.scale.y = 2.0 * fixed_roi_radius_;
+        marker.scale.z = 2.0 * fixed_roi_radius_;
+        marker.color.r = 0.1f;
+        marker.color.g = 0.8f;
+        marker.color.b = 0.9f;
+        marker.color.a = 0.12f;
+        return marker;
+    }
+
     void addRoiMarker(visualization_msgs::MarkerArray& arr,
                       const std::string& frame_id,
                       const ros::Time& stamp) const {
         if (use_local_rule_roi_ && !have_home_) return;
         if (!use_local_rule_roi_ && !have_odom_) return;
         arr.markers.push_back(makeRoiMarker(frame_id, stamp));
+        if (use_fixed_center_roi_) {
+            arr.markers.push_back(makeFixedCenterRoiMarker(frame_id, stamp));
+        }
     }
 
     void publishCandidateMarkers(const std::string& frame_id, const ros::Time& stamp) {
@@ -1595,6 +1852,17 @@ private:
     double roi_z_min_ = 0.15;
     double roi_z_max_ = 2.20;
     double post_extract_z_max_ = 2.00;
+    bool use_fixed_center_roi_ = true;
+    double fixed_roi_center_x_ = 2.70;
+    double fixed_roi_center_y_ = -1.50;
+    double fixed_roi_center_z_ = 1.40;
+    double fixed_roi_radius_ = 2.65;
+    bool use_body_exclusion_ = false;
+    double body_exclusion_forward_min_ = -0.55;
+    double body_exclusion_forward_max_ = 0.45;
+    double body_exclusion_lateral_abs_ = 0.45;
+    double body_exclusion_z_min_ = -0.45;
+    double body_exclusion_z_max_ = 0.35;
     double voxel_leaf_ = 0.05;
     double cluster_tolerance_ = 0.22;
     int min_cluster_size_ = 8;
@@ -1604,6 +1872,12 @@ private:
     double gate_post_weak_max_width_ = 0.55;
     double gate_frame_cluster_min_width_ = 0.75;
     double gate_frame_cluster_max_width_ = 1.40;
+    bool prefer_frame_cluster_ = true;
+    double frame_cluster_forward_width_min_ = 0.02;
+    double frame_cluster_forward_width_max_ = 0.30;
+    double frame_cluster_min_height_ = 0.80;
+    double frame_cluster_max_height_ = 2.20;
+    int frame_cluster_min_points_ = 80;
     double gate_split_side_band_ = 0.22;
     double gate_post_min_height_ = 0.40;
     double gate_post_weak_min_height_ = 0.18;
@@ -1614,6 +1888,11 @@ private:
     double gate_width_max_ = 1.35;
     double gate_width_expected_ = 1.00;
     double pair_forward_tolerance_ = 0.35;
+    bool enforce_gate_center_constraint_ = true;
+    double gate_center_y_tolerance_ = 0.45;
+    double partial_center_y_tolerance_ = 0.65;
+    double pair_max_height_delta_ = 0.60;
+    double pair_min_height_overlap_ = 0.15;
     bool allow_weak_single_partial_ = true;
     double pre_offset_ = 0.60;
     double post_offset_ = 1.00;
