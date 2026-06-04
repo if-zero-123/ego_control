@@ -4,6 +4,7 @@
 #include "quadrotor_msgs/PositionCommand.h"
 #include "std_msgs/Empty.h"
 #include "visualization_msgs/Marker.h"
+#include <cmath>
 #include <ros/ros.h>
 
 ros::Publisher pos_cmd_pub;
@@ -23,6 +24,23 @@ int traj_id_;
 // yaw control
 double last_yaw_, last_yaw_dot_;
 double time_forward_;
+double odom_yaw_ = 0.0;
+bool have_odom_ = false;
+bool reset_yaw_time_ = false;
+bool reset_yaw_from_odom_on_new_traj_ = false;
+
+double yawFromOdom(const nav_msgs::OdometryConstPtr &msg)
+{
+  const auto &q = msg->pose.pose.orientation;
+  return std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                    1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+}
+
+void odomCallback(const nav_msgs::OdometryConstPtr &msg)
+{
+  odom_yaw_ = yawFromOdom(msg);
+  have_odom_ = true;
+}
 
 void bsplineCallback(traj_utils::BsplineConstPtr msg)
 {
@@ -64,6 +82,13 @@ void bsplineCallback(traj_utils::BsplineConstPtr msg)
   traj_.push_back(traj_[1].getDerivative());
 
   traj_duration_ = traj_[0].getTimeSum();
+
+  if (reset_yaw_from_odom_on_new_traj_ && have_odom_)
+  {
+    last_yaw_ = odom_yaw_;
+    last_yaw_dot_ = 0.0;
+    reset_yaw_time_ = true;
+  }
 
   receive_traj_ = true;
 }
@@ -173,6 +198,11 @@ void cmdCallback(const ros::TimerEvent &e)
   std::pair<double, double> yaw_yawdot(0, 0);
 
   static ros::Time time_last = ros::Time::now();
+  if (reset_yaw_time_)
+  {
+    time_last = time_now;
+    reset_yaw_time_ = false;
+  }
   if (t_cur < traj_duration_ && t_cur >= 0.0)
   {
     pos = traj_[0].evaluateDeBoorT(t_cur);
@@ -236,6 +266,7 @@ int main(int argc, char **argv)
   ros::NodeHandle nh("~");
 
   ros::Subscriber bspline_sub = nh.subscribe("planning/bspline", 10, bsplineCallback);
+  ros::Subscriber odom_sub = nh.subscribe("odom", 20, odomCallback);
 
   pos_cmd_pub = nh.advertise<quadrotor_msgs::PositionCommand>("/position_cmd", 50);
 
@@ -251,6 +282,7 @@ int main(int argc, char **argv)
   cmd.kv[2] = vel_gain[2];
 
   nh.param("traj_server/time_forward", time_forward_, -1.0);
+  nh.param("traj_server/reset_yaw_from_odom_on_new_traj", reset_yaw_from_odom_on_new_traj_, false);
   last_yaw_ = 0.0;
   last_yaw_dot_ = 0.0;
 

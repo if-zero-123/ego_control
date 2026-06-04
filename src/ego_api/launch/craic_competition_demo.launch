@@ -1,11 +1,85 @@
-<!-- CRAIC known-field mission: EGO for frame/attack-zone goals, ego_bridge override for direct moves,
-     QR search, low attack posture, and balloon puncture. -->
+<!--
+    CRAIC 比赛主程序 launch。
+
+    这个文件负责一次性启动完整比赛任务所需的控制、规划和感知节点：
+    1. EGO planner：负责需要避障的大范围目标，例如穿到门框后、回打击区。
+    2. ego_bridge：负责起飞、override 位置控制、override yaw 控制、低空扎气球等直接控制。
+    3. craic_frame_detector：用 MID360 点云识别门框中心，发布 /craic/frame_center。
+    4. usb_camera_vision ArUco：识别二维码，发布 /usb_camera_vision/aruco_ids。
+    5. D435 balloon detector：识别气球位置和相机画面对齐量，发布 /balloon/world_point、/balloon/servo。
+    6. craic_competition_demo：真正执行比赛流程的主任务节点。
+
+    当前控制分层：
+    - EGO：第一次穿门框到 frame_post_control，回打击区 attack_zone。
+    - ego_bridge override：起飞后的等待点、QR 点、QR 后返回门后点、转 yaw、下降、气球对齐和扎球。
+
+    注意：
+    这里大部分 arg 都会继续传给下面的节点。改参数前先确认是影响主任务逻辑、
+    识别节点，还是 EGO planner，避免现场调试时改错层。
+
+    完整任务时序速查：
+    1. ego_bridge 连接成功后记录 initial_yaw。
+    2. takeoff 到 takeoff_height=1.0。
+    3. override 平滑位置控制到 initial_wait=(0.0,-0.85,1.0)。
+    4. 主任务订阅 /craic/frame_center 和 /craic/frame_status，等待稳定门框中心。
+    5. 若识别稳定且离 expected_frame 距离不超过 frame_center_reject_distance，则使用识别值。
+    6. 若识别超时、不稳定、状态无效、距离过大，则使用 expected_frame=(3.2,-1.25,1.25)。
+    7. 计算 frame_post_control=(center.x+1.1, center.y, center.z)。
+    8. EGO 第一次穿门飞到 frame_post_control，并启用 x 过门保护。
+    9. override 原地平滑转到 reverse_yaw，也就是 initial_yaw+180 度。
+    10. override 平滑位置控制到 QR 点 (4.0,0.25,1.3)。
+    11. 识别二维码；若没识别到，执行升高和前后左右小搜索，最多 10s。
+    12. override 返回之前保存的 frame_post_control。
+    13. EGO 回打击区 attack_zone=(0.0,-0.8,1.25)，x 到 0.25 以内后接管继续。
+    14. override 先右转 90 度到 attack_yaw，再下降到 attack_height=0.3。
+    15. 气球 world 点粗定位，D435 图像 servo 对齐，低速前冲扎球，ROI 验证是否扎破。
+    16. 扎球成功后回 (0,0,1)，切 PX4 AUTO.LAND。
+
+    常用启动命令：
+    - 正常比赛：
+      roslaunch ego_api craic_competition_demo.launch
+    - 飞行调试，打印更多主任务和门框检测日志：
+      roslaunch ego_api craic_competition_demo.launch simple_logs:=false readable_logs:=false frame_debug_top_clusters:=8 mission_log_period:=0.5
+    - 只检查参数展开，不起飞不启动节点：
+      使用 roslaunch 的 dump-params 参数展开选项检查
+
+    现场调参原则：
+    - 想改飞行流程目标点，优先改 initial_wait、expected_frame、qr_goal、attack_zone 这些主任务参数。
+    - 想改 EGO 速度/加速度，到 ego_planner 的 single_run_in_exp.launch 或 advanced_param_exp.xml 看，不在这里直接调。
+    - 想改门框识别算法，先看 /craic/frame_status、/craic/frame_center、/craic/frame_markers，再改 frame detector 参数。
+    - 想改 override 平滑程度，改 override_smooth_speed 和 override_yaw_rate。
+    - 想改扎气球动作，优先改 balloon_standoff、servo 阈值、fine_forward、puncture 参数。
+-->
 <launch>
+    <!--
+        基础飞控命名空间和全局飞行高度。
+        bridge_ns：ego_bridge 的 ROS 命名空间，主任务通过它调用 takeoff、override、land 等接口。
+        flight_z：传给部分检测/规划节点的默认高度，不等于每个任务点的高度。
+        takeoff_height：ego_bridge 起飞高度，当前比赛流程起飞到 1.0m。
+        land_after_finish：任务结束后是否执行降落；扎球成功后当前流程优先回 (0,0,1) 再切 PX4 LAND。
+
+        参数关系：
+        - takeoff_height 只影响 ego_bridge 起飞阶段。
+        - initial_wait_z、qr_goal_z、attack_zone_z、attack_height 是各阶段自己的目标高度。
+        - EGO 段因为 use_goal_msg_z=true，会使用主任务发布的目标 z，而不是固定 flight_z。
+    -->
     <arg name="bridge_ns" default="/ego_bridge" />
     <arg name="flight_z" default="1.0" />
     <arg name="takeoff_height" default="1.0" />
     <arg name="land_after_finish" default="true" />
 
+    <!--
+        节点启动开关。
+        正式比赛一般保持 EGO、ego_bridge、frame detector、USB ArUco、D435 气球识别为 true。
+        柱子识别和旧 override_task_demo 默认关闭，避免旧流程和当前比赛主流程抢控制。
+        cloud_self_filter 默认关闭；如果后续确认 EGO 地图被机体点云污染，可以单独打开测试。
+
+        是否发控制：
+        - start_ego_planner=true：EGO 会规划并通过 traj_server 发布 position_cmd。
+        - start_ego_bridge=true：ego_bridge 会执行主任务请求的起飞和 override 控制。
+        - start_frame_detector、start_usb_aruco、start_d435_balloon：只做感知，不主动飞。
+        - start_override_task_demo 必须保持 false，除非单独测试旧 demo。
+    -->
     <arg name="start_ego_planner" default="true" />
     <arg name="start_ego_bridge" default="true" />
     <arg name="start_cloud_self_filter" default="false" />
@@ -15,6 +89,19 @@
     <arg name="start_usb_aruco" default="true" />
     <arg name="start_d435_balloon" default="true" />
 
+    <!--
+        日志开关。
+        simple_logs=true 时主程序只打印简短 TASK step；调试飞行建议临时设 false。
+        mission_log_period 控制主程序周期日志间隔，单位秒。
+        detector_readable_log_period 控制检测器可读日志频率，0 表示不额外周期打印。
+        frame_debug_top_clusters 可在门框识别调试时打开，用于查看候选聚类为什么被拒绝。
+
+        推荐：
+        - 正式跑：simple_logs=true，ego_fsm_verbose=false，frame_debug_top_clusters=0。
+        - 门框识别问题：simple_logs=false，frame_debug_top_clusters=5 或 8。
+        - EGO 规划问题：ego_fsm_verbose=true，同时观察 EGO 报警和 odom。
+        - 日志太刷屏：把 mission_log_period、frame_debug_log_period 调大。
+    -->
     <arg name="readable_logs" default="true" />
     <arg name="mission_log_period" default="1.0" />
     <arg name="simple_logs" default="true" />
@@ -24,20 +111,69 @@
     <arg name="detector_readable_log_period" default="0.0" />
     <arg name="cloud_filter_log_period" default="0.0" />
 
+    <!--
+        全局话题配置。
+        raw_cloud_topic：MID360 原始点云，识别门框一般直接用它。
+        cloud_topic：自体滤波输出点云，仅在 start_cloud_self_filter=true 时产生。
+        ego_cloud_topic：EGO planner 实际用于建图避障的点云输入；当前默认使用 /cloud_registered。
+        odom_topic：统一使用 MAVROS local odom，主任务、EGO、识别节点都应在同一 world/ENU 坐标系下工作。
+
+        重要：
+        - 门框识别使用 frame_cloud_topic，默认也是 /cloud_registered。
+        - EGO 建图使用 ego_cloud_topic，不一定等于 frame_cloud_topic。
+        - 如果 odom 坐标系和点云坐标系不一致，门框中心和 EGO 目标都会偏。
+        - 若打开自体滤波，通常还要把 ego_cloud_topic 改成 /craic/cloud_filtered 才会影响 EGO。
+    -->
     <arg name="raw_cloud_topic" default="/cloud_registered" />
     <arg name="cloud_topic" default="/craic/cloud_filtered" />
     <arg name="ego_cloud_topic" default="/cloud_registered" />
     <arg name="odom_topic" default="/mavros/local_position/odom" />
 
+    <!--
+        起飞后第一个等待点。
+        主流程：takeoff 到 1.0m 后，用 ego_bridge override 平滑位置控制飞到这里，
+        然后开始锁定门框中心。这个点不是 EGO 目标。
+
+        调参影响：
+        - y 太靠近柱子/门框，点云可能粘连，门框检测会出现 post_too_wide 等拒绝原因。
+        - x/y 改动会改变起飞后悬停识别位置，但不改变 expected_frame 的兜底值。
+        - z 改动会影响相机/雷达看到门框的高度角，也会影响起飞后第一段安全性。
+    -->
     <arg name="initial_wait_x" default="0.0" />
     <arg name="initial_wait_y" default="-0.85" />
     <arg name="initial_wait_z" default="1.0" />
+
+    <!--
+        门框中心锁定和兜底参数，作用在 craic_competition_demo 主任务节点。
+        expected_frame_x/y/z：门框中心预期值，识别超时或识别点偏差过大时使用它。
+        frame_center_reject_distance：识别中心到预期中心的 3D 距离阈值，超过则拒绝该样本。
+        frame_post_x_offset：门后 EGO 控制点相对门框中心的 x 正方向偏移，当前为 center.x + 1.1。
+        frame_pass_guard_x_offset：第一次 EGO 穿门时的放行保护，当前 x 超过 center.x + 0.35 认为已过门。
+        frame_pass_guard_timeout：EGO 穿门超过该时间仍未 reach，但已过 pass x，则直接进入下一步任务。
+        frame_detect_timeout：主任务等待稳定门框中心的总时间，超时用 expected_frame。
+        frame_valid_max_age：门框中心和状态消息最大新鲜度，超过认为旧数据。
+
+        锁定逻辑：
+        - 主任务不是拿第一帧就用，而是在 frame_detect_timeout 内累计有效样本。
+        - strong 状态需要 frame_strong_lock_frames 帧稳定。
+        - medium 状态需要 frame_medium_min_wait 后满足 frame_medium_lock_frames。
+        - partial 状态需要 frame_partial_min_wait 后满足 frame_partial_lock_frames。
+        - 稳定判断用 frame_lock_stability_threshold，历史保留时间为 frame_lock_history_duration。
+        - 所有样本仍需满足离 expected_frame 不超过 frame_center_reject_distance。
+
+        飞行影响：
+        - expected_frame 决定识别失败后的兜底穿门中心。
+        - frame_post_x_offset 决定 EGO 第一次穿门后要飞到多远。
+        - frame_pass_guard 只防止 EGO 已经过门但 reach 没置位导致主任务卡住，不改变 EGO 目标。
+    -->
     <arg name="expected_frame_x" default="3.2" />
     <arg name="expected_frame_y" default="-1.25" />
     <arg name="expected_frame_z" default="1.25" />
     <arg name="frame_center_reject_distance" default="0.55" />
     <arg name="frame_post_x_offset" default="1.1" />
-    <arg name="frame_detect_timeout" default="10.0" />
+    <arg name="frame_pass_guard_x_offset" default="0.35" />
+    <arg name="frame_pass_guard_timeout" default="10.0" />
+    <arg name="frame_detect_timeout" default="5.0" />
     <arg name="frame_valid_max_age" default="0.8" />
     <arg name="frame_lock_stability_threshold" default="0.12" />
     <arg name="frame_strong_lock_frames" default="3" />
@@ -47,6 +183,21 @@
     <arg name="frame_partial_min_wait" default="2.0" />
     <arg name="frame_lock_history_duration" default="2.0" />
 
+    <!--
+        二维码识别点和搜索参数。
+        主流程：穿门后转到 reverse_yaw，再用 override 到 qr_goal。
+        如果二维码未立即识别，则先升高 qr_search_raise_z，再按机体前后左右 qr_search_offset 小范围搜索。
+        搜索总时长由 qr_search_timeout 限制，识别到任意 ArUco ID 即停止搜索并返程。
+
+        控制方式：
+        - 到 QR 点和 QR 小范围搜索都使用 ego_bridge override 平滑位置控制。
+        - yaw 全程锁 reverse_yaw，不让机头乱转。
+        - qr_initial_wait 是到点后先静止等二维码的时间，避免刚停下图像还在晃。
+
+        失败处理：
+        - 搜索超时不会失败降落，会直接进入返程。
+        - 收到非空 /usb_camera_vision/aruco_ids 就认为二维码识别成功。
+    -->
     <arg name="qr_goal_x" default="4.0" />
     <arg name="qr_goal_y" default="0.25" />
     <arg name="qr_goal_z" default="1.3" />
@@ -56,6 +207,25 @@
     <arg name="qr_search_offset" default="0.3" />
     <arg name="qr_search_hold" default="0.35" />
 
+    <!--
+        回打击区和气球攻击主参数。
+        attack_zone_x/y/z：QR 后返回门后点，再用 EGO 回打击区的目标点。
+        attack_height：攻击前右转 90 度后下降到的扎球高度。
+        balloon_wait_timeout：低空等待新鲜气球 world 点的最长时间，超时不盲目前冲。
+        balloon_standoff：粗定位时停在气球前方的安全距离。
+        balloon_puncture_distance/speed：最终前冲扎球距离和速度。
+
+        当前顺序：
+        - QR 后 override 返回 frame_post_control。
+        - 再 EGO 回 attack_zone。
+        - 到 attack_zone 或触发 attack_zone_overrun_x 保护后，先右转 90 度，再下降到 attack_height。
+        - 然后才开始气球识别和扎球。
+
+        扎球安全性：
+        - balloon_standoff 越大，离车/气球越远，粗定位更保守。
+        - attack_height 是最终低空高度，不能盲目调太低。
+        - balloon_valid_max_age 控制气球 world 点新鲜度，过旧数据不会用于扎球。
+    -->
     <arg name="attack_zone_x" default="0.0" />
     <arg name="attack_zone_y" default="-0.8" />
     <arg name="attack_zone_z" default="1.25" />
@@ -64,7 +234,7 @@
     <arg name="balloon_valid_max_age" default="0.8" />
     <arg name="balloon_standoff" default="0.70" />
     <arg name="balloon_puncture_distance" default="0.20" />
-    <arg name="balloon_puncture_speed" default="0.10" />
+    <arg name="balloon_puncture_speed" default="0.14" />
     <arg name="balloon_approach_timeout" default="8.0" />
     <arg name="balloon_align_timeout" default="6.0" />
     <arg name="balloon_align_lateral_threshold" default="0.06" />
@@ -74,6 +244,28 @@
     <arg name="balloon_center_z_bias" default="0.0" />
     <arg name="balloon_align_z_min" default="0.25" />
     <arg name="balloon_align_z_max" default="0.60" />
+
+    <!--
+        气球针头、画面对齐和扎球确认参数。
+        needle_length/puncture_extra 用于根据气球深度估计前冲剩余量。
+        servo_* 是使用 /balloon/servo 做图像中心对齐的阈值、增益和速度限幅。
+        fine_forward_* 是对齐后低速贴近阶段。
+        pop_verify_* 是扎球后通过 ROI 面积变化确认是否扎破。
+
+        气球攻击流程更细：
+        - 先用 /balloon/world_point 计算气球前方 standoff 点。
+        - override 到 standoff 点后，进入图像 servo 对齐。
+        - servo_u 主要对应左右误差，servo_v 主要对应上下误差。
+        - 达到 servo_u_threshold、servo_v_threshold 并保持 servo_hold_time 后，执行 fine_forward。
+        - fine_forward 后再执行 puncture 前冲。
+        - 前冲后用 verify_roi 面积下降比例判断是否扎破。
+
+        速度含义：
+        - balloon_servo_max_lateral_speed 限制横向对齐速度。
+        - balloon_servo_max_z_speed 限制上下对齐速度。
+        - balloon_fine_forward_speed 是贴近气球阶段速度。
+        - balloon_puncture_speed 是最后扎球前冲速度。
+    -->
     <arg name="balloon_needle_length" default="0.18" />
     <arg name="balloon_puncture_extra" default="0.04" />
     <arg name="balloon_servo_timeout" default="8.0" />
@@ -82,9 +274,9 @@
     <arg name="balloon_servo_hold_time" default="0.25" />
     <arg name="balloon_servo_lateral_gain" default="0.18" />
     <arg name="balloon_servo_z_gain" default="0.12" />
-    <arg name="balloon_servo_max_lateral_speed" default="0.08" />
-    <arg name="balloon_servo_max_z_speed" default="0.06" />
-    <arg name="balloon_fine_forward_speed" default="0.05" />
+    <arg name="balloon_servo_max_lateral_speed" default="0.10" />
+    <arg name="balloon_servo_max_z_speed" default="0.08" />
+    <arg name="balloon_fine_forward_speed" default="0.07" />
     <arg name="balloon_fine_forward_distance" default="0.20" />
     <arg name="balloon_backoff_distance" default="0.12" />
     <arg name="balloon_pop_verify_timeout" default="1.0" />
@@ -97,6 +289,26 @@
     <arg name="balloon_verify_roi_topic" default="/balloon/verify_roi" />
     <arg name="balloon_verify_roi_result_topic" default="/balloon/verify_roi_result" />
 
+    <!--
+        ego_bridge override 直接控制参数。
+        override_move_timeout：单段 override 位置移动最大等待时间。
+        override_pos_threshold：override 到点判定半径。
+        override_smooth_speed：override 位置 setpoint 推进速度，不是速度控制，是平滑发布中间位置点。
+        override_yaw_*：原地 yaw 对齐阈值、保持时间和角速度限幅。
+        attack_zone_overrun_x：EGO 回打击区时的 x 保护，到 x 小于该值就接管并继续攻击流程。
+
+        overrideMoveTo 的实际发布方式：
+        - 主任务每次先 enableOverride。
+        - 控制循环读取当前 odom，把最终目标拆成连续中间 setpoint。
+        - 每帧发布位置 setpoint 和固定 yaw。
+        - 距离目标小于 override_pos_threshold 后发布最终点并短暂保持。
+        - 结束后 disableOverride，让后续 EGO 或下一段控制接管。
+
+        overrideYawAlign 的实际发布方式：
+        - 当前位置保持不动。
+        - yaw 按 override_yaw_rate 限速推进到目标角。
+        - yaw 误差小于 override_yaw_threshold 并保持 override_yaw_hold_time 后结束。
+    -->
     <arg name="override_move_timeout" default="30.0" />
     <arg name="override_pos_threshold" default="0.16" />
     <arg name="override_smooth_speed" default="0.35" />
@@ -104,7 +316,22 @@
     <arg name="override_yaw_threshold" default="0.10" />
     <arg name="override_yaw_hold_time" default="0.25" />
     <arg name="override_yaw_rate" default="0.5" />
-    <arg name="attack_zone_overrun_x" default="0.0" />
+    <arg name="attack_zone_overrun_x" default="0.25" />
+
+    <!--
+        任务结束降落参数。
+        robust_land_* 是主程序内部软降落/上锁兜底参数。
+        px4_land_mode 当前为 AUTO.LAND，扎球成功后会先回 (0,0,1)，再尝试切 PX4 自动降落模式。
+
+        降落路径：
+        - 气球扎破验证成功：override 回 home land 点 (0,0,balloon_return_home_land_z)，然后切 px4_land_mode。
+        - 如果切 PX4 LAND 失败，或气球任务未完成，则根据 land_after_finish 决定是否 robust_land。
+        - robust_land 会先用低速下降和按压高度做兜底，再尝试 disarm。
+
+        注意：
+        - px4_land_mode_timeout 是切模式等待时间，不是整个降落时间。
+        - robust_land_fallback_bridge_land=true 时，软降落失败会尝试 ego_bridge 的 land 兜底。
+    -->
     <arg name="robust_land_enable" default="true" />
     <arg name="robust_land_soft_z" default="0.10" />
     <arg name="robust_land_soft_speed" default="0.08" />
@@ -118,6 +345,20 @@
     <arg name="px4_land_mode_timeout" default="5.0" />
     <arg name="px4_land_retry_period" default="0.5" />
 
+    <!--
+        门框点云检测器参数，作用在 craic_frame_detector。
+        这些参数控制“怎么从 MID360 点云里找门框”，不是主任务的兜底锁定逻辑。
+        frame_cloud_topic：门框识别用的点云，当前直接用原始 /cloud_registered。
+        goal_frame_id：检测器发布的目标坐标系，必须和 odom/world 一致。
+        height_mode=auto 且 use_detected_center_z=true：门框中心高度尽量由点云自动估计。
+        use_local_rule_roi：使用以起点/场地规则为参考的本地 ROI 过滤。
+
+        检测器输出和主任务关系：
+        - 检测器发布的 /craic/frame_center 是候选门框中心。
+        - 主任务还会检查状态、新鲜度、稳定性和 expected_frame 距离。
+        - 所以检测器终端看起来有 valid，并不代表主任务一定立刻采用。
+        - 主任务最终采用哪个中心，要看 craic_competition_demo 的 FRAME_CENTER 日志。
+    -->
     <arg name="frame_cloud_topic" default="/cloud_registered" />
     <arg name="frame_goal_frame_id" default="world" />
     <arg name="frame_height_mode" default="auto" />
@@ -128,6 +369,27 @@
     <arg name="frame_use_local_rule_roi" default="true" />
     <arg name="field_length" default="6.0" />
     <arg name="field_width" default="5.0" />
+
+    <!--
+        门框检测 ROI 和稳定性参数。
+        gate_search_x/y 是在场地坐标下搜索门框的范围。
+        roi_z_min/max 限制用于门框提取的点云高度范围。
+        fixed_roi_center/radius 用于把搜索范围压到已知门框附近。
+        gate_width_expected 是门框宽度预期。
+        stable/history/stability_threshold 控制检测器自身输出稳定程度。
+        调试门框识别时先看 /craic/frame_status、/craic/frame_center 和 marker，再谨慎改这里。
+
+        常见状态/拒绝原因排查：
+        - not_enough_candidates：ROI 内候选柱/框太少，可能是 ROI 不对、点云太稀或门框被遮挡。
+        - valid_partial_left/right：只看到一侧，主任务会降级考虑，但要求更多稳定帧。
+        - post_too_wide：候选聚类横向太宽，常见于门框和周围物体/柱子粘连。
+        - height_too_low：高度点不足，可能是 z ROI 或点云高度分布问题。
+
+        调试建议：
+        - 先用 frame_debug_top_clusters 打印候选，再配合 RViz 看 /craic/frame_markers。
+        - 不要一上来改 expected_frame 或 reject_distance 掩盖识别问题。
+        - 如果静止识别好、飞起来不好，优先看点云是否抖动、地图/odom 是否跳、候选是否粘连。
+    -->
     <arg name="frame_gate_search_x_min" default="-0.5" />
     <arg name="frame_gate_search_x_max" default="4.2" />
     <arg name="frame_gate_search_y_min" default="-2.5" />
@@ -146,6 +408,16 @@
     <arg name="frame_debug_log_period" default="1.0" />
     <arg name="frame_debug_top_clusters" default="0" />
 
+    <!--
+        USB 相机二维码识别参数。
+        usb_camera.launch 会启动 USB 相机和 ArUco 识别，主任务订阅 /usb_camera_vision/aruco_ids。
+        video_device 使用 by-id 路径，避免 /dev/video 编号变化导致开错相机。
+
+        调试方式：
+        - rostopic echo /usb_camera_vision/aruco_ids
+        - 如果一直空，先确认 USB 相机设备路径和图像是否正常。
+        - aruco_preprocess_mode=gray 表示用灰度预处理；光照不好时可以在 usb_camera_vision 里继续调。
+    -->
     <arg name="usb_camera_ns" default="usb_camera_vision" />
     <arg name="usb_video_device" default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0" />
     <arg name="usb_image_width" default="640" />
@@ -154,6 +426,23 @@
     <arg name="usb_pixel_format" default="yuyv" />
     <arg name="usb_aruco_preprocess_mode" default="gray" />
 
+    <!--
+        D435 气球检测参数。
+        D435 节点输出 /balloon/point 相机坐标、/balloon/world_point 世界坐标和 /balloon/servo 画面对齐误差。
+        camera_body_x/y/z 是 D435 安装在机体系下的偏置，若相机不在机体中心需要校准这里。
+        needle_u/v 可指定针尖在图像中的像素坐标，默认 -1 表示使用检测节点默认策略。
+
+        坐标含义：
+        - /balloon/point 是相机坐标下的气球点。
+        - /balloon/world_point 是结合 odom yaw/姿态转换后的 world 坐标，主任务粗定位使用它。
+        - /balloon/servo 是图像坐标误差，主任务最后贴近时用它对齐针尖/画面中心。
+
+        安装偏置：
+        - camera_body_x 正方向通常表示相机相对机体中心向前。
+        - camera_body_y 正方向通常表示相机相对机体中心向左。
+        - camera_body_z 正方向通常表示相机相对机体中心向上。
+        - 偏置不准会导致 world_point 粗定位偏，但 servo 对齐仍会在最后做修正。
+    -->
     <arg name="d435_camera" default="camera" />
     <arg name="d435_initial_reset" default="true" />
     <arg name="d435_color_width" default="640" />
@@ -175,6 +464,18 @@
     <arg name="balloon_needle_u" default="-1.0" />
     <arg name="balloon_needle_v" default="-1.0" />
 
+    <!--
+        可选点云自体滤波节点。
+        输入 raw_cloud_topic，输出 cloud_topic。它只在 start_cloud_self_filter=true 时启动。
+        当前 EGO 默认仍用 ego_cloud_topic=/cloud_registered，所以打开这个节点后如果想让 EGO 使用滤波点云，
+        还需要在启动时把 ego_cloud_topic:=/craic/cloud_filtered 一起传入。
+        这个节点不发飞控，只影响点云。
+
+        适用场景：
+        - EGO 日志报 drone is in obstacle 或 First 3 control points in obstacles，
+          且 RViz 里能看到机体附近有自身体点云残留。
+        - 打开后先只看点云，不要立刻飞；确认 /craic/cloud_filtered 没把真实门框/障碍也过滤掉。
+    -->
     <node pkg="ego_api" type="craic_cloud_self_filter" name="craic_cloud_self_filter" output="screen"
           if="$(arg start_cloud_self_filter)">
         <param name="input_cloud_topic" value="$(arg raw_cloud_topic)" />
@@ -187,14 +488,49 @@
         <param name="log_period" value="$(arg cloud_filter_log_period)" />
     </node>
 
+    <!--
+        启动 EGO planner。
+        EGO 负责接收 /move_base_simple/goal 或 /ego_bridge/target_point 目标，
+        基于 ego_cloud_topic 建图避障并输出 B-spline 轨迹。
+
+        这里强制 use_goal_msg_z=true，表示主任务发布的三维目标 z 会被 EGO 使用。
+        reset_yaw_from_odom_on_new_traj=true 用于 EGO 在 override 后重新接管时，
+        用当前 odom yaw 初始化 traj_server yaw，减少突然绕一圈的风险。
+
+        当前主任务中 EGO 只用于两段：
+        - FRAME_POST_EGO：第一次穿门到 frame_post_control。
+        - ATTACK_ZONE_EGO：从门后回打击区 attack_zone。
+
+        这两段之外的指定点移动、QR 搜索、转 yaw、下降、扎球都不是 EGO，都是 override。
+        如果 EGO 报障碍，优先看 ego_cloud_topic 点云和 EGO occupancy，而不是改 override 参数。
+    -->
     <include file="$(find ego_planner)/launch/single_run_in_exp.launch"
              if="$(arg start_ego_planner)">
         <arg name="cloud_topic" value="$(arg ego_cloud_topic)" />
         <arg name="use_goal_msg_z" value="true" />
         <arg name="fixed_goal_z" value="$(arg flight_z)" />
         <arg name="fsm_verbose" value="$(arg ego_fsm_verbose)" />
+        <arg name="reset_yaw_from_odom_on_new_traj" value="true" />
     </include>
 
+    <!--
+        启动 ego_bridge。
+        ego_bridge 是主任务和底层控制之间的桥：
+        - 接收 EGO 的 /position_cmd。
+        - 提供 takeoff、override 位置/yaw 控制、land 等接口给 EgoApi。
+        - 通过 /mavros/local_position/odom 读取当前位置。
+        主任务里的起飞、等待点、QR 点、转 yaw、下降、气球攻击等 override 控制都依赖它。
+
+        话题关系：
+        - EGO/traj_server 输出 /position_cmd。
+        - ego_bridge 订阅 /position_cmd，并结合当前控制模式转给底层。
+        - 主任务 enableOverride 后，ego_bridge 会优先执行 override 指令。
+        - 主任务 disableOverride 后，控制权可以回到 EGO 或其他普通模式。
+
+        注意：
+        - 不要同时启动 override_task_demo 和 craic_competition_demo，否则两个任务可能同时请求 override。
+        - ego_bridge_param.yaml 里的 reach_detect.pos_threshold 会影响桥自己的到点判定。
+    -->
     <group if="$(arg start_ego_bridge)">
         <rosparam file="$(find ego_bridge)/config/ego_bridge_param.yaml" command="load"
                   ns="ego_bridge" />
@@ -206,6 +542,12 @@
         </node>
     </group>
 
+    <!--
+        旧柱子识别节点。
+        当前比赛主流程不再走柱子识别，所以 start_pillar_detector 默认 false。
+        单独调试柱子时可以打开，但正式跑主任务时通常不要开，避免旧流程输出干扰判断。
+        该节点只做感知发布，不直接发飞控。
+    -->
     <node pkg="ego_api" type="craic_pillar_detector" name="craic_pillar_detector" output="screen"
           if="$(arg start_pillar_detector)">
         <param name="cloud_topic" value="$(arg raw_cloud_topic)" />
@@ -215,6 +557,21 @@
         <param name="readable_log_period" value="$(arg detector_readable_log_period)" />
     </node>
 
+    <!--
+        门框识别节点。
+        输入：frame_cloud_topic 点云和 odom。
+        输出：
+        - /craic/frame_status：当前识别状态，例如 valid_full、valid_partial_right 等。
+        - /craic/frame_center：门框中心，主任务锁定门框时使用。
+        - /craic/frame_markers：RViz 可视化。
+
+        注意：这个节点只负责识别，不发飞控。主任务会根据识别结果和 expected_frame 做兜底。
+
+        主任务订阅：
+        - frame_center_topic 默认 /craic/frame_center。
+        - frame_status_topic 默认 /craic/frame_status。
+        这两个 topic 名称在 C++ 中有默认值，目前 launch 没暴露出来改，一般不需要动。
+    -->
     <node pkg="ego_api" type="craic_frame_detector" name="craic_frame_detector" output="screen"
           if="$(arg start_frame_detector)">
         <param name="cloud_topic" value="$(arg frame_cloud_topic)" />
@@ -250,6 +607,11 @@
         <param name="readable_log_period" value="$(arg detector_readable_log_period)" />
     </node>
 
+    <!--
+        USB 相机和二维码识别。
+        主任务只关心 /usb_camera_vision/aruco_ids 是否出现非空 ID。
+        识别成功后 QR 搜索立即结束，主任务直接 override 返回门框后控制点。
+    -->
     <include file="$(find usb_camera_vision)/launch/usb_camera.launch"
              if="$(arg start_usb_aruco)">
         <arg name="camera_ns" value="$(arg usb_camera_ns)" />
@@ -262,6 +624,12 @@
         <arg name="aruco_preprocess_mode" value="$(arg usb_aruco_preprocess_mode)" />
     </include>
 
+    <!--
+        D435 气球识别。
+        输入彩色图、深度图、camera_info 和 odom。
+        输出气球相机坐标、世界坐标、画面中心误差，以及扎球确认 ROI 结果。
+        主任务在低空攻击阶段使用 /balloon/world_point 做粗定位，再用 /balloon/servo 做中心对齐。
+    -->
     <include file="$(find usb_camera_vision)/launch/d435_balloon_detector.launch"
              if="$(arg start_d435_balloon)">
         <arg name="camera" value="$(arg d435_camera)" />
@@ -287,6 +655,11 @@
         <arg name="needle_v" value="$(arg balloon_needle_v)" />
     </include>
 
+    <!--
+        旧 override 示例任务。
+        当前比赛主流程已经由 craic_competition_demo 节点完整接管，
+        因此该示例节点默认关闭，避免和主任务同时发 override 控制。
+    -->
     <node pkg="ego_api" type="override_task_demo" name="override_task_demo" output="screen"
           if="$(arg start_override_task_demo)">
         <param name="bridge_ns" value="$(arg bridge_ns)" />
@@ -294,6 +667,40 @@
         <param name="flight_z" value="$(arg flight_z)" />
     </node>
 
+    <!--
+        CRAIC 比赛主任务节点。
+        这是唯一负责串联完整比赛流程并主动发控制命令的任务节点。
+
+        当前主流程摘要：
+        1. 等待 ego_bridge 连接，记录 initial_yaw。
+        2. ego_bridge takeoff 到 takeoff_height。
+        3. override 到 initial_wait。
+        4. 读取 /craic/frame_center，5s 内锁定稳定中心，否则用 expected_frame。
+        5. 生成 frame_post_control = center.x + frame_post_x_offset。
+        6. EGO 飞到 frame_post_control，同时启用 x 过门保护。
+        7. override 平滑转到 reverse_yaw。
+        8. override 到 QR 点，识别二维码或执行 10s 小范围搜索。
+        9. override 返回保存的 frame_post_control。
+        10. EGO 回 attack_zone，x 小于 attack_zone_overrun_x 时接管并继续。
+        11. override 右转 90 度，下降到 attack_height。
+        12. 等待气球 world 点，粗定位、图像中心对齐、低速前冲扎球并验证。
+        13. 扎球成功后回 (0,0,1)，切 PX4 AUTO.LAND。
+
+        下面这些 param 基本都是把上面的 arg 原样传给主任务节点。
+
+        主任务关键日志：
+        - START：打印 initial_yaw、reverse_yaw、attack_yaw。
+        - TASK step=...：每个阶段开始。
+        - FRAME_CENTER robust_lock：开始锁门框中心。
+        - FRAME_CENTER locked 或 fallback：最终门框中心来源。
+        - FRAME_POST_CONTROL：打印中心和门后目标点。
+        - EGO_GOAL_FRAME_GUARD：第一次 EGO 穿门目标和过门保护状态。
+        - OVERRIDE_MOVE：override 位置控制过程。
+        - YAW_ALIGN：override yaw 对齐过程。
+        - EGO_GOAL_GUARD：回打击区 EGO 和 x 保护。
+        - BALLOON_ATTACK：气球攻击流程。
+        - PX4_LAND：切 PX4 自动降落结果。
+    -->
     <node pkg="ego_api" type="craic_competition_demo" name="craic_competition_demo" output="screen">
         <param name="bridge_ns" value="$(arg bridge_ns)" />
         <param name="ego_api_verbose" value="$(arg ego_api_verbose)" />
@@ -308,6 +715,8 @@
         <param name="expected_frame_z" value="$(arg expected_frame_z)" />
         <param name="frame_center_reject_distance" value="$(arg frame_center_reject_distance)" />
         <param name="frame_post_x_offset" value="$(arg frame_post_x_offset)" />
+        <param name="frame_pass_guard_x_offset" value="$(arg frame_pass_guard_x_offset)" />
+        <param name="frame_pass_guard_timeout" value="$(arg frame_pass_guard_timeout)" />
         <param name="frame_detect_timeout" value="$(arg frame_detect_timeout)" />
         <param name="frame_valid_max_age" value="$(arg frame_valid_max_age)" />
         <param name="frame_lock_stability_threshold" value="$(arg frame_lock_stability_threshold)" />

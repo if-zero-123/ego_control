@@ -1,24 +1,68 @@
 <launch>
-    <!-- number of moving objects -->
+    <!--
+        EGO-Planner 单机实验启动文件。
+        这个 launch 会启动两部分：
+        1. advanced_param_exp.xml：EGO 的建图、规划 FSM、优化器等核心节点和参数。
+        2. traj_server：接收 EGO 生成的 B-spline 轨迹，并发布给底层控制器的 position_cmd。
+
+        在 craic_competition_demo.launch 里会 include 这个文件，所以比赛主流程里的 EGO 段
+        实际也会使用这里的地图范围、点云输入、高度模式和 traj_server yaw 处理参数。
+    -->
+
+    <!-- 多机/仿真相关参数。单机比赛流程固定 drone_id=0；obj_num 是 EGO 原工程里的动态物体数量占位。 -->
     <arg name="obj_num" value="10" />
     <arg name="drone_id" value="0"/>
 
-    <!-- 栅格地图总范围：z 方向建议比限高略大，给建图和边界判断留余量。 -->
+    <!--
+        局部栅格地图尺寸，单位 m。
+        map_size_x/y/z 不是比赛场地大小，而是 EGO 维护的局部/全局栅格地图范围。
+        z 方向建议高于实际飞行限高一点点，否则靠近上边界时规划会变保守。
+    -->
     <arg name="map_size_x" value="32"/>
     <arg name="map_size_y" value="24"/>
     <arg name="map_size_z" value="2.5"/>
-    <!-- 规划虚拟天花板高度：EGO planner 会把该高度附近当成障碍，避免主动规划飞过 2m。 -->
+
+    <!--
+        虚拟天花板高度，单位 m。
+        EGO 会在这个高度附近加入虚拟障碍，避免轨迹主动规划到过高位置。
+        CRAIC 场地目前主要飞 1.0m 到 1.3m 左右，2.0m 是给上方留出安全边界。
+    -->
     <arg name="virtual_ceil_height" value="2.0"/>
+
+    <!--
+        里程计和点云输入。
+        odom_topic 必须和主流程/ego_bridge 使用的坐标系一致，当前为 MAVROS local ENU。
+        cloud_topic 是喂给 EGO 建图的点云；比赛 launch 可覆盖成原始点云或自体滤波后的点云。
+    -->
     <arg name="odom_topic" value="/mavros/local_position/odom"/>
     <arg name="cloud_topic" default="/cloud_registered"/>
-    <!-- /move_base_simple/goal 目标点高度模式：
-         默认 false = 固定高度，适合 RViz 2D Nav Goal；发送完整 x/y/z 目标点时设为 true。 -->
+
+    <!--
+        EGO 目标点高度模式。
+        use_goal_msg_z=false：忽略 /move_base_simple/goal 消息里的 z，统一使用 fixed_goal_z。
+        use_goal_msg_z=true：使用目标消息自带的 z，适合比赛主流程发布精确三维目标点。
+        craic_competition_demo.launch 当前会传 true，确保门后点/打击区高度按主流程目标执行。
+    -->
     <arg name="use_goal_msg_z" default="false"/>
     <arg name="fixed_goal_z" default="1.0"/>
+
+    <!--
+        EGO FSM 日志开关。
+        true 时会输出较多规划状态，适合调试；比赛正式跑可以在上层 launch 里设 false 减少刷屏。
+    -->
     <arg name="fsm_verbose" default="true"/>
-    
-    <!-- main algorithm params -->
+
+    <!--
+        traj_server yaw 接管保护。
+        false：沿用 traj_server 内部上一段轨迹的 yaw 状态。
+        true：每次收到新 B-spline 轨迹时，用当前 odom yaw 重置 traj_server 的 yaw 起点。
+        这个参数用于缓解 override 控制结束后 EGO 重新接管时突然绕一圈的问题。
+    -->
+    <arg name="reset_yaw_from_odom_on_new_traj" default="false"/>
+
+    <!-- EGO 主算法参数：这里把本 launch 的参数继续传给 advanced_param_exp.xml。 -->
     <include file="$(find ego_planner)/launch/advanced_param_exp.xml">
+        <!-- 飞机编号和地图边界参数。 -->
         <arg name="drone_id" value="$(arg drone_id)"/>
         <arg name="map_size_x_" value="$(arg map_size_x)"/>
         <arg name="map_size_y_" value="$(arg map_size_y)"/>
@@ -26,34 +70,57 @@
         <arg name="virtual_ceil_height_" value="$(arg virtual_ceil_height)"/>
         <arg name="odometry_topic" value="$(arg odom_topic)"/>
         <arg name="obj_num_set" value="$(arg obj_num)" />
-        <!-- camera pose: transform of camera frame in the world frame -->
-        <!-- depth topic: depth image, 640x480 by default -->
-        <!-- don't set cloud_topic if you already set these ones! -->
+
+        <!--
+            深度相机输入占位。
+            当前使用 LiDAR 点云 cloud_topic，不使用 depth image，因此 camera_pose_topic/depth_topic 填 nouse。
+            注意：不要同时启用 depth 图像输入和 cloud_topic 输入，否则建图来源会混乱。
+        -->
         <arg name="camera_pose_topic" value="nouse1"/>
         <arg name="depth_topic" value="nouse2"/>
-        <!-- topic of point cloud measurement, such as from LIDAR  -->
-        <!-- don't set camera pose and depth, if you already set this one! -->
+
+        <!-- LiDAR 点云输入话题，EGO 的障碍物地图就是从这个话题构建的。 -->
         <arg name="cloud_topic" value="$(arg cloud_topic)"/>
-        <!-- intrinsic params of the depth camera -->
+
+        <!-- 深度相机内参占位。当前不用深度图建图，但 advanced_param_exp.xml 仍要求这些参数存在。 -->
         <arg name="cx" value="323.3316345214844"/>
         <arg name="cy" value="234.95498657226562"/>
         <arg name="fx" value="384.39654541015625"/>
         <arg name="fy" value="384.39654541015625"/>
-        <!-- maximum velocity and acceleration the drone will reach -->
+
+        <!--
+            EGO 规划最大速度/加速度。
+            max_vel 直接影响 EGO 段飞行速度；max_acc 影响轨迹加减速能力。
+            当前比赛流程中，override 段的速度不由这里控制，只影响 EGO 穿门框和回打击区等 EGO 段。
+        -->
         <arg name="max_vel" value="0.5" />
         <arg name="max_acc" value="6.0" />
-        <!--always set to 1.5 times grater than sensing horizen-->
+
+        <!--
+            规划前瞻距离，单位 m。
+            通常设置为感知范围的约 1.5 倍；太短会频繁重规划，太长会增加计算和受远处障碍影响。
+        -->
         <arg name="planning_horizon" value="6" />
+
+        <!-- 是否生成多条差异化候选轨迹。false 更简单稳定，适合当前单机比赛流程。 -->
         <arg name="use_distinctive_trajs" value="false" />
-        <!-- 1: use 2D Nav Goal to select goal  -->
-        <!-- 2: use global waypoints below  -->
+
+        <!--
+            目标点来源。
+            flight_type=1：使用 /move_base_simple/goal，比赛主流程通过 EgoApi 发布目标就是走这个入口。
+            flight_type=2：使用下面 point0/point1... 的全局航点列表。
+        -->
         <arg name="flight_type" value="1" />
-        <!-- 将手动目标点高度模式传给 EGO FSM。 -->
+
+        <!-- 将目标高度模式传给 EGO FSM。比赛主流程通常传 use_goal_msg_z=true。 -->
         <arg name="use_goal_msg_z" value="$(arg use_goal_msg_z)" />
         <arg name="fixed_goal_z" value="$(arg fixed_goal_z)" />
         <arg name="fsm_verbose" value="$(arg fsm_verbose)" />
-        <!-- global waypoints -->
-        <!-- It generates a piecewise min-snap traj passing all waypoints -->
+
+        <!--
+            flight_type=2 时使用的全局航点。
+            当前 flight_type=1，所以这些点默认不会参与比赛主流程，只保留作手动测试/原工程兼容。
+        -->
         <arg name="point_num" value="1" />
         <arg name="point0_x" value="15" />
         <arg name="point0_y" value="0" />
@@ -71,10 +138,33 @@
         <arg name="point4_y" value="0.0" />
         <arg name="point4_z" value="1.0" />
     </include>
-    <!-- trajectory server -->
+
+    <!--
+        轨迹服务器。
+        输入：EGO planner 发布的 B-spline 轨迹。
+        输出：position_cmd，后续由 ego_bridge/底层控制链路转换成飞控控制指令。
+    -->
     <node pkg="ego_planner" name="drone_$(arg drone_id)_traj_server" type="traj_server" output="screen">
+        <!-- 如需把 position_cmd 改到其他话题，可打开下面 remap；当前保持原工程默认。 -->
         <!-- <remap from="position_cmd" to="/setpoints_cmd"/> -->
+
+        <!-- 接收对应无人机编号的规划轨迹。 -->
         <remap from="~planning/bspline" to="drone_$(arg drone_id)_planning/bspline"/>
+
+        <!-- 给 traj_server 当前里程计，用于 yaw 重置和轨迹时间同步。 -->
+        <remap from="~odom" to="$(arg odom_topic)"/>
+
+        <!--
+            轨迹前视时间，单位 s。
+            traj_server 会按当前时间向前取一点轨迹状态发布控制命令，1.0 是原工程常用值。
+        -->
         <param name="traj_server/time_forward" value="1.0" type="double"/>
+
+        <!--
+            新轨迹 yaw 重置开关。
+            上层比赛 launch 当前传 true，用当前 odom yaw 作为新 EGO 轨迹 yaw 起点，减少接管时大幅旋转。
+        -->
+        <param name="traj_server/reset_yaw_from_odom_on_new_traj"
+               value="$(arg reset_yaw_from_odom_on_new_traj)" type="bool"/>
     </node>
 </launch>

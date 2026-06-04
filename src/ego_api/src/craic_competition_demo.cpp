@@ -161,7 +161,9 @@ public:
         pnh_.param<double>("expected_frame_z", expected_frame_center_.z(), 1.25);
         pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.55);
         pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.1);
-        pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 10.0);
+        pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 0.35);
+        pnh_.param<double>("frame_pass_guard_timeout", frame_pass_guard_timeout_, 10.0);
+        pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 5.0);
         pnh_.param<double>("frame_valid_max_age", frame_valid_max_age_, 0.8);
         pnh_.param<double>("frame_lock_stability_threshold", frame_lock_stability_threshold_, 0.12);
         pnh_.param<int>("frame_strong_lock_frames", frame_strong_lock_frames_, 3);
@@ -188,7 +190,7 @@ public:
         pnh_.param<double>("balloon_valid_max_age", balloon_valid_max_age_, 0.8);
         pnh_.param<double>("balloon_standoff", balloon_standoff_, 0.70);
         pnh_.param<double>("balloon_puncture_distance", balloon_puncture_distance_, 0.20);
-        pnh_.param<double>("balloon_puncture_speed", balloon_puncture_speed_, 0.10);
+        pnh_.param<double>("balloon_puncture_speed", balloon_puncture_speed_, 0.14);
         pnh_.param<double>("balloon_approach_timeout", balloon_approach_timeout_, 8.0);
         pnh_.param<double>("balloon_align_timeout", balloon_align_timeout_, 6.0);
         pnh_.param<double>("balloon_align_lateral_threshold", balloon_align_lateral_threshold_, 0.06);
@@ -206,9 +208,9 @@ public:
         pnh_.param<double>("balloon_servo_hold_time", balloon_servo_hold_time_, 0.25);
         pnh_.param<double>("balloon_servo_lateral_gain", balloon_servo_lateral_gain_, 0.18);
         pnh_.param<double>("balloon_servo_z_gain", balloon_servo_z_gain_, 0.12);
-        pnh_.param<double>("balloon_servo_max_lateral_speed", balloon_servo_max_lateral_speed_, 0.08);
-        pnh_.param<double>("balloon_servo_max_z_speed", balloon_servo_max_z_speed_, 0.06);
-        pnh_.param<double>("balloon_fine_forward_speed", balloon_fine_forward_speed_, 0.05);
+        pnh_.param<double>("balloon_servo_max_lateral_speed", balloon_servo_max_lateral_speed_, 0.10);
+        pnh_.param<double>("balloon_servo_max_z_speed", balloon_servo_max_z_speed_, 0.08);
+        pnh_.param<double>("balloon_fine_forward_speed", balloon_fine_forward_speed_, 0.07);
         pnh_.param<double>("balloon_fine_forward_distance", balloon_fine_forward_distance_, 0.20);
         pnh_.param<double>("balloon_backoff_distance", balloon_backoff_distance_, 0.12);
         pnh_.param<double>("balloon_pop_verify_timeout", balloon_pop_verify_timeout_, 1.0);
@@ -225,7 +227,7 @@ public:
         pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.10);
         pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.25);
         pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 0.5);
-        pnh_.param<double>("attack_zone_overrun_x", attack_zone_overrun_x_, 0.0);
+        pnh_.param<double>("attack_zone_overrun_x", attack_zone_overrun_x_, 0.25);
         pnh_.param<bool>("robust_land_enable", robust_land_enable_, true);
         pnh_.param<double>("robust_land_soft_z", robust_land_soft_z_, 0.10);
         pnh_.param<double>("robust_land_soft_speed", robust_land_soft_speed_, 0.08);
@@ -296,8 +298,8 @@ public:
                  frame_center.x(), frame_center.y(), frame_center.z(),
                  frame_post_control.x(), frame_post_control.y(), frame_post_control.z());
 
-        logStage("FRAME_POST_EGO", "ego goal to frame post control");
-        if (!flyGoal("frame_post_control", frame_post_control, initial_yaw)) {
+        logStage("FRAME_POST_EGO", "ego goal to frame post control with pass guard");
+        if (!flyGoalWatchFramePass("frame_post_control", frame_post_control, initial_yaw, frame_center.x())) {
             ROS_ERROR("[craic_demo] FAIL stage=FRAME_POST_EGO");
             safeLand();
             return 1;
@@ -425,6 +427,56 @@ private:
             ROS_WARN("[craic_demo] EGO_RESULT name=%s timeout=%.1f", label.c_str(), goal_timeout_);
         }
         return reached;
+    }
+
+    bool flyGoalWatchFramePass(const std::string& label,
+                               const Eigen::Vector3d& target,
+                               double yaw,
+                               double frame_center_x) {
+        const double pass_x = frame_center_x + frame_pass_guard_x_offset_;
+        ROS_INFO("[craic_demo] EGO_GOAL_FRAME_GUARD name=%s world=(%.2f %.2f %.2f) yaw=%.3f pass_x>%.2f guard_timeout=%.1f goal_timeout=%.1f",
+                 label.c_str(), target.x(), target.y(), target.z(), yaw,
+                 pass_x, frame_pass_guard_timeout_, goal_timeout_);
+        api_.publishGoalOnly(target.x(), target.y(), target.z(), yaw);
+
+        ros::Rate rate(20);
+        const ros::Time start = ros::Time::now();
+        bool saw_reach_reset = api_.getReachStatus() == 0;
+        while (ros::ok()) {
+            ros::spinOnce();
+
+            if (api_.getReachStatus() == 0) {
+                saw_reach_reset = true;
+            }
+            if (saw_reach_reset && api_.getReachStatus() == 1) {
+                ROS_INFO("[craic_demo] EGO_GOAL_FRAME_GUARD result name=%s reached", label.c_str());
+                return true;
+            }
+
+            const Eigen::Vector3d pos = api_.getOdomPosition();
+            const double elapsed = (ros::Time::now() - start).toSec();
+            if (elapsed >= frame_pass_guard_timeout_ && pos.x() > pass_x) {
+                ROS_WARN("[craic_demo] EGO_GOAL_FRAME_GUARD passed_without_reach name=%s odom=(%.2f %.2f %.2f) pass_x=%.2f elapsed=%.1f action=continue_next_task",
+                         label.c_str(), pos.x(), pos.y(), pos.z(), pass_x, elapsed);
+                return true;
+            }
+
+            if (!simple_logs_) {
+                const double dist = (pos - target).norm();
+                ROS_INFO_THROTTLE(mission_log_period_,
+                                  "[craic_demo] EGO_GOAL_FRAME_GUARD name=%s dist=%.3f odom=(%.2f %.2f %.2f) pass_x=%.2f elapsed=%.1f reach=%u",
+                                  label.c_str(), dist, pos.x(), pos.y(), pos.z(), pass_x, elapsed,
+                                  static_cast<unsigned int>(api_.getReachStatus()));
+            }
+
+            if (elapsed >= goal_timeout_) {
+                ROS_WARN("[craic_demo] EGO_GOAL_FRAME_GUARD timeout name=%s timeout=%.1f odom=(%.2f %.2f %.2f) pass_x=%.2f",
+                         label.c_str(), goal_timeout_, pos.x(), pos.y(), pos.z(), pass_x);
+                return false;
+            }
+            rate.sleep();
+        }
+        return false;
     }
 
     bool flyGoalWatchXOverrun(const std::string& label, const Eigen::Vector3d& target, double yaw) {
@@ -1636,7 +1688,9 @@ private:
     Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(3.2, -1.25, 1.25);
     double frame_center_reject_distance_ = 0.55;
     double frame_post_x_offset_ = 1.1;
-    double frame_detect_timeout_ = 10.0;
+    double frame_pass_guard_x_offset_ = 0.35;
+    double frame_pass_guard_timeout_ = 10.0;
+    double frame_detect_timeout_ = 5.0;
     double frame_valid_max_age_ = 0.8;
     double frame_lock_stability_threshold_ = 0.12;
     int frame_strong_lock_frames_ = 3;
@@ -1659,7 +1713,7 @@ private:
     double balloon_valid_max_age_ = 0.8;
     double balloon_standoff_ = 0.70;
     double balloon_puncture_distance_ = 0.20;
-    double balloon_puncture_speed_ = 0.10;
+    double balloon_puncture_speed_ = 0.14;
     double balloon_approach_timeout_ = 8.0;
     double balloon_align_timeout_ = 6.0;
     double balloon_align_lateral_threshold_ = 0.06;
@@ -1677,9 +1731,9 @@ private:
     double balloon_servo_hold_time_ = 0.25;
     double balloon_servo_lateral_gain_ = 0.18;
     double balloon_servo_z_gain_ = 0.12;
-    double balloon_servo_max_lateral_speed_ = 0.08;
-    double balloon_servo_max_z_speed_ = 0.06;
-    double balloon_fine_forward_speed_ = 0.05;
+    double balloon_servo_max_lateral_speed_ = 0.10;
+    double balloon_servo_max_z_speed_ = 0.08;
+    double balloon_fine_forward_speed_ = 0.07;
     double balloon_fine_forward_distance_ = 0.20;
     double balloon_backoff_distance_ = 0.12;
     double balloon_pop_verify_timeout_ = 1.0;
@@ -1696,7 +1750,7 @@ private:
     double override_yaw_threshold_ = 0.10;
     double override_yaw_hold_time_ = 0.25;
     double override_yaw_rate_ = 0.5;
-    double attack_zone_overrun_x_ = 0.0;
+    double attack_zone_overrun_x_ = 0.25;
     bool robust_land_enable_ = true;
     double robust_land_soft_z_ = 0.10;
     double robust_land_soft_speed_ = 0.08;
