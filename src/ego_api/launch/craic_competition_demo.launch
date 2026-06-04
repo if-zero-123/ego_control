@@ -37,8 +37,15 @@
     <arg name="expected_frame_z" default="1.25" />
     <arg name="frame_center_reject_distance" default="0.55" />
     <arg name="frame_post_x_offset" default="1.1" />
-    <arg name="frame_detect_timeout" default="20.0" />
+    <arg name="frame_detect_timeout" default="10.0" />
     <arg name="frame_valid_max_age" default="0.8" />
+    <arg name="frame_lock_stability_threshold" default="0.12" />
+    <arg name="frame_strong_lock_frames" default="3" />
+    <arg name="frame_medium_lock_frames" default="4" />
+    <arg name="frame_partial_lock_frames" default="5" />
+    <arg name="frame_medium_min_wait" default="0.8" />
+    <arg name="frame_partial_min_wait" default="2.0" />
+    <arg name="frame_lock_history_duration" default="2.0" />
 
     <arg name="qr_goal_x" default="4.0" />
     <arg name="qr_goal_y" default="0.25" />
@@ -51,7 +58,7 @@
 
     <arg name="attack_zone_x" default="0.0" />
     <arg name="attack_zone_y" default="-0.8" />
-    <arg name="attack_zone_z" default="1.0" />
+    <arg name="attack_zone_z" default="1.25" />
     <arg name="attack_height" default="0.3" />
     <arg name="balloon_wait_timeout" default="8.0" />
     <arg name="balloon_valid_max_age" default="0.8" />
@@ -303,6 +310,13 @@
         <param name="frame_post_x_offset" value="$(arg frame_post_x_offset)" />
         <param name="frame_detect_timeout" value="$(arg frame_detect_timeout)" />
         <param name="frame_valid_max_age" value="$(arg frame_valid_max_age)" />
+        <param name="frame_lock_stability_threshold" value="$(arg frame_lock_stability_threshold)" />
+        <param name="frame_strong_lock_frames" value="$(arg frame_strong_lock_frames)" />
+        <param name="frame_medium_lock_frames" value="$(arg frame_medium_lock_frames)" />
+        <param name="frame_partial_lock_frames" value="$(arg frame_partial_lock_frames)" />
+        <param name="frame_medium_min_wait" value="$(arg frame_medium_min_wait)" />
+        <param name="frame_partial_min_wait" value="$(arg frame_partial_min_wait)" />
+        <param name="frame_lock_history_duration" value="$(arg frame_lock_history_duration)" />
         <param name="qr_goal_x" value="$(arg qr_goal_x)" />
         <param name="qr_goal_y" value="$(arg qr_goal_y)" />
         <param name="qr_goal_z" value="$(arg qr_goal_z)" />

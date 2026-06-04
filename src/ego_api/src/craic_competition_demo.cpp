@@ -62,6 +62,49 @@ bool validFrameStatus(const std::string& status) {
            status == "valid_partial_right";
 }
 
+int frameStatusRank(const std::string& status) {
+    if (status == "valid_frame_cluster" || status == "valid_full") return 3;
+    if (status == "valid_split_frame" || status == "valid_weak_pair") return 2;
+    if (status == "valid_partial_left" || status == "valid_partial_right") return 1;
+    return 0;
+}
+
+const char* frameRankName(int rank) {
+    if (rank >= 3) return "strong";
+    if (rank == 2) return "medium";
+    if (rank == 1) return "partial";
+    return "invalid";
+}
+
+struct FrameCenterSample {
+    Eigen::Vector3d center = Eigen::Vector3d::Zero();
+    ros::Time stamp;
+    std::string status;
+    int rank = 0;
+    double dist_to_expected = std::numeric_limits<double>::infinity();
+};
+
+Eigen::Vector3d medianCenter(const std::vector<FrameCenterSample>& samples) {
+    std::vector<double> xs;
+    std::vector<double> ys;
+    std::vector<double> zs;
+    xs.reserve(samples.size());
+    ys.reserve(samples.size());
+    zs.reserve(samples.size());
+    for (const auto& sample : samples) {
+        xs.push_back(sample.center.x());
+        ys.push_back(sample.center.y());
+        zs.push_back(sample.center.z());
+    }
+
+    auto median = [](std::vector<double>& values) {
+        const std::size_t mid = values.size() / 2;
+        std::nth_element(values.begin(), values.begin() + mid, values.end());
+        return values[mid];
+    };
+    return Eigen::Vector3d(median(xs), median(ys), median(zs));
+}
+
 enum class MoveResult {
     Reached,
     QrDetected,
@@ -118,8 +161,15 @@ public:
         pnh_.param<double>("expected_frame_z", expected_frame_center_.z(), 1.25);
         pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.55);
         pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.1);
-        pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 20.0);
+        pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 10.0);
         pnh_.param<double>("frame_valid_max_age", frame_valid_max_age_, 0.8);
+        pnh_.param<double>("frame_lock_stability_threshold", frame_lock_stability_threshold_, 0.12);
+        pnh_.param<int>("frame_strong_lock_frames", frame_strong_lock_frames_, 3);
+        pnh_.param<int>("frame_medium_lock_frames", frame_medium_lock_frames_, 4);
+        pnh_.param<int>("frame_partial_lock_frames", frame_partial_lock_frames_, 5);
+        pnh_.param<double>("frame_medium_min_wait", frame_medium_min_wait_, 0.8);
+        pnh_.param<double>("frame_partial_min_wait", frame_partial_min_wait_, 2.0);
+        pnh_.param<double>("frame_lock_history_duration", frame_lock_history_duration_, 2.0);
 
         pnh_.param<double>("qr_goal_x", qr_goal_.x(), 4.0);
         pnh_.param<double>("qr_goal_y", qr_goal_.y(), 0.25);
@@ -132,7 +182,7 @@ public:
 
         pnh_.param<double>("attack_zone_x", attack_zone_.x(), 0.0);
         pnh_.param<double>("attack_zone_y", attack_zone_.y(), -0.8);
-        pnh_.param<double>("attack_zone_z", attack_zone_.z(), 1.0);
+        pnh_.param<double>("attack_zone_z", attack_zone_.z(), 1.25);
         pnh_.param<double>("attack_height", attack_height_, 0.3);
         pnh_.param<double>("balloon_wait_timeout", balloon_wait_timeout_, 8.0);
         pnh_.param<double>("balloon_valid_max_age", balloon_valid_max_age_, 0.8);
@@ -577,33 +627,108 @@ private:
     Eigen::Vector3d waitFrameCenterWithFallback() {
         ros::Rate rate(20);
         const ros::Time start = ros::Time::now();
+        std::vector<FrameCenterSample> samples;
+        ros::Time last_sample_stamp;
+        int rejected_samples = 0;
+
+        ROS_INFO("[craic_demo] FRAME_CENTER robust_lock timeout=%.1f expected=(%.2f %.2f %.2f) reject_dist=%.2f stable<=%.2f frames strong=%d medium=%d partial=%d",
+                 frame_detect_timeout_,
+                 expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z(),
+                 frame_center_reject_distance_, frame_lock_stability_threshold_,
+                 frame_strong_lock_frames_, frame_medium_lock_frames_, frame_partial_lock_frames_);
+
         while (ros::ok() && (ros::Time::now() - start).toSec() < frame_detect_timeout_) {
             ros::spinOnce();
-            if (freshFrameCenter()) {
-                const double dist = (frame_center_ - expected_frame_center_).norm();
-                if (dist <= frame_center_reject_distance_) {
-                    ROS_INFO("[craic_demo] FRAME_CENTER source=detected status=%s center=(%.2f %.2f %.2f) expected=(%.2f %.2f %.2f) dist=%.2f",
-                             frame_status_.c_str(),
-                             frame_center_.x(), frame_center_.y(), frame_center_.z(),
-                             expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z(),
-                             dist);
-                    return frame_center_;
+            if (freshFrameCenter() &&
+                (!last_sample_stamp.isValid() || frame_center_recv_stamp_ != last_sample_stamp)) {
+                last_sample_stamp = frame_center_recv_stamp_;
+
+                FrameCenterSample sample;
+                sample.center = frame_center_;
+                sample.stamp = frame_center_recv_stamp_;
+                sample.status = frame_status_;
+                sample.rank = frameStatusRank(frame_status_);
+                sample.dist_to_expected = (frame_center_ - expected_frame_center_).norm();
+
+                if (sample.dist_to_expected <= frame_center_reject_distance_) {
+                    samples.push_back(sample);
+                    pruneFrameSamples(samples);
+                } else {
+                    ++rejected_samples;
+                    ROS_WARN_THROTTLE(mission_log_period_,
+                                      "[craic_demo] FRAME_CENTER reject_sample status=%s rank=%s center=(%.2f %.2f %.2f) dist=%.2f limit=%.2f action=continue_wait",
+                                      sample.status.c_str(), frameRankName(sample.rank),
+                                      sample.center.x(), sample.center.y(), sample.center.z(),
+                                      sample.dist_to_expected, frame_center_reject_distance_);
                 }
-                ROS_WARN("[craic_demo] FRAME_CENTER reject_detected status=%s center=(%.2f %.2f %.2f) expected=(%.2f %.2f %.2f) dist=%.2f limit=%.2f",
-                         frame_status_.c_str(),
-                         frame_center_.x(), frame_center_.y(), frame_center_.z(),
-                         expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z(),
-                         dist, frame_center_reject_distance_);
-                return expected_frame_center_;
             }
+
+            Eigen::Vector3d locked = Eigen::Vector3d::Zero();
+            std::string lock_status;
+            double lock_span = 0.0;
+            int lock_used = 0;
+            const double elapsed = (ros::Time::now() - start).toSec();
+            if (tryLockFrameSamples(samples, 3, frame_strong_lock_frames_,
+                                    &locked, &lock_status, &lock_span, &lock_used)) {
+                logFrameLock("strong", lock_status, locked, lock_span, lock_used);
+                return locked;
+            }
+            if (elapsed >= frame_medium_min_wait_ &&
+                tryLockFrameSamples(samples, 2, frame_medium_lock_frames_,
+                                    &locked, &lock_status, &lock_span, &lock_used)) {
+                logFrameLock("medium", lock_status, locked, lock_span, lock_used);
+                return locked;
+            }
+            if (elapsed >= frame_partial_min_wait_ &&
+                tryLockFrameSamples(samples, 1, frame_partial_lock_frames_,
+                                    &locked, &lock_status, &lock_span, &lock_used)) {
+                logFrameLock("partial", lock_status, locked, lock_span, lock_used);
+                return locked;
+            }
+
             if (!simple_logs_) {
+                int strong_count = 0;
+                int medium_count = 0;
+                int partial_count = 0;
+                for (const auto& sample : samples) {
+                    if (sample.rank >= 3) {
+                        ++strong_count;
+                    } else if (sample.rank == 2) {
+                        ++medium_count;
+                    } else if (sample.rank == 1) {
+                        ++partial_count;
+                    }
+                }
                 ROS_INFO_THROTTLE(mission_log_period_,
-                                  "[craic_demo] FRAME_CENTER waiting status=%s have_center=%s",
-                                  frame_status_.c_str(), yesNo(have_frame_center_));
+                                  "[craic_demo] FRAME_CENTER collecting elapsed=%.1f/%.1f status=%s have_center=%s samples strong=%d medium=%d partial=%d rejected=%d",
+                                  elapsed, frame_detect_timeout_, frame_status_.c_str(),
+                                  yesNo(have_frame_center_), strong_count, medium_count,
+                                  partial_count, rejected_samples);
             }
             rate.sleep();
         }
-        ROS_WARN("[craic_demo] FRAME_CENTER fallback reason=timeout_or_invalid expected=(%.2f %.2f %.2f)",
+        int strong_count = 0;
+        int medium_count = 0;
+        int partial_count = 0;
+        for (const auto& sample : samples) {
+            if (sample.rank >= 3) {
+                ++strong_count;
+            } else if (sample.rank == 2) {
+                ++medium_count;
+            } else if (sample.rank == 1) {
+                ++partial_count;
+            }
+        }
+        const double center_age = frame_center_recv_stamp_.isValid()
+                                      ? (ros::Time::now() - frame_center_recv_stamp_).toSec()
+                                      : -1.0;
+        const double status_age = frame_status_stamp_.isValid()
+                                      ? (ros::Time::now() - frame_status_stamp_).toSec()
+                                      : -1.0;
+        ROS_WARN("[craic_demo] FRAME_CENTER fallback reason=timeout_or_unstable timeout=%.1f samples=%zu strong=%d medium=%d partial=%d rejected=%d have_center=%s status=%s center_age=%.2f status_age=%.2f expected=(%.2f %.2f %.2f)",
+                 frame_detect_timeout_, samples.size(), strong_count, medium_count, partial_count,
+                 rejected_samples, yesNo(have_frame_center_), frame_status_.c_str(),
+                 center_age, status_age,
                  expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z());
         return expected_frame_center_;
     }
@@ -611,9 +736,67 @@ private:
     bool freshFrameCenter() const {
         return have_frame_center_ &&
                validFrameStatus(frame_status_) &&
-               frame_center_stamp_.isValid() &&
-               (ros::Time::now() - frame_center_stamp_).toSec() <= frame_valid_max_age_ &&
+               frame_center_recv_stamp_.isValid() &&
+               (ros::Time::now() - frame_center_recv_stamp_).toSec() <= frame_valid_max_age_ &&
                finiteVec(frame_center_);
+    }
+
+    void pruneFrameSamples(std::vector<FrameCenterSample>& samples) const {
+        if (frame_lock_history_duration_ <= 0.0) return;
+        const ros::Time now = ros::Time::now();
+        samples.erase(std::remove_if(samples.begin(), samples.end(),
+                                     [&](const FrameCenterSample& sample) {
+                                         return (now - sample.stamp).toSec() > frame_lock_history_duration_;
+                                     }),
+                      samples.end());
+    }
+
+    bool tryLockFrameSamples(const std::vector<FrameCenterSample>& samples,
+                             int min_rank,
+                             int required_frames,
+                             Eigen::Vector3d* locked_center,
+                             std::string* lock_status,
+                             double* lock_span,
+                             int* used_frames) const {
+        const int required = std::max(1, required_frames);
+        std::vector<FrameCenterSample> ranked;
+        ranked.reserve(samples.size());
+        for (const auto& sample : samples) {
+            if (sample.rank >= min_rank) {
+                ranked.push_back(sample);
+            }
+        }
+        if (ranked.size() < static_cast<std::size_t>(required)) return false;
+
+        std::vector<FrameCenterSample> window(ranked.end() - required, ranked.end());
+        const Eigen::Vector3d center = medianCenter(window);
+        const double dist = (center - expected_frame_center_).norm();
+        if (dist > frame_center_reject_distance_) return false;
+
+        double span = 0.0;
+        for (const auto& sample : window) {
+            span = std::max(span, (sample.center - center).norm());
+        }
+        if (span > frame_lock_stability_threshold_) return false;
+
+        *locked_center = center;
+        *lock_status = window.back().status;
+        *lock_span = span;
+        *used_frames = required;
+        return true;
+    }
+
+    void logFrameLock(const std::string& rank_label,
+                      const std::string& status,
+                      const Eigen::Vector3d& center,
+                      double span,
+                      int used_frames) const {
+        const double dist = (center - expected_frame_center_).norm();
+        ROS_INFO("[craic_demo] FRAME_CENTER source=detected lock=%s status=%s center=(%.2f %.2f %.2f) expected=(%.2f %.2f %.2f) dist=%.2f stable_span=%.3f frames=%d",
+                 rank_label.c_str(), status.c_str(),
+                 center.x(), center.y(), center.z(),
+                 expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z(),
+                 dist, span, used_frames);
     }
 
     bool waitQrOrSearch(const Eigen::Vector3d& qr_goal, double yaw) {
@@ -1356,11 +1539,13 @@ private:
     void frameCenterCb(const geometry_msgs::PointStamped::ConstPtr& msg) {
         frame_center_ = Eigen::Vector3d(msg->point.x, msg->point.y, msg->point.z);
         frame_center_stamp_ = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+        frame_center_recv_stamp_ = ros::Time::now();
         have_frame_center_ = true;
     }
 
     void frameStatusCb(const std_msgs::String::ConstPtr& msg) {
         frame_status_ = msg->data;
+        frame_status_stamp_ = ros::Time::now();
     }
 
     void qrIdsCb(const std_msgs::Int32MultiArray::ConstPtr& msg) {
@@ -1451,8 +1636,15 @@ private:
     Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(3.2, -1.25, 1.25);
     double frame_center_reject_distance_ = 0.55;
     double frame_post_x_offset_ = 1.1;
-    double frame_detect_timeout_ = 20.0;
+    double frame_detect_timeout_ = 10.0;
     double frame_valid_max_age_ = 0.8;
+    double frame_lock_stability_threshold_ = 0.12;
+    int frame_strong_lock_frames_ = 3;
+    int frame_medium_lock_frames_ = 4;
+    int frame_partial_lock_frames_ = 5;
+    double frame_medium_min_wait_ = 0.8;
+    double frame_partial_min_wait_ = 2.0;
+    double frame_lock_history_duration_ = 2.0;
 
     Eigen::Vector3d qr_goal_ = Eigen::Vector3d(4.0, 0.25, 1.3);
     double qr_initial_wait_ = 1.0;
@@ -1461,7 +1653,7 @@ private:
     double qr_search_offset_ = 0.3;
     double qr_search_hold_ = 0.35;
 
-    Eigen::Vector3d attack_zone_ = Eigen::Vector3d(0.0, -0.8, 1.0);
+    Eigen::Vector3d attack_zone_ = Eigen::Vector3d(0.0, -0.8, 1.25);
     double attack_height_ = 0.3;
     double balloon_wait_timeout_ = 8.0;
     double balloon_valid_max_age_ = 0.8;
@@ -1521,7 +1713,9 @@ private:
     bool have_frame_center_ = false;
     Eigen::Vector3d frame_center_ = Eigen::Vector3d::Zero();
     ros::Time frame_center_stamp_;
+    ros::Time frame_center_recv_stamp_;
     std::string frame_status_;
+    ros::Time frame_status_stamp_;
 
     bool qr_detected_ = false;
     ros::Time qr_detect_stamp_;

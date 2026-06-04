@@ -1410,6 +1410,9 @@ private:
             (center_y < gate_search_y_min_ || center_y > gate_search_y_max_)) {
             return d;
         }
+        if (!passesGateCenterConstraint(center_y, partial_center_y_tolerance_)) {
+            return d;
+        }
 
         const Eigen::Vector3d missing_post = localToWorld(center_x, missing_y, visible_post.center.z());
         if (visible_left) {
