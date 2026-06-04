@@ -9,6 +9,7 @@
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <mavros_msgs/CommandBool.h>
+#include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/State.h>
 #include <quadrotor_msgs/PositionCommand.h>
 #include <ros/ros.h>
@@ -112,15 +113,15 @@ public:
         pnh_.param<double>("initial_wait_y", initial_wait_.y(), -0.85);
         pnh_.param<double>("initial_wait_z", initial_wait_.z(), 1.0);
 
-        pnh_.param<double>("expected_frame_x", expected_frame_center_.x(), 2.7);
-        pnh_.param<double>("expected_frame_y", expected_frame_center_.y(), -1.35);
-        pnh_.param<double>("expected_frame_z", expected_frame_center_.z(), 1.3);
-        pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.45);
-        pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.0);
+        pnh_.param<double>("expected_frame_x", expected_frame_center_.x(), 3.2);
+        pnh_.param<double>("expected_frame_y", expected_frame_center_.y(), -1.25);
+        pnh_.param<double>("expected_frame_z", expected_frame_center_.z(), 1.25);
+        pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.55);
+        pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.1);
         pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 20.0);
         pnh_.param<double>("frame_valid_max_age", frame_valid_max_age_, 0.8);
 
-        pnh_.param<double>("qr_goal_x", qr_goal_.x(), 3.6);
+        pnh_.param<double>("qr_goal_x", qr_goal_.x(), 4.0);
         pnh_.param<double>("qr_goal_y", qr_goal_.y(), 0.25);
         pnh_.param<double>("qr_goal_z", qr_goal_.z(), 1.3);
         pnh_.param<double>("qr_initial_wait", qr_initial_wait_, 1.0);
@@ -129,8 +130,8 @@ public:
         pnh_.param<double>("qr_search_offset", qr_search_offset_, 0.3);
         pnh_.param<double>("qr_search_hold", qr_search_hold_, 0.35);
 
-        pnh_.param<double>("attack_zone_x", attack_zone_.x(), 0.2);
-        pnh_.param<double>("attack_zone_y", attack_zone_.y(), -0.9);
+        pnh_.param<double>("attack_zone_x", attack_zone_.x(), 0.0);
+        pnh_.param<double>("attack_zone_y", attack_zone_.y(), -0.8);
         pnh_.param<double>("attack_zone_z", attack_zone_.z(), 1.0);
         pnh_.param<double>("attack_height", attack_height_, 0.3);
         pnh_.param<double>("balloon_wait_timeout", balloon_wait_timeout_, 8.0);
@@ -165,13 +166,16 @@ public:
         pnh_.param<double>("balloon_pop_verify_roi_scale", balloon_pop_verify_roi_scale_, 1.5);
         pnh_.param<double>("balloon_pop_verify_roi_min_px", balloon_pop_verify_roi_min_px_, 120.0);
         pnh_.param<int>("balloon_max_retry", balloon_max_retry_, 1);
-        pnh_.param<double>("balloon_return_home_low_z", balloon_return_home_low_z_, 0.3);
+        pnh_.param<double>("balloon_return_home_land_z", balloon_return_home_land_z_, 1.0);
 
         pnh_.param<double>("override_move_timeout", override_move_timeout_, 30.0);
         pnh_.param<double>("override_pos_threshold", override_pos_threshold_, 0.16);
-        pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 5.0);
+        pnh_.param<double>("override_smooth_speed", override_smooth_speed_, 0.35);
+        pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
         pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.10);
         pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.25);
+        pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 0.5);
+        pnh_.param<double>("attack_zone_overrun_x", attack_zone_overrun_x_, 0.0);
         pnh_.param<bool>("robust_land_enable", robust_land_enable_, true);
         pnh_.param<double>("robust_land_soft_z", robust_land_soft_z_, 0.10);
         pnh_.param<double>("robust_land_soft_speed", robust_land_soft_speed_, 0.08);
@@ -181,6 +185,9 @@ public:
         pnh_.param<double>("robust_land_disarm_timeout", robust_land_disarm_timeout_, 3.0);
         pnh_.param<double>("robust_land_disarm_retry_period", robust_land_disarm_retry_period_, 0.25);
         pnh_.param<bool>("robust_land_fallback_bridge_land", robust_land_fallback_bridge_land_, true);
+        pnh_.param<std::string>("px4_land_mode", px4_land_mode_, "AUTO.LAND");
+        pnh_.param<double>("px4_land_mode_timeout", px4_land_mode_timeout_, 5.0);
+        pnh_.param<double>("px4_land_retry_period", px4_land_retry_period_, 0.5);
 
         pnh_.param<std::string>("frame_center_topic", frame_center_topic_, "/craic/frame_center");
         pnh_.param<std::string>("frame_status_topic", frame_status_topic_, "/craic/frame_status");
@@ -204,6 +211,7 @@ public:
         balloon_verify_roi_pub_ = nh_.advertise<std_msgs::Float32MultiArray>(balloon_verify_roi_topic_, 1, true);
         mavros_state_sub_ = nh_.subscribe("/mavros/state", 1, &CraicCompetitionDemo::mavrosStateCb, this);
         arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
+        set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
     }
 
     int run() {
@@ -273,19 +281,9 @@ public:
             return 1;
         }
 
-        logStage("ATTACK_ZONE_EGO", "ego goal back to attack zone");
-        if (!flyGoal("attack_zone", attack_zone_, reverse_yaw)) {
+        logStage("ATTACK_ZONE_EGO", "ego goal back to attack zone with x overrun guard");
+        if (!flyGoalWatchXOverrun("attack_zone", attack_zone_, reverse_yaw)) {
             ROS_ERROR("[craic_demo] FAIL stage=ATTACK_ZONE_EGO");
-            safeLand();
-            return 1;
-        }
-
-        logStage("LOWER_ATTACK_HEIGHT_OVERRIDE", "descend to attack height");
-        Eigen::Vector3d low = api_.getOdomPosition();
-        low.z() = attack_height_;
-        if (!overrideMoveTo("attack_height", low, reverse_yaw,
-                            override_pos_threshold_, override_move_timeout_)) {
-            ROS_ERROR("[craic_demo] FAIL stage=LOWER_ATTACK_HEIGHT_OVERRIDE");
             safeLand();
             return 1;
         }
@@ -297,15 +295,25 @@ public:
             return 1;
         }
 
+        logStage("LOWER_ATTACK_HEIGHT_OVERRIDE", "descend to attack height");
+        Eigen::Vector3d low = api_.getOdomPosition();
+        low.z() = attack_height_;
+        if (!overrideMoveTo("attack_height", low, attack_yaw,
+                            override_pos_threshold_, override_move_timeout_)) {
+            ROS_ERROR("[craic_demo] FAIL stage=LOWER_ATTACK_HEIGHT_OVERRIDE");
+            safeLand();
+            return 1;
+        }
+
         logStage("BALLOON_ATTACK_OVERRIDE", "3d coarse approach, 2d servo, roi verified puncture");
         const bool balloon_popped = attackBalloon(attack_yaw);
         if (balloon_popped) {
-            logStage("BALLOON_RETURN_HOME", "low return to home after verified pop");
-            if (returnHomeLowAndLand(attack_yaw)) {
-                ROS_INFO("[craic_demo] MISSION_DONE result=balloon_popped_returned_landed");
+            logStage("BALLOON_RETURN_HOME", "return to (0,0,1) then PX4 LAND mode");
+            if (returnHomeAndStartPx4Land(attack_yaw)) {
+                ROS_INFO("[craic_demo] MISSION_DONE result=balloon_popped_px4_land_started");
                 return 0;
             }
-            ROS_WARN("[craic_demo] BALLOON_RETURN_HOME failed action=normal_land");
+            ROS_WARN("[craic_demo] BALLOON_RETURN_HOME failed action=robust_land");
         } else {
             ROS_WARN("[craic_demo] BALLOON_ATTACK result=not_completed action=no_blind_puncture");
         }
@@ -369,6 +377,57 @@ private:
         return reached;
     }
 
+    bool flyGoalWatchXOverrun(const std::string& label, const Eigen::Vector3d& target, double yaw) {
+        ROS_INFO("[craic_demo] EGO_GOAL_GUARD name=%s world=(%.2f %.2f %.2f) yaw=%.3f overrun_x<%.2f timeout=%.1f",
+                 label.c_str(), target.x(), target.y(), target.z(), yaw,
+                 attack_zone_overrun_x_, goal_timeout_);
+        api_.publishGoalOnly(target.x(), target.y(), target.z(), yaw);
+
+        ros::Rate rate(20);
+        const ros::Time start = ros::Time::now();
+        bool saw_reach_reset = api_.getReachStatus() == 0;
+        while (ros::ok()) {
+            ros::spinOnce();
+
+            const Eigen::Vector3d pos = api_.getOdomPosition();
+            if (pos.x() < attack_zone_overrun_x_) {
+                ROS_WARN("[craic_demo] EGO_GOAL_GUARD overrun name=%s odom=(%.2f %.2f %.2f) limit_x=%.2f action=override_hold_continue",
+                         label.c_str(), pos.x(), pos.y(), pos.z(), attack_zone_overrun_x_);
+                if (!api_.enableOverride()) {
+                    ROS_ERROR("[craic_demo] EGO_GOAL_GUARD failed name=%s reason=enable_override", label.c_str());
+                    return false;
+                }
+                holdOverride(0.4, yaw);
+                ROS_INFO("[craic_demo] EGO_GOAL_GUARD result name=%s overrun_handled", label.c_str());
+                return true;
+            }
+
+            if (api_.getReachStatus() == 0) {
+                saw_reach_reset = true;
+            }
+            if (saw_reach_reset && api_.getReachStatus() == 1) {
+                ROS_INFO("[craic_demo] EGO_GOAL_GUARD result name=%s reached", label.c_str());
+                return true;
+            }
+
+            if (!simple_logs_) {
+                const double dist = (pos - target).norm();
+                ROS_INFO_THROTTLE(mission_log_period_,
+                                  "[craic_demo] EGO_GOAL_GUARD name=%s dist=%.3f odom=(%.2f %.2f %.2f) reach=%u",
+                                  label.c_str(), dist, pos.x(), pos.y(), pos.z(),
+                                  static_cast<unsigned int>(api_.getReachStatus()));
+            }
+
+            if ((ros::Time::now() - start).toSec() >= goal_timeout_) {
+                ROS_WARN("[craic_demo] EGO_GOAL_GUARD timeout name=%s timeout=%.1f",
+                         label.c_str(), goal_timeout_);
+                return false;
+            }
+            rate.sleep();
+        }
+        return false;
+    }
+
     bool overrideMoveTo(const std::string& label,
                         const Eigen::Vector3d& target,
                         double yaw,
@@ -378,8 +437,9 @@ private:
             ROS_ERROR("[craic_demo] OVERRIDE_MOVE invalid label=%s reason=non_finite", label.c_str());
             return false;
         }
-        ROS_INFO("[craic_demo] OVERRIDE_MOVE start name=%s target=(%.2f %.2f %.2f) yaw=%.3f threshold=%.2f timeout=%.1f",
-                 label.c_str(), target.x(), target.y(), target.z(), yaw, threshold, timeout);
+        ROS_INFO("[craic_demo] OVERRIDE_MOVE start name=%s target=(%.2f %.2f %.2f) yaw=%.3f threshold=%.2f speed=%.2f timeout=%.1f",
+                 label.c_str(), target.x(), target.y(), target.z(), yaw, threshold,
+                 override_smooth_speed_, timeout);
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] OVERRIDE_MOVE failed name=%s reason=enable_override", label.c_str());
             return false;
@@ -402,6 +462,8 @@ private:
                                 const ros::Time& deadline,
                                 bool stop_on_qr) {
         ros::Rate rate(50);
+        Eigen::Vector3d setpoint = api_.getOdomPosition();
+        ros::Time last = ros::Time::now();
         while (ros::ok()) {
             ros::spinOnce();
             if (stop_on_qr && qrDetected()) {
@@ -409,17 +471,33 @@ private:
                 return MoveResult::QrDetected;
             }
 
-            sendPositionCmd(target, yaw);
-            const double dist = (api_.getOdomPosition() - target).norm();
+            const Eigen::Vector3d odom = api_.getOdomPosition();
+            const double dist = (odom - target).norm();
             if (dist <= threshold) {
+                sendPositionCmd(target, yaw);
                 ROS_INFO("[craic_demo] OVERRIDE_MOVE reached name=%s dist=%.3f", label.c_str(), dist);
                 return MoveResult::Reached;
             }
 
+            const ros::Time now = ros::Time::now();
+            const double dt = std::max(0.0, (now - last).toSec());
+            last = now;
+            const double speed = std::max(0.03, override_smooth_speed_);
+            const double step = speed * dt;
+            const Eigen::Vector3d remaining = target - setpoint;
+            const double remaining_norm = remaining.norm();
+            if (remaining_norm <= step || remaining_norm < 1e-4) {
+                setpoint = target;
+            } else if (step > 0.0) {
+                setpoint += remaining / remaining_norm * step;
+            }
+            sendPositionCmd(setpoint, yaw);
+
             if (!simple_logs_) {
                 ROS_INFO_THROTTLE(mission_log_period_,
-                                  "[craic_demo] OVERRIDE_MOVE name=%s target=(%.2f %.2f %.2f) dist=%.3f yaw_err=%.3f",
-                                  label.c_str(), target.x(), target.y(), target.z(), dist,
+                                  "[craic_demo] OVERRIDE_MOVE name=%s setpoint=(%.2f %.2f %.2f) target=(%.2f %.2f %.2f) dist=%.3f yaw_err=%.3f",
+                                  label.c_str(), setpoint.x(), setpoint.y(), setpoint.z(),
+                                  target.x(), target.y(), target.z(), dist,
                                   normalizeYaw(yaw - api_.getOdomYaw()));
             }
 
@@ -433,8 +511,12 @@ private:
     }
 
     bool overrideYawAlign(const std::string& label, double target_yaw, double timeout) {
-        ROS_INFO("[craic_demo] YAW_ALIGN start name=%s target_yaw=%.3f current_yaw=%.3f",
-                 label.c_str(), target_yaw, api_.getOdomYaw());
+        const double start_yaw = api_.getOdomYaw();
+        const double rate_limit = std::max(0.05, override_yaw_rate_);
+        const double expected_turn_time = std::abs(normalizeYaw(target_yaw - start_yaw)) / rate_limit;
+        const double effective_timeout = std::max(timeout, expected_turn_time + override_yaw_hold_time_ + 1.0);
+        ROS_INFO("[craic_demo] YAW_ALIGN start name=%s target_yaw=%.3f current_yaw=%.3f rate=%.2f timeout=%.1f",
+                 label.c_str(), target_yaw, start_yaw, rate_limit, effective_timeout);
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] YAW_ALIGN failed name=%s reason=enable_override", label.c_str());
             return false;
@@ -442,12 +524,26 @@ private:
 
         ros::Rate rate(50);
         const ros::Time start = ros::Time::now();
+        ros::Time last = start;
         ros::Time stable_since;
         bool stable = false;
         bool reached = false;
+        double cmd_yaw = start_yaw;
         while (ros::ok()) {
             ros::spinOnce();
-            sendPositionCmd(api_.getOdomPosition(), target_yaw);
+
+            const ros::Time now = ros::Time::now();
+            const double dt = std::max(0.0, (now - last).toSec());
+            last = now;
+            const double cmd_err = normalizeYaw(target_yaw - cmd_yaw);
+            const double yaw_step = rate_limit * dt;
+            if (std::abs(cmd_err) <= yaw_step || std::abs(cmd_err) < 1e-4) {
+                cmd_yaw = target_yaw;
+            } else if (yaw_step > 0.0) {
+                cmd_yaw = normalizeYaw(cmd_yaw + (cmd_err > 0.0 ? yaw_step : -yaw_step));
+            }
+
+            sendPositionCmd(api_.getOdomPosition(), cmd_yaw);
             const double err = normalizeYaw(target_yaw - api_.getOdomYaw());
             if (std::abs(err) <= override_yaw_threshold_) {
                 if (!stable) {
@@ -462,10 +558,10 @@ private:
             }
             if (!simple_logs_) {
                 ROS_INFO_THROTTLE(mission_log_period_,
-                                  "[craic_demo] YAW_ALIGN name=%s err=%.3f target=%.3f current=%.3f",
-                                  label.c_str(), err, target_yaw, api_.getOdomYaw());
+                                  "[craic_demo] YAW_ALIGN name=%s err=%.3f cmd=%.3f target=%.3f current=%.3f",
+                                  label.c_str(), err, cmd_yaw, target_yaw, api_.getOdomYaw());
             }
-            if ((ros::Time::now() - start).toSec() >= timeout) {
+            if ((ros::Time::now() - start).toSec() >= effective_timeout) {
                 ROS_WARN("[craic_demo] YAW_ALIGN timeout name=%s err=%.3f", label.c_str(), err);
                 break;
             }
@@ -985,13 +1081,13 @@ private:
                (ros::Time::now() - verify_roi_result_stamp_).toSec() <= balloon_valid_max_age_;
     }
 
-    bool returnHomeLowAndLand(double yaw) {
+    bool returnHomeAndStartPx4Land(double yaw) {
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] RETURN_HOME failed reason=enable_override");
             return false;
         }
-        const Eigen::Vector3d home(0.0, 0.0, balloon_return_home_low_z_);
-        const MoveResult result = moveOverrideLoop("balloon_return_home_low", home, yaw,
+        const Eigen::Vector3d home(0.0, 0.0, balloon_return_home_land_z_);
+        const MoveResult result = moveOverrideLoop("balloon_return_home_land_point", home, yaw,
                                                    override_pos_threshold_,
                                                    ros::Time::now() + ros::Duration(override_move_timeout_),
                                                    false);
@@ -1003,10 +1099,64 @@ private:
             return false;
         }
         if (land_after_finish_) {
-            return robustLand(yaw, "return_home", 30.0);
+            if (startPx4LandMode("balloon_return_home")) {
+                return true;
+            }
+            return robustLand(yaw, "px4_land_start_failed", 30.0);
         }
         ROS_WARN("[craic_demo] RETURN_HOME land skipped land_after_finish=false");
         return true;
+    }
+
+    bool startPx4LandMode(const std::string& reason) {
+        if (mavrosDisarmed()) {
+            ROS_INFO("[craic_demo] PX4_LAND already_disarmed reason=%s", reason.c_str());
+            return true;
+        }
+
+        ROS_INFO("[craic_demo] PX4_LAND start reason=%s mode=%s timeout=%.1f",
+                 reason.c_str(), px4_land_mode_.c_str(), px4_land_mode_timeout_);
+        api_.disableOverride();
+
+        ros::Rate rate(10);
+        const ros::Time start = ros::Time::now();
+        ros::Time last_try(0);
+        while (ros::ok() && (ros::Time::now() - start).toSec() < px4_land_mode_timeout_) {
+            ros::spinOnce();
+            if (mavrosModeLooksLand()) {
+                ROS_INFO("[craic_demo] PX4_LAND confirmed mode=%s armed=%s",
+                         mavros_mode_.c_str(), yesNo(mavros_armed_));
+                return true;
+            }
+
+            const ros::Time now = ros::Time::now();
+            if (!last_try.isValid() || (now - last_try).toSec() >= px4_land_retry_period_) {
+                last_try = now;
+                requestPx4LandModeOnce();
+            }
+            rate.sleep();
+        }
+
+        ROS_WARN("[craic_demo] PX4_LAND timeout mode=%s armed=%s",
+                 mavros_mode_.c_str(), yesNo(mavros_armed_));
+        return mavrosModeLooksLand();
+    }
+
+    bool requestPx4LandModeOnce() {
+        mavros_msgs::SetMode req;
+        req.request.base_mode = 0;
+        req.request.custom_mode = px4_land_mode_;
+        if (set_mode_client_.call(req) && req.response.mode_sent) {
+            ROS_INFO("[craic_demo] PX4_LAND set_mode accepted mode=%s", px4_land_mode_.c_str());
+            return true;
+        }
+        ROS_WARN_THROTTLE(1.0, "[craic_demo] PX4_LAND set_mode rejected_or_unavailable mode=%s",
+                          px4_land_mode_.c_str());
+        return false;
+    }
+
+    bool mavrosModeLooksLand() const {
+        return have_mavros_state_ && mavros_mode_.find("LAND") != std::string::npos;
     }
 
     bool robustLand(double yaw, const std::string& reason, double fallback_timeout) {
@@ -1263,6 +1413,7 @@ private:
 
     void mavrosStateCb(const mavros_msgs::State::ConstPtr& msg) {
         mavros_armed_ = msg->armed;
+        mavros_mode_ = msg->mode;
         mavros_state_stamp_ = ros::Time::now();
         have_mavros_state_ = true;
     }
@@ -1280,6 +1431,7 @@ private:
     ros::Subscriber mavros_state_sub_;
     ros::Publisher balloon_verify_roi_pub_;
     ros::ServiceClient arming_client_;
+    ros::ServiceClient set_mode_client_;
 
     std::string frame_center_topic_;
     std::string frame_status_topic_;
@@ -1296,20 +1448,20 @@ private:
     bool land_after_finish_ = true;
 
     Eigen::Vector3d initial_wait_ = Eigen::Vector3d(0.0, -0.85, 1.0);
-    Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(2.7, -1.35, 1.3);
-    double frame_center_reject_distance_ = 0.45;
-    double frame_post_x_offset_ = 1.0;
+    Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(3.2, -1.25, 1.25);
+    double frame_center_reject_distance_ = 0.55;
+    double frame_post_x_offset_ = 1.1;
     double frame_detect_timeout_ = 20.0;
     double frame_valid_max_age_ = 0.8;
 
-    Eigen::Vector3d qr_goal_ = Eigen::Vector3d(3.6, 0.25, 1.3);
+    Eigen::Vector3d qr_goal_ = Eigen::Vector3d(4.0, 0.25, 1.3);
     double qr_initial_wait_ = 1.0;
     double qr_search_timeout_ = 10.0;
     double qr_search_raise_z_ = 0.2;
     double qr_search_offset_ = 0.3;
     double qr_search_hold_ = 0.35;
 
-    Eigen::Vector3d attack_zone_ = Eigen::Vector3d(0.2, -0.9, 1.0);
+    Eigen::Vector3d attack_zone_ = Eigen::Vector3d(0.0, -0.8, 1.0);
     double attack_height_ = 0.3;
     double balloon_wait_timeout_ = 8.0;
     double balloon_valid_max_age_ = 0.8;
@@ -1343,13 +1495,16 @@ private:
     double balloon_pop_verify_roi_scale_ = 1.5;
     double balloon_pop_verify_roi_min_px_ = 120.0;
     int balloon_max_retry_ = 1;
-    double balloon_return_home_low_z_ = 0.3;
+    double balloon_return_home_land_z_ = 1.0;
 
     double override_move_timeout_ = 30.0;
     double override_pos_threshold_ = 0.16;
-    double override_yaw_timeout_ = 5.0;
+    double override_smooth_speed_ = 0.35;
+    double override_yaw_timeout_ = 10.0;
     double override_yaw_threshold_ = 0.10;
     double override_yaw_hold_time_ = 0.25;
+    double override_yaw_rate_ = 0.5;
+    double attack_zone_overrun_x_ = 0.0;
     bool robust_land_enable_ = true;
     double robust_land_soft_z_ = 0.10;
     double robust_land_soft_speed_ = 0.08;
@@ -1359,6 +1514,9 @@ private:
     double robust_land_disarm_timeout_ = 3.0;
     double robust_land_disarm_retry_period_ = 0.25;
     bool robust_land_fallback_bridge_land_ = true;
+    std::string px4_land_mode_ = "AUTO.LAND";
+    double px4_land_mode_timeout_ = 5.0;
+    double px4_land_retry_period_ = 0.5;
 
     bool have_frame_center_ = false;
     Eigen::Vector3d frame_center_ = Eigen::Vector3d::Zero();
@@ -1381,6 +1539,7 @@ private:
 
     bool have_mavros_state_ = false;
     bool mavros_armed_ = true;
+    std::string mavros_mode_;
     ros::Time mavros_state_stamp_;
 };
 

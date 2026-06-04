@@ -104,7 +104,7 @@ timeout:
 reach_detect:
   # 位置阈值 (m)
   # - ⚠️ 应大于 PX4 位置控制器稳态误差 (0.1~0.3m)
-  pos_threshold: 0.3
+  pos_threshold: 0.16
 
   # 速度阈值 (m/s)，检测 EGO cmd 的期望速度
   vel_threshold: 0.1
