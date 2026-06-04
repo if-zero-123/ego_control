@@ -33,9 +33,9 @@
     <arg name="initial_wait_y" default="-0.85" />
     <arg name="initial_wait_z" default="1.0" />
     <arg name="expected_frame_x" default="2.7" />
-    <arg name="expected_frame_y" default="-1.5" />
+    <arg name="expected_frame_y" default="-1.35" />
     <arg name="expected_frame_z" default="1.3" />
-    <arg name="frame_center_reject_distance" default="0.7" />
+    <arg name="frame_center_reject_distance" default="0.45" />
     <arg name="frame_post_x_offset" default="1.0" />
     <arg name="frame_detect_timeout" default="20.0" />
     <arg name="frame_valid_max_age" default="0.8" />
@@ -55,8 +55,8 @@
     <arg name="attack_height" default="0.3" />
     <arg name="balloon_wait_timeout" default="8.0" />
     <arg name="balloon_valid_max_age" default="0.8" />
-    <arg name="balloon_standoff" default="0.35" />
-    <arg name="balloon_puncture_distance" default="0.28" />
+    <arg name="balloon_standoff" default="0.70" />
+    <arg name="balloon_puncture_distance" default="0.20" />
     <arg name="balloon_puncture_speed" default="0.10" />
     <arg name="balloon_approach_timeout" default="8.0" />
     <arg name="balloon_align_timeout" default="6.0" />
@@ -69,12 +69,41 @@
     <arg name="balloon_align_z_max" default="0.60" />
     <arg name="balloon_needle_length" default="0.18" />
     <arg name="balloon_puncture_extra" default="0.04" />
+    <arg name="balloon_servo_timeout" default="8.0" />
+    <arg name="balloon_servo_u_threshold" default="0.08" />
+    <arg name="balloon_servo_v_threshold" default="0.10" />
+    <arg name="balloon_servo_hold_time" default="0.25" />
+    <arg name="balloon_servo_lateral_gain" default="0.18" />
+    <arg name="balloon_servo_z_gain" default="0.12" />
+    <arg name="balloon_servo_max_lateral_speed" default="0.08" />
+    <arg name="balloon_servo_max_z_speed" default="0.06" />
+    <arg name="balloon_fine_forward_speed" default="0.05" />
+    <arg name="balloon_fine_forward_distance" default="0.20" />
+    <arg name="balloon_backoff_distance" default="0.12" />
+    <arg name="balloon_pop_verify_timeout" default="1.0" />
+    <arg name="balloon_pop_area_drop_ratio" default="0.35" />
+    <arg name="balloon_pop_verify_roi_scale" default="1.5" />
+    <arg name="balloon_pop_verify_roi_min_px" default="120.0" />
+    <arg name="balloon_max_retry" default="1" />
+    <arg name="balloon_return_home_low_z" default="0.3" />
+    <arg name="balloon_servo_topic" default="/balloon/servo" />
+    <arg name="balloon_verify_roi_topic" default="/balloon/verify_roi" />
+    <arg name="balloon_verify_roi_result_topic" default="/balloon/verify_roi_result" />
 
     <arg name="override_move_timeout" default="30.0" />
     <arg name="override_pos_threshold" default="0.16" />
     <arg name="override_yaw_timeout" default="5.0" />
     <arg name="override_yaw_threshold" default="0.10" />
     <arg name="override_yaw_hold_time" default="0.25" />
+    <arg name="robust_land_enable" default="true" />
+    <arg name="robust_land_soft_z" default="0.10" />
+    <arg name="robust_land_soft_speed" default="0.08" />
+    <arg name="robust_land_z_threshold" default="0.04" />
+    <arg name="robust_land_settle_time" default="0.30" />
+    <arg name="robust_land_press_z" default="-0.05" />
+    <arg name="robust_land_disarm_timeout" default="3.0" />
+    <arg name="robust_land_disarm_retry_period" default="0.25" />
+    <arg name="robust_land_fallback_bridge_land" default="true" />
 
     <arg name="frame_cloud_topic" default="/cloud_registered" />
     <arg name="frame_goal_frame_id" default="world" />
@@ -94,7 +123,7 @@
     <arg name="frame_roi_z_max" default="2.20" />
     <arg name="frame_use_fixed_center_roi" default="true" />
     <arg name="frame_fixed_roi_center_x" default="2.70" />
-    <arg name="frame_fixed_roi_center_y" default="-1.50" />
+    <arg name="frame_fixed_roi_center_y" default="-1.35" />
     <arg name="frame_fixed_roi_center_z" default="1.30" />
     <arg name="frame_fixed_roi_radius" default="2.65" />
     <arg name="frame_gate_width_expected" default="1.00" />
@@ -126,6 +155,12 @@
     <arg name="balloon_camera_body_x" default="0.0" />
     <arg name="balloon_camera_body_y" default="0.0" />
     <arg name="balloon_camera_body_z" default="0.0" />
+    <arg name="balloon_allow_near_blob" default="true" />
+    <arg name="balloon_near_min_area_ratio" default="0.004" />
+    <arg name="balloon_near_min_circularity" default="0.06" />
+    <arg name="balloon_near_red_ratio_min" default="0.30" />
+    <arg name="balloon_needle_u" default="-1.0" />
+    <arg name="balloon_needle_v" default="-1.0" />
 
     <node pkg="ego_api" type="craic_cloud_self_filter" name="craic_cloud_self_filter" output="screen"
           if="$(arg start_cloud_self_filter)">
@@ -231,6 +266,12 @@
         <arg name="camera_body_x" value="$(arg balloon_camera_body_x)" />
         <arg name="camera_body_y" value="$(arg balloon_camera_body_y)" />
         <arg name="camera_body_z" value="$(arg balloon_camera_body_z)" />
+        <arg name="allow_near_blob" value="$(arg balloon_allow_near_blob)" />
+        <arg name="near_min_area_ratio" value="$(arg balloon_near_min_area_ratio)" />
+        <arg name="near_min_circularity" value="$(arg balloon_near_min_circularity)" />
+        <arg name="near_red_ratio_min" value="$(arg balloon_near_red_ratio_min)" />
+        <arg name="needle_u" value="$(arg balloon_needle_u)" />
+        <arg name="needle_v" value="$(arg balloon_needle_v)" />
     </include>
 
     <node pkg="ego_api" type="override_task_demo" name="override_task_demo" output="screen"
@@ -284,10 +325,39 @@
         <param name="balloon_align_z_max" value="$(arg balloon_align_z_max)" />
         <param name="balloon_needle_length" value="$(arg balloon_needle_length)" />
         <param name="balloon_puncture_extra" value="$(arg balloon_puncture_extra)" />
+        <param name="balloon_servo_timeout" value="$(arg balloon_servo_timeout)" />
+        <param name="balloon_servo_u_threshold" value="$(arg balloon_servo_u_threshold)" />
+        <param name="balloon_servo_v_threshold" value="$(arg balloon_servo_v_threshold)" />
+        <param name="balloon_servo_hold_time" value="$(arg balloon_servo_hold_time)" />
+        <param name="balloon_servo_lateral_gain" value="$(arg balloon_servo_lateral_gain)" />
+        <param name="balloon_servo_z_gain" value="$(arg balloon_servo_z_gain)" />
+        <param name="balloon_servo_max_lateral_speed" value="$(arg balloon_servo_max_lateral_speed)" />
+        <param name="balloon_servo_max_z_speed" value="$(arg balloon_servo_max_z_speed)" />
+        <param name="balloon_fine_forward_speed" value="$(arg balloon_fine_forward_speed)" />
+        <param name="balloon_fine_forward_distance" value="$(arg balloon_fine_forward_distance)" />
+        <param name="balloon_backoff_distance" value="$(arg balloon_backoff_distance)" />
+        <param name="balloon_pop_verify_timeout" value="$(arg balloon_pop_verify_timeout)" />
+        <param name="balloon_pop_area_drop_ratio" value="$(arg balloon_pop_area_drop_ratio)" />
+        <param name="balloon_pop_verify_roi_scale" value="$(arg balloon_pop_verify_roi_scale)" />
+        <param name="balloon_pop_verify_roi_min_px" value="$(arg balloon_pop_verify_roi_min_px)" />
+        <param name="balloon_max_retry" value="$(arg balloon_max_retry)" />
+        <param name="balloon_return_home_low_z" value="$(arg balloon_return_home_low_z)" />
+        <param name="balloon_servo_topic" value="$(arg balloon_servo_topic)" />
+        <param name="balloon_verify_roi_topic" value="$(arg balloon_verify_roi_topic)" />
+        <param name="balloon_verify_roi_result_topic" value="$(arg balloon_verify_roi_result_topic)" />
         <param name="override_move_timeout" value="$(arg override_move_timeout)" />
         <param name="override_pos_threshold" value="$(arg override_pos_threshold)" />
         <param name="override_yaw_timeout" value="$(arg override_yaw_timeout)" />
         <param name="override_yaw_threshold" value="$(arg override_yaw_threshold)" />
         <param name="override_yaw_hold_time" value="$(arg override_yaw_hold_time)" />
+        <param name="robust_land_enable" value="$(arg robust_land_enable)" />
+        <param name="robust_land_soft_z" value="$(arg robust_land_soft_z)" />
+        <param name="robust_land_soft_speed" value="$(arg robust_land_soft_speed)" />
+        <param name="robust_land_z_threshold" value="$(arg robust_land_z_threshold)" />
+        <param name="robust_land_settle_time" value="$(arg robust_land_settle_time)" />
+        <param name="robust_land_press_z" value="$(arg robust_land_press_z)" />
+        <param name="robust_land_disarm_timeout" value="$(arg robust_land_disarm_timeout)" />
+        <param name="robust_land_disarm_retry_period" value="$(arg robust_land_disarm_retry_period)" />
+        <param name="robust_land_fallback_bridge_land" value="$(arg robust_land_fallback_bridge_land)" />
     </node>
 </launch>

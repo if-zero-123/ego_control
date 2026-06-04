@@ -176,8 +176,8 @@ public:
         pnh_.param<double>("post_extract_z_max", post_extract_z_max_, 2.00);
         pnh_.param<bool>("use_fixed_center_roi", use_fixed_center_roi_, true);
         pnh_.param<double>("fixed_roi_center_x", fixed_roi_center_x_, 2.70);
-        pnh_.param<double>("fixed_roi_center_y", fixed_roi_center_y_, -1.50);
-        pnh_.param<double>("fixed_roi_center_z", fixed_roi_center_z_, 1.40);
+        pnh_.param<double>("fixed_roi_center_y", fixed_roi_center_y_, -1.35);
+        pnh_.param<double>("fixed_roi_center_z", fixed_roi_center_z_, 1.30);
         pnh_.param<double>("fixed_roi_radius", fixed_roi_radius_, 2.65);
         pnh_.param<bool>("use_body_exclusion", use_body_exclusion_, false);
         pnh_.param<double>("body_exclusion_forward_min", body_exclusion_forward_min_, -0.55);
@@ -1933,8 +1933,8 @@ private:
     double post_extract_z_max_ = 2.00;
     bool use_fixed_center_roi_ = true;
     double fixed_roi_center_x_ = 2.70;
-    double fixed_roi_center_y_ = -1.50;
-    double fixed_roi_center_z_ = 1.40;
+    double fixed_roi_center_y_ = -1.35;
+    double fixed_roi_center_z_ = 1.30;
     double fixed_roi_radius_ = 2.65;
     bool use_body_exclusion_ = false;
     double body_exclusion_forward_min_ = -0.55;

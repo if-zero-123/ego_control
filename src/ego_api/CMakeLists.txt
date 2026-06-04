@@ -7,6 +7,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   std_msgs
   geometry_msgs
+  mavros_msgs
   nav_msgs
   sensor_msgs
   visualization_msgs
@@ -24,7 +25,7 @@ find_package(PCL REQUIRED COMPONENTS common filters kdtree segmentation)
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ego_api
-  CATKIN_DEPENDS roscpp std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs image_transport cv_bridge pcl_conversions pcl_ros quadrotor_msgs
+  CATKIN_DEPENDS roscpp std_msgs geometry_msgs mavros_msgs nav_msgs sensor_msgs visualization_msgs image_transport cv_bridge pcl_conversions pcl_ros quadrotor_msgs
 )
 
 include_directories(

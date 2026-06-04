@@ -4,9 +4,9 @@
     <arg name="drone_id" value="0"/>
 
     <!-- 栅格地图总范围：z 方向建议比限高略大，给建图和边界判断留余量。 -->
-    <arg name="map_size_x" value="100"/>
-    <arg name="map_size_y" value="50"/>
-    <arg name="map_size_z" value="3.0"/>
+    <arg name="map_size_x" value="32"/>
+    <arg name="map_size_y" value="24"/>
+    <arg name="map_size_z" value="2.5"/>
     <!-- 规划虚拟天花板高度：EGO planner 会把该高度附近当成障碍，避免主动规划飞过 2m。 -->
     <arg name="virtual_ceil_height" value="2.0"/>
     <arg name="odom_topic" value="/mavros/local_position/odom"/>
