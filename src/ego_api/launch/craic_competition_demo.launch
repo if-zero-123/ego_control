@@ -169,6 +169,7 @@
     <arg name="expected_frame_x" default="3.2" />
     <arg name="expected_frame_y" default="-1.25" />
     <arg name="expected_frame_z" default="1.25" />
+    <arg name="frame_center_mode" default="auto_detect" />
     <arg name="frame_center_reject_distance" default="0.55" />
     <arg name="frame_post_x_offset" default="1.1" />
     <arg name="frame_pass_guard_x_offset" default="0.35" />
@@ -372,7 +373,8 @@
 
     <!--
         门框检测 ROI 和稳定性参数。
-        gate_search_x/y 是在场地坐标下搜索门框的范围。
+        gate_search_x/y 是在场地坐标下搜索门框的范围，不再隐含门框中心。
+        frame_gate_center_x/y 是门框中心约束，frame_gate_center_y_frame=world 时可直接用 expected_frame_x/y。
         roi_z_min/max 限制用于门框提取的点云高度范围。
         fixed_roi_center/radius 用于把搜索范围压到已知门框附近。
         gate_width_expected 是门框宽度预期。
@@ -394,6 +396,9 @@
     <arg name="frame_gate_search_x_max" default="4.2" />
     <arg name="frame_gate_search_y_min" default="-2.5" />
     <arg name="frame_gate_search_y_max" default="2.5" />
+    <arg name="frame_gate_center_x" default="$(arg expected_frame_x)" />
+    <arg name="frame_gate_center_y" default="$(arg expected_frame_y)" />
+    <arg name="frame_gate_center_y_frame" default="world" />
     <arg name="frame_roi_z_min" default="0.15" />
     <arg name="frame_roi_z_max" default="2.20" />
     <arg name="frame_use_fixed_center_roi" default="true" />
@@ -590,6 +595,9 @@
         <param name="gate_search_x_max" value="$(arg frame_gate_search_x_max)" />
         <param name="gate_search_y_min" value="$(arg frame_gate_search_y_min)" />
         <param name="gate_search_y_max" value="$(arg frame_gate_search_y_max)" />
+        <param name="gate_center_x" value="$(arg frame_gate_center_x)" />
+        <param name="gate_center_y" value="$(arg frame_gate_center_y)" />
+        <param name="gate_center_y_frame" value="$(arg frame_gate_center_y_frame)" />
         <param name="roi_z_min" value="$(arg frame_roi_z_min)" />
         <param name="roi_z_max" value="$(arg frame_roi_z_max)" />
         <param name="use_fixed_center_roi" value="$(arg frame_use_fixed_center_roi)" />
@@ -713,6 +721,7 @@
         <param name="expected_frame_x" value="$(arg expected_frame_x)" />
         <param name="expected_frame_y" value="$(arg expected_frame_y)" />
         <param name="expected_frame_z" value="$(arg expected_frame_z)" />
+        <param name="frame_center_mode" value="$(arg frame_center_mode)" />
         <param name="frame_center_reject_distance" value="$(arg frame_center_reject_distance)" />
         <param name="frame_post_x_offset" value="$(arg frame_post_x_offset)" />
         <param name="frame_pass_guard_x_offset" value="$(arg frame_pass_guard_x_offset)" />

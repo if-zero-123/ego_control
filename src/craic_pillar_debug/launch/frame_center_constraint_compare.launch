@@ -1,0 +1,213 @@
+<launch>
+  <!-- Static perception-only comparison. This launch does not start planners or flight control. -->
+  <arg name="cloud_topic" default="/cloud_registered" />
+  <arg name="odom_topic" default="/mavros/local_position/odom" />
+  <arg name="frame_id" default="" />
+  <arg name="goal_frame_id" default="world" />
+  <arg name="flight_z" default="1.0" />
+  <arg name="height_mode" default="auto" />
+  <arg name="gate_center_z" default="1.3" />
+  <arg name="crossing_z" default="1.3" />
+  <arg name="gate_center_x" default="3.2" />
+  <arg name="gate_center_y" default="-1.25" />
+  <arg name="gate_center_y_frame" default="world" />
+
+  <arg name="use_local_rule_roi" default="true" />
+  <arg name="field_length" default="6.0" />
+  <arg name="field_width" default="5.0" />
+  <arg name="gate_search_x_min" default="-0.5" />
+  <arg name="gate_search_x_max" default="4.2" />
+  <arg name="gate_search_y_min" default="-2.5" />
+  <arg name="gate_search_y_max" default="2.5" />
+
+  <arg name="roi_z_min" default="0.15" />
+  <arg name="roi_z_max" default="2.20" />
+  <arg name="post_extract_z_max" default="2.00" />
+  <arg name="use_fixed_center_roi" default="true" />
+  <arg name="fixed_roi_center_x" default="2.70" />
+  <arg name="fixed_roi_center_y" default="-1.35" />
+  <arg name="fixed_roi_center_z" default="1.30" />
+  <arg name="fixed_roi_radius" default="2.65" />
+
+  <arg name="voxel_leaf" default="0.05" />
+  <arg name="cluster_tolerance" default="0.22" />
+  <arg name="min_cluster_size" default="8" />
+  <arg name="max_cluster_size" default="5000" />
+
+  <arg name="gate_post_min_width" default="0.05" />
+  <arg name="gate_post_max_width" default="0.42" />
+  <arg name="gate_post_weak_max_width" default="0.55" />
+  <arg name="gate_frame_cluster_min_width" default="0.75" />
+  <arg name="gate_frame_cluster_max_width" default="1.40" />
+  <arg name="prefer_frame_cluster" default="true" />
+  <arg name="frame_cluster_forward_width_min" default="0.02" />
+  <arg name="frame_cluster_forward_width_max" default="0.30" />
+  <arg name="frame_cluster_min_height" default="0.80" />
+  <arg name="frame_cluster_max_height" default="2.20" />
+  <arg name="frame_cluster_min_points" default="80" />
+  <arg name="gate_split_side_band" default="0.22" />
+  <arg name="gate_post_min_height" default="0.40" />
+  <arg name="gate_post_weak_min_height" default="0.18" />
+  <arg name="vertical_bin_size" default="0.18" />
+  <arg name="gate_post_min_vertical_bins" default="2" />
+  <arg name="gate_post_weak_min_vertical_bins" default="2" />
+
+  <arg name="gate_width_min" default="0.85" />
+  <arg name="gate_width_max" default="1.35" />
+  <arg name="gate_width_expected" default="1.00" />
+  <arg name="pair_forward_tolerance" default="0.35" />
+  <arg name="enforce_gate_center_constraint" default="true" />
+  <arg name="gate_center_y_tolerance" default="0.45" />
+  <arg name="partial_center_y_tolerance" default="0.65" />
+  <arg name="pair_max_height_delta" default="0.60" />
+  <arg name="pair_min_height_overlap" default="0.15" />
+  <arg name="allow_weak_single_partial" default="true" />
+
+  <arg name="pre_offset" default="0.60" />
+  <arg name="post_offset" default="1.00" />
+  <arg name="stable_frames" default="3" />
+  <arg name="history_size" default="5" />
+  <arg name="stability_threshold" default="0.18" />
+
+  <arg name="debug_log_period" default="0.5" />
+  <arg name="debug_top_clusters" default="8" />
+
+  <include file="$(find craic_pillar_debug)/launch/frame_cloud_debug.launch">
+    <arg name="node_type" value="frame_cloud_debug_old_node" />
+    <arg name="node_name" value="frame_cloud_debug_old_node" />
+    <arg name="topic_prefix" value="/craic_debug/frame_old" />
+    <arg name="use_explicit_gate_center_y" value="false" />
+    <arg name="cloud_topic" value="$(arg cloud_topic)" />
+    <arg name="odom_topic" value="$(arg odom_topic)" />
+    <arg name="frame_id" value="$(arg frame_id)" />
+    <arg name="goal_frame_id" value="$(arg goal_frame_id)" />
+    <arg name="flight_z" value="$(arg flight_z)" />
+    <arg name="height_mode" value="$(arg height_mode)" />
+    <arg name="gate_center_z" value="$(arg gate_center_z)" />
+    <arg name="crossing_z" value="$(arg crossing_z)" />
+    <arg name="use_local_rule_roi" value="$(arg use_local_rule_roi)" />
+    <arg name="field_length" value="$(arg field_length)" />
+    <arg name="field_width" value="$(arg field_width)" />
+    <arg name="gate_search_x_min" value="$(arg gate_search_x_min)" />
+    <arg name="gate_search_x_max" value="$(arg gate_search_x_max)" />
+    <arg name="gate_search_y_min" value="$(arg gate_search_y_min)" />
+    <arg name="gate_search_y_max" value="$(arg gate_search_y_max)" />
+    <arg name="roi_z_min" value="$(arg roi_z_min)" />
+    <arg name="roi_z_max" value="$(arg roi_z_max)" />
+    <arg name="post_extract_z_max" value="$(arg post_extract_z_max)" />
+    <arg name="use_fixed_center_roi" value="$(arg use_fixed_center_roi)" />
+    <arg name="fixed_roi_center_x" value="$(arg fixed_roi_center_x)" />
+    <arg name="fixed_roi_center_y" value="$(arg fixed_roi_center_y)" />
+    <arg name="fixed_roi_center_z" value="$(arg fixed_roi_center_z)" />
+    <arg name="fixed_roi_radius" value="$(arg fixed_roi_radius)" />
+    <arg name="voxel_leaf" value="$(arg voxel_leaf)" />
+    <arg name="cluster_tolerance" value="$(arg cluster_tolerance)" />
+    <arg name="min_cluster_size" value="$(arg min_cluster_size)" />
+    <arg name="max_cluster_size" value="$(arg max_cluster_size)" />
+    <arg name="gate_post_min_width" value="$(arg gate_post_min_width)" />
+    <arg name="gate_post_max_width" value="$(arg gate_post_max_width)" />
+    <arg name="gate_post_weak_max_width" value="$(arg gate_post_weak_max_width)" />
+    <arg name="gate_frame_cluster_min_width" value="$(arg gate_frame_cluster_min_width)" />
+    <arg name="gate_frame_cluster_max_width" value="$(arg gate_frame_cluster_max_width)" />
+    <arg name="prefer_frame_cluster" value="$(arg prefer_frame_cluster)" />
+    <arg name="frame_cluster_forward_width_min" value="$(arg frame_cluster_forward_width_min)" />
+    <arg name="frame_cluster_forward_width_max" value="$(arg frame_cluster_forward_width_max)" />
+    <arg name="frame_cluster_min_height" value="$(arg frame_cluster_min_height)" />
+    <arg name="frame_cluster_max_height" value="$(arg frame_cluster_max_height)" />
+    <arg name="frame_cluster_min_points" value="$(arg frame_cluster_min_points)" />
+    <arg name="gate_split_side_band" value="$(arg gate_split_side_band)" />
+    <arg name="gate_post_min_height" value="$(arg gate_post_min_height)" />
+    <arg name="gate_post_weak_min_height" value="$(arg gate_post_weak_min_height)" />
+    <arg name="vertical_bin_size" value="$(arg vertical_bin_size)" />
+    <arg name="gate_post_min_vertical_bins" value="$(arg gate_post_min_vertical_bins)" />
+    <arg name="gate_post_weak_min_vertical_bins" value="$(arg gate_post_weak_min_vertical_bins)" />
+    <arg name="gate_width_min" value="$(arg gate_width_min)" />
+    <arg name="gate_width_max" value="$(arg gate_width_max)" />
+    <arg name="gate_width_expected" value="$(arg gate_width_expected)" />
+    <arg name="pair_forward_tolerance" value="$(arg pair_forward_tolerance)" />
+    <arg name="enforce_gate_center_constraint" value="$(arg enforce_gate_center_constraint)" />
+    <arg name="gate_center_y_tolerance" value="$(arg gate_center_y_tolerance)" />
+    <arg name="partial_center_y_tolerance" value="$(arg partial_center_y_tolerance)" />
+    <arg name="pair_max_height_delta" value="$(arg pair_max_height_delta)" />
+    <arg name="pair_min_height_overlap" value="$(arg pair_min_height_overlap)" />
+    <arg name="allow_weak_single_partial" value="$(arg allow_weak_single_partial)" />
+    <arg name="pre_offset" value="$(arg pre_offset)" />
+    <arg name="post_offset" value="$(arg post_offset)" />
+    <arg name="stable_frames" value="$(arg stable_frames)" />
+    <arg name="history_size" value="$(arg history_size)" />
+    <arg name="stability_threshold" value="$(arg stability_threshold)" />
+    <arg name="debug_log_period" value="$(arg debug_log_period)" />
+    <arg name="debug_top_clusters" value="$(arg debug_top_clusters)" />
+  </include>
+
+  <include file="$(find craic_pillar_debug)/launch/frame_cloud_debug.launch">
+    <arg name="node_type" value="frame_cloud_debug_new_node" />
+    <arg name="node_name" value="frame_cloud_debug_new_node" />
+    <arg name="topic_prefix" value="/craic_debug/frame_new" />
+    <arg name="use_explicit_gate_center_y" value="true" />
+    <arg name="gate_center_x" value="$(arg gate_center_x)" />
+    <arg name="gate_center_y" value="$(arg gate_center_y)" />
+    <arg name="gate_center_y_frame" value="$(arg gate_center_y_frame)" />
+    <arg name="cloud_topic" value="$(arg cloud_topic)" />
+    <arg name="odom_topic" value="$(arg odom_topic)" />
+    <arg name="frame_id" value="$(arg frame_id)" />
+    <arg name="goal_frame_id" value="$(arg goal_frame_id)" />
+    <arg name="flight_z" value="$(arg flight_z)" />
+    <arg name="height_mode" value="$(arg height_mode)" />
+    <arg name="gate_center_z" value="$(arg gate_center_z)" />
+    <arg name="crossing_z" value="$(arg crossing_z)" />
+    <arg name="use_local_rule_roi" value="$(arg use_local_rule_roi)" />
+    <arg name="field_length" value="$(arg field_length)" />
+    <arg name="field_width" value="$(arg field_width)" />
+    <arg name="gate_search_x_min" value="$(arg gate_search_x_min)" />
+    <arg name="gate_search_x_max" value="$(arg gate_search_x_max)" />
+    <arg name="gate_search_y_min" value="$(arg gate_search_y_min)" />
+    <arg name="gate_search_y_max" value="$(arg gate_search_y_max)" />
+    <arg name="roi_z_min" value="$(arg roi_z_min)" />
+    <arg name="roi_z_max" value="$(arg roi_z_max)" />
+    <arg name="post_extract_z_max" value="$(arg post_extract_z_max)" />
+    <arg name="use_fixed_center_roi" value="$(arg use_fixed_center_roi)" />
+    <arg name="fixed_roi_center_x" value="$(arg fixed_roi_center_x)" />
+    <arg name="fixed_roi_center_y" value="$(arg fixed_roi_center_y)" />
+    <arg name="fixed_roi_center_z" value="$(arg fixed_roi_center_z)" />
+    <arg name="fixed_roi_radius" value="$(arg fixed_roi_radius)" />
+    <arg name="voxel_leaf" value="$(arg voxel_leaf)" />
+    <arg name="cluster_tolerance" value="$(arg cluster_tolerance)" />
+    <arg name="min_cluster_size" value="$(arg min_cluster_size)" />
+    <arg name="max_cluster_size" value="$(arg max_cluster_size)" />
+    <arg name="gate_post_min_width" value="$(arg gate_post_min_width)" />
+    <arg name="gate_post_max_width" value="$(arg gate_post_max_width)" />
+    <arg name="gate_post_weak_max_width" value="$(arg gate_post_weak_max_width)" />
+    <arg name="gate_frame_cluster_min_width" value="$(arg gate_frame_cluster_min_width)" />
+    <arg name="gate_frame_cluster_max_width" value="$(arg gate_frame_cluster_max_width)" />
+    <arg name="prefer_frame_cluster" value="$(arg prefer_frame_cluster)" />
+    <arg name="frame_cluster_forward_width_min" value="$(arg frame_cluster_forward_width_min)" />
+    <arg name="frame_cluster_forward_width_max" value="$(arg frame_cluster_forward_width_max)" />
+    <arg name="frame_cluster_min_height" value="$(arg frame_cluster_min_height)" />
+    <arg name="frame_cluster_max_height" value="$(arg frame_cluster_max_height)" />
+    <arg name="frame_cluster_min_points" value="$(arg frame_cluster_min_points)" />
+    <arg name="gate_split_side_band" value="$(arg gate_split_side_band)" />
+    <arg name="gate_post_min_height" value="$(arg gate_post_min_height)" />
+    <arg name="gate_post_weak_min_height" value="$(arg gate_post_weak_min_height)" />
+    <arg name="vertical_bin_size" value="$(arg vertical_bin_size)" />
+    <arg name="gate_post_min_vertical_bins" value="$(arg gate_post_min_vertical_bins)" />
+    <arg name="gate_post_weak_min_vertical_bins" value="$(arg gate_post_weak_min_vertical_bins)" />
+    <arg name="gate_width_min" value="$(arg gate_width_min)" />
+    <arg name="gate_width_max" value="$(arg gate_width_max)" />
+    <arg name="gate_width_expected" value="$(arg gate_width_expected)" />
+    <arg name="pair_forward_tolerance" value="$(arg pair_forward_tolerance)" />
+    <arg name="enforce_gate_center_constraint" value="$(arg enforce_gate_center_constraint)" />
+    <arg name="gate_center_y_tolerance" value="$(arg gate_center_y_tolerance)" />
+    <arg name="partial_center_y_tolerance" value="$(arg partial_center_y_tolerance)" />
+    <arg name="pair_max_height_delta" value="$(arg pair_max_height_delta)" />
+    <arg name="pair_min_height_overlap" value="$(arg pair_min_height_overlap)" />
+    <arg name="allow_weak_single_partial" value="$(arg allow_weak_single_partial)" />
+    <arg name="pre_offset" value="$(arg pre_offset)" />
+    <arg name="post_offset" value="$(arg post_offset)" />
+    <arg name="stable_frames" value="$(arg stable_frames)" />
+    <arg name="history_size" value="$(arg history_size)" />
+    <arg name="stability_threshold" value="$(arg stability_threshold)" />
+    <arg name="debug_log_period" value="$(arg debug_log_period)" />
+    <arg name="debug_top_clusters" value="$(arg debug_top_clusters)" />
+  </include>
+</launch>

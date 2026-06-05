@@ -1,6 +1,18 @@
 <launch>
   <arg name="cloud_topic" default="/cloud_registered" />
   <arg name="odom_topic" default="/mavros/local_position/odom" />
+  <arg name="node_type" default="frame_cloud_debug_node" />
+  <arg name="node_name" default="frame_cloud_debug_node" />
+  <arg name="topic_prefix" default="/craic_debug/frame_cloud" />
+  <arg name="use_explicit_gate_center_y" default="false" />
+  <arg name="gate_center_x" default="0.0" />
+  <arg name="gate_center_y" default="0.0" />
+  <arg name="gate_center_y_frame" default="local" />
+  <arg name="use_manual_home" default="false" />
+  <arg name="manual_home_x" default="0.0" />
+  <arg name="manual_home_y" default="0.0" />
+  <arg name="manual_home_z" default="0.0" />
+  <arg name="manual_home_yaw" default="0.0" />
   <arg name="frame_id" default="" />
   <arg name="goal_frame_id" default="world" />
   <arg name="flight_z" default="0.9" />
@@ -95,7 +107,17 @@
   <arg name="debug_log_period" default="1.0" />
   <arg name="debug_top_clusters" default="6" />
 
-  <node pkg="craic_pillar_debug" type="frame_cloud_debug_node" name="frame_cloud_debug_node" output="screen">
+  <node pkg="craic_pillar_debug" type="$(arg node_type)" name="$(arg node_name)" output="screen">
+    <param name="topic_prefix" value="$(arg topic_prefix)" />
+    <param name="use_explicit_gate_center_y" value="$(arg use_explicit_gate_center_y)" />
+    <param name="gate_center_x" value="$(arg gate_center_x)" />
+    <param name="gate_center_y" value="$(arg gate_center_y)" />
+    <param name="gate_center_y_frame" value="$(arg gate_center_y_frame)" />
+    <param name="use_manual_home" value="$(arg use_manual_home)" />
+    <param name="manual_home_x" value="$(arg manual_home_x)" />
+    <param name="manual_home_y" value="$(arg manual_home_y)" />
+    <param name="manual_home_z" value="$(arg manual_home_z)" />
+    <param name="manual_home_yaw" value="$(arg manual_home_yaw)" />
     <param name="cloud_topic" value="$(arg cloud_topic)" />
     <param name="odom_topic" value="$(arg odom_topic)" />
     <param name="frame_id" value="$(arg frame_id)" />

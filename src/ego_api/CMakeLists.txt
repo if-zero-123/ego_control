@@ -4,6 +4,7 @@ project(ego_api)
 set(CMAKE_CXX_STANDARD 11)
 
 find_package(catkin REQUIRED COMPONENTS
+  rospy
   roscpp
   std_msgs
   geometry_msgs
@@ -25,7 +26,7 @@ find_package(PCL REQUIRED COMPONENTS common filters kdtree segmentation)
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ego_api
-  CATKIN_DEPENDS roscpp std_msgs geometry_msgs mavros_msgs nav_msgs sensor_msgs visualization_msgs image_transport cv_bridge pcl_conversions pcl_ros quadrotor_msgs
+  CATKIN_DEPENDS rospy roscpp std_msgs geometry_msgs mavros_msgs nav_msgs sensor_msgs visualization_msgs image_transport cv_bridge pcl_conversions pcl_ros quadrotor_msgs
 )
 
 include_directories(
@@ -118,4 +119,9 @@ target_link_libraries(craic_cloud_self_filter
 )
 add_dependencies(craic_cloud_self_filter
   ${catkin_EXPORTED_TARGETS}
+)
+
+catkin_install_python(PROGRAMS
+  scripts/craic_web_control.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

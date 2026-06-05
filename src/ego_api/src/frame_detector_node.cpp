@@ -214,6 +214,9 @@ public:
         pnh_.param<double>("gate_width_expected", gate_width_expected_, 1.00);
         pnh_.param<double>("pair_forward_tolerance", pair_forward_tolerance_, 0.35);
         pnh_.param<bool>("enforce_gate_center_constraint", enforce_gate_center_constraint_, true);
+        pnh_.param<double>("gate_center_x", gate_center_x_, fixed_roi_center_x_);
+        pnh_.param<double>("gate_center_y", gate_center_y_, fixed_roi_center_y_);
+        pnh_.param<std::string>("gate_center_y_frame", gate_center_y_frame_, "local");
         pnh_.param<double>("gate_center_y_tolerance", gate_center_y_tolerance_, 0.45);
         pnh_.param<double>("partial_center_y_tolerance", partial_center_y_tolerance_, 0.65);
         pnh_.param<double>("pair_max_height_delta", pair_max_height_delta_, 0.60);
@@ -261,7 +264,7 @@ public:
                      fixed_roi_center_z_, fixed_roi_radius_,
                      use_body_exclusion_, body_exclusion_forward_min_, body_exclusion_forward_max_,
                      body_exclusion_lateral_abs_, body_exclusion_z_min_, body_exclusion_z_max_);
-            ROS_INFO("[frame_detector] cluster leaf=%.2f tol=%.2f min=%d post_width=[%.2f %.2f] weak_width<=%.2f frame_width=[%.2f %.2f] frame_forward=[%.2f %.2f] frame_h=[%.2f %.2f] frame_min_pts=%d prefer_frame=%d post_h>=%.2f weak_h>=%.2f gate_width=[%.2f %.2f] forward_tol=%.2f center_constraint=%d center_y_tol=%.2f partial_y_tol=%.2f pair_height_delta<=%.2f pair_height_overlap>=%.2f",
+            ROS_INFO("[frame_detector] cluster leaf=%.2f tol=%.2f min=%d post_width=[%.2f %.2f] weak_width<=%.2f frame_width=[%.2f %.2f] frame_forward=[%.2f %.2f] frame_h=[%.2f %.2f] frame_min_pts=%d prefer_frame=%d post_h>=%.2f weak_h>=%.2f gate_width=[%.2f %.2f] forward_tol=%.2f center=(%.2f %.2f) center_y_frame=%s effective_center_y=%.2f center_constraint=%d center_y_tol=%.2f partial_y_tol=%.2f pair_height_delta<=%.2f pair_height_overlap>=%.2f",
                      voxel_leaf_, cluster_tolerance_, min_cluster_size_,
                      gate_post_min_width_, gate_post_max_width_, gate_post_weak_max_width_,
                      gate_frame_cluster_min_width_, gate_frame_cluster_max_width_,
@@ -270,6 +273,7 @@ public:
                      prefer_frame_cluster_,
                      gate_post_min_height_, gate_post_weak_min_height_,
                      gate_width_min_, gate_width_max_, pair_forward_tolerance_,
+                     gate_center_x_, gate_center_y_, gate_center_y_frame_.c_str(), gateCenterY(),
                      enforce_gate_center_constraint_, gate_center_y_tolerance_,
                      partial_center_y_tolerance_, pair_max_height_delta_, pair_min_height_overlap_);
         }
@@ -560,7 +564,7 @@ private:
             GateDetection detection = makePartialDetection(single_post, *post_roi);
             if (detection.valid) {
                 history_.clear();
-                const std::string status = single_post.local_center.y() >= gateSearchCenterY()
+                const std::string status = single_post.local_center.y() >= gateCenterY()
                                                ? "valid_partial_left"
                                                : "valid_partial_right";
                 publishOutputs(detection, msg->header.stamp);
@@ -663,9 +667,21 @@ private:
         return 0.5 * (gate_search_y_min_ + gate_search_y_max_);
     }
 
+    double gateCenterY() const {
+        if (std::isfinite(gate_center_y_)) {
+            if (gate_center_y_frame_ == "world" && use_local_rule_roi_ && have_home_) {
+                const double world_x = std::isfinite(gate_center_x_) ? gate_center_x_ : home_pos_.x();
+                return worldToFieldLocalXY(Eigen::Vector3d(world_x, gate_center_y_, home_pos_.z())).y();
+            }
+            return gate_center_y_;
+        }
+        if (use_fixed_center_roi_) return fixed_roi_center_y_;
+        return gateSearchCenterY();
+    }
+
     bool passesGateCenterConstraint(double center_y, double tolerance) const {
         if (!enforce_gate_center_constraint_) return true;
-        return std::abs(center_y - gateSearchCenterY()) <= tolerance;
+        return std::abs(center_y - gateCenterY()) <= tolerance;
     }
 
     double pairHeightDelta(const GatePostCandidate& a,
@@ -954,7 +970,7 @@ private:
             if (post_band.valid) return post_band;
 
             GatePostCandidate synthetic_missing = visible_post;
-            const double mid_y = gateSearchCenterY();
+            const double mid_y = gateCenterY();
             synthetic_missing.local_center.y() = visible_post.local_center.y() >= mid_y
                                                      ? visible_post.local_center.y() - gate_width_expected_
                                                      : visible_post.local_center.y() + gate_width_expected_;
@@ -1204,7 +1220,7 @@ private:
         if (!pairHeightCompatible(left, right)) return false;
 
         const double width_penalty = std::abs(lateral_gap - gate_width_expected_);
-        const double center_penalty = std::abs(pair_center_y - gateSearchCenterY());
+        const double center_penalty = std::abs(pair_center_y - gateCenterY());
         const double thickness_penalty = std::max(0.0, whole.local_forward_width - 0.08);
         const double height_bonus = std::min(1.5, whole.height);
         const double point_bonus = 0.0005 * static_cast<double>(whole.points);
@@ -1283,7 +1299,7 @@ private:
                 if (avg_forward < gateForwardMin() || avg_forward > gateForwardMax()) continue;
 
                 const double gap_penalty = std::abs(lateral_gap - gate_width_expected_);
-                const double center_penalty = std::abs(pair_center_y - gateSearchCenterY());
+                const double center_penalty = std::abs(pair_center_y - gateCenterY());
                 const double height_penalty = pairHeightDelta(a, b);
                 const double score = a.confidence + b.confidence -
                                      0.65 * forward_delta -
@@ -1314,7 +1330,7 @@ private:
                           GatePostCandidate& out_post) const {
         if (candidates.empty()) return false;
 
-        const double mid_y = gateSearchCenterY();
+        const double mid_y = gateCenterY();
         double best_score = -std::numeric_limits<double>::infinity();
         bool found = false;
         for (const auto& c : candidates) {
@@ -1397,7 +1413,7 @@ private:
         GateDetection d;
         d.partial = true;
 
-        const double mid_y = gateSearchCenterY();
+        const double mid_y = gateCenterY();
         const bool visible_left = visible_post.local_center.y() >= mid_y;
         const double visible_y = visible_post.local_center.y();
         const double missing_y = visible_left
@@ -1592,6 +1608,7 @@ private:
 
         std::ostringstream oss;
         oss << "[frame_detector] status=" << status
+            << " gate_center_y=" << gateCenterY()
             << " frame=" << msg.header.frame_id
             << " input=" << input_size
             << " down=" << down_size
@@ -1971,6 +1988,9 @@ private:
     double gate_width_expected_ = 1.00;
     double pair_forward_tolerance_ = 0.35;
     bool enforce_gate_center_constraint_ = true;
+    double gate_center_x_ = std::numeric_limits<double>::quiet_NaN();
+    double gate_center_y_ = std::numeric_limits<double>::quiet_NaN();
+    std::string gate_center_y_frame_ = "local";
     double gate_center_y_tolerance_ = 0.45;
     double partial_center_y_tolerance_ = 0.65;
     double pair_max_height_delta_ = 0.60;

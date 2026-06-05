@@ -1,0 +1,61 @@
+<launch>
+    <!--
+        CRAIC 离线网页控制台。
+        启动后只提供网页服务，不会自动起飞，也不会自动启动比赛任务。
+        浏览器访问 http://无人机IP:8088，输入 PIN 后才能启动完整 craic_competition_demo.launch。
+    -->
+    <arg name="host" default="0.0.0.0" />
+    <arg name="port" default="8088" />
+    <arg name="pin_code" default="1234" />
+    <arg name="workspace_dir" default="/home/orangepi/catkin_ws" />
+    <!--
+        是否允许网页控制板载电脑电源。
+        默认 true：网页里输入正确 PIN 后，可以直接执行关机或重启命令。
+        默认命令使用 systemctl poweroff / systemctl reboot；如果系统策略拒绝普通用户执行，
+        需要给 orangepi 配置对应权限。
+    -->
+    <arg name="enable_poweroff" default="true" />
+    <arg name="poweroff_command" default="systemctl poweroff" />
+    <arg name="enable_reboot" default="true" />
+    <arg name="reboot_command" default="systemctl reboot" />
+
+    <arg name="mission_package" default="ego_api" />
+    <arg name="mission_launch" default="craic_competition_demo.launch" />
+
+    <arg name="raw_cloud_topic" default="/cloud_registered" />
+    <arg name="occupancy_topic" default="/drone_0_ego_planner_node/grid_map/occupancy" />
+    <arg name="occupancy_inflate_topic" default="/drone_0_ego_planner_node/grid_map/occupancy_inflate" />
+    <!--
+        网页 3D 视图抽样参数。
+        max_cloud_points 越大点云越密，但手机浏览器会更吃性能。
+        cloud_accumulate_frames 会把最近几帧 /cloud_registered 合并显示，静止看场地结构更清楚。
+    -->
+    <arg name="max_cloud_points" default="800" />
+    <arg name="max_map_points" default="800" />
+    <arg name="cloud_accumulate_frames" default="1" />
+    <arg name="map_accumulate_frames" default="1" />
+    <arg name="cloud_sample_period" default="0.2" />
+    <arg name="map_sample_period" default="0.5" />
+
+    <node pkg="ego_api" type="craic_web_control.py" name="craic_web_control" output="screen">
+        <param name="host" value="$(arg host)" />
+        <param name="port" value="$(arg port)" />
+        <param name="pin_code" value="$(arg pin_code)" />
+        <param name="workspace_dir" value="$(arg workspace_dir)" />
+        <param name="enable_poweroff" value="$(arg enable_poweroff)" />
+        <param name="poweroff_command" value="$(arg poweroff_command)" />
+        <param name="enable_reboot" value="$(arg enable_reboot)" />
+        <param name="reboot_command" value="$(arg reboot_command)" />
+        <param name="mission_package" value="$(arg mission_package)" />
+        <param name="mission_launch" value="$(arg mission_launch)" />
+        <param name="raw_cloud_topic" value="$(arg raw_cloud_topic)" />
+        <param name="occupancy_topic" value="$(arg occupancy_topic)" />
+        <param name="occupancy_inflate_topic" value="$(arg occupancy_inflate_topic)" />
+        <param name="max_cloud_points" value="$(arg max_cloud_points)" />
+        <param name="max_map_points" value="$(arg max_map_points)" />
+        <param name="cloud_accumulate_frames" value="$(arg cloud_accumulate_frames)" />
+        <param name="map_accumulate_frames" value="$(arg map_accumulate_frames)" />
+        <param name="cloud_sample_period" value="$(arg cloud_sample_period)" />
+        <param name="map_sample_period" value="$(arg map_sample_period)" />
+    </node>
+</launch>

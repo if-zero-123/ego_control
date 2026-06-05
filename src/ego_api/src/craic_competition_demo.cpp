@@ -159,6 +159,7 @@ public:
         pnh_.param<double>("expected_frame_x", expected_frame_center_.x(), 3.2);
         pnh_.param<double>("expected_frame_y", expected_frame_center_.y(), -1.25);
         pnh_.param<double>("expected_frame_z", expected_frame_center_.z(), 1.25);
+        pnh_.param<std::string>("frame_center_mode", frame_center_mode_, "auto_detect");
         pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.55);
         pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.1);
         pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 0.35);
@@ -677,6 +678,16 @@ private:
     }
 
     Eigen::Vector3d waitFrameCenterWithFallback() {
+        if (frame_center_mode_ == "expected_direct") {
+            ROS_INFO("[craic_demo] FRAME_CENTER source=expected_direct expected=(%.2f %.2f %.2f)",
+                     expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z());
+            return expected_frame_center_;
+        }
+        if (frame_center_mode_ != "auto_detect") {
+            ROS_WARN("[craic_demo] FRAME_CENTER invalid_mode mode=%s action=auto_detect",
+                     frame_center_mode_.c_str());
+        }
+
         ros::Rate rate(20);
         const ros::Time start = ros::Time::now();
         std::vector<FrameCenterSample> samples;
@@ -1686,6 +1697,7 @@ private:
 
     Eigen::Vector3d initial_wait_ = Eigen::Vector3d(0.0, -0.85, 1.0);
     Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(3.2, -1.25, 1.25);
+    std::string frame_center_mode_ = "auto_detect";
     double frame_center_reject_distance_ = 0.55;
     double frame_post_x_offset_ = 1.1;
     double frame_pass_guard_x_offset_ = 0.35;

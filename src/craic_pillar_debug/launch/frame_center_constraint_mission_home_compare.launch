@@ -1,0 +1,44 @@
+<launch>
+  <!--
+    Perception-only compare that simulates the competition detector's timing:
+    home/local frame is locked to the takeoff/start pose, while the drone can be
+    physically static at the later hover recognition position.
+  -->
+  <arg name="cloud_topic" default="/cloud_registered" />
+  <arg name="odom_topic" default="/mavros/local_position/odom" />
+
+  <arg name="manual_home_x" default="0.01" />
+  <arg name="manual_home_y" default="0.01" />
+  <arg name="manual_home_z" default="-0.04" />
+  <arg name="manual_home_yaw" default="0.01" />
+
+  <arg name="gate_center_x" default="3.2" />
+  <arg name="gate_center_y" default="-1.25" />
+  <arg name="gate_center_y_frame" default="world" />
+
+  <arg name="debug_log_period" default="0.5" />
+  <arg name="debug_top_clusters" default="8" />
+
+  <include file="$(find craic_pillar_debug)/launch/frame_center_constraint_compare.launch">
+    <arg name="cloud_topic" value="$(arg cloud_topic)" />
+    <arg name="odom_topic" value="$(arg odom_topic)" />
+    <arg name="gate_center_x" value="$(arg gate_center_x)" />
+    <arg name="gate_center_y" value="$(arg gate_center_y)" />
+    <arg name="gate_center_y_frame" value="$(arg gate_center_y_frame)" />
+    <arg name="debug_log_period" value="$(arg debug_log_period)" />
+    <arg name="debug_top_clusters" value="$(arg debug_top_clusters)" />
+  </include>
+
+  <!-- Override both included nodes to use the same mission-start home. -->
+  <param name="/frame_cloud_debug_old_node/use_manual_home" value="true" />
+  <param name="/frame_cloud_debug_old_node/manual_home_x" value="$(arg manual_home_x)" />
+  <param name="/frame_cloud_debug_old_node/manual_home_y" value="$(arg manual_home_y)" />
+  <param name="/frame_cloud_debug_old_node/manual_home_z" value="$(arg manual_home_z)" />
+  <param name="/frame_cloud_debug_old_node/manual_home_yaw" value="$(arg manual_home_yaw)" />
+
+  <param name="/frame_cloud_debug_new_node/use_manual_home" value="true" />
+  <param name="/frame_cloud_debug_new_node/manual_home_x" value="$(arg manual_home_x)" />
+  <param name="/frame_cloud_debug_new_node/manual_home_y" value="$(arg manual_home_y)" />
+  <param name="/frame_cloud_debug_new_node/manual_home_z" value="$(arg manual_home_z)" />
+  <param name="/frame_cloud_debug_new_node/manual_home_yaw" value="$(arg manual_home_yaw)" />
+</launch>

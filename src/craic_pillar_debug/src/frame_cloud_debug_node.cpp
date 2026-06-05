@@ -133,6 +133,17 @@ struct FrameClusterCandidate {
 class FrameCloudDebugNode {
 public:
     FrameCloudDebugNode() : nh_(), pnh_("~") {
+        pnh_.param<std::string>("topic_prefix", topic_prefix_, "/craic_debug/frame_cloud");
+        pnh_.param<bool>("use_explicit_gate_center_y", use_explicit_gate_center_y_, false);
+        pnh_.param<double>("gate_center_x", gate_center_x_, std::numeric_limits<double>::quiet_NaN());
+        pnh_.param<double>("gate_center_y", gate_center_y_, std::numeric_limits<double>::quiet_NaN());
+        pnh_.param<std::string>("gate_center_y_frame", gate_center_y_frame_, "local");
+        pnh_.param<bool>("use_manual_home", use_manual_home_, false);
+        pnh_.param<double>("manual_home_x", manual_home_x_, 0.0);
+        pnh_.param<double>("manual_home_y", manual_home_y_, 0.0);
+        pnh_.param<double>("manual_home_z", manual_home_z_, 0.0);
+        pnh_.param<double>("manual_home_yaw", manual_home_yaw_, 0.0);
+
         pnh_.param<std::string>("cloud_topic", cloud_topic_, "/cloud_registered");
         pnh_.param<std::string>("odom_topic", odom_topic_, "/mavros/local_position/odom");
         pnh_.param<std::string>("frame_id", configured_frame_id_, "");
@@ -231,11 +242,11 @@ public:
         cloud_sub_ = nh_.subscribe(cloud_topic_, 1, &FrameCloudDebugNode::cloudCb, this);
         odom_sub_ = nh_.subscribe(odom_topic_, 20, &FrameCloudDebugNode::odomCb, this);
 
-        status_pub_ = nh_.advertise<std_msgs::String>("/craic_debug/frame_cloud_status", 1, true);
-        center_pub_ = nh_.advertise<geometry_msgs::PointStamped>("/craic_debug/frame_cloud_center", 1, true);
-        pre_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic_debug/frame_cloud_pre_goal", 1, true);
-        post_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/craic_debug/frame_cloud_post_goal", 1, true);
-        marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/craic_debug/frame_cloud_markers", 1, true);
+        status_pub_ = nh_.advertise<std_msgs::String>(makeTopic("_status"), 1, true);
+        center_pub_ = nh_.advertise<geometry_msgs::PointStamped>(makeTopic("_center"), 1, true);
+        pre_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(makeTopic("_pre_goal"), 1, true);
+        post_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(makeTopic("_post_goal"), 1, true);
+        marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(makeTopic("_markers"), 1, true);
 
         ROS_INFO("[frame_cloud_debug] cloud=%s odom=%s marker_frame=%s goal_frame=%s flight_z=%.2f height_mode=%s gate_center_z=%.2f crossing_z=%.2f detected_z=%d goal_z_follows_center=%d center_z_bias=%.2f goal_z_bias=%.2f clamp_z=%d center_z_safety=[%.2f %.2f] bottom_mode=%s gate_bottom_z=%.2f auto_top_z_max=%.2f auto_gate_tol=%.2f auto_post_margin=(%.2f %.2f) q=[%.2f %.2f] min_span=%.2f min_pts=%d local_rule_roi=%d field=%.2fx%.2f gate_roi=x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f] post_z_max=%.2f fixed_roi=%d center=(%.2f %.2f %.2f) radius=%.2f body_exclusion=%d body_box=x[%.2f %.2f] y=+/-%.2f dz[%.2f %.2f] fallback=front[%.2f %.2f] lat=+/-%.2f weak_single=%d",
                  cloud_topic_.c_str(), odom_topic_.c_str(),
@@ -268,9 +279,17 @@ public:
                  gate_width_min_, gate_width_max_, pair_forward_tolerance_,
                  enforce_gate_center_constraint_, gate_center_y_tolerance_,
                  partial_center_y_tolerance_, pair_max_height_delta_, pair_min_height_overlap_);
+        ROS_INFO("[frame_cloud_debug] topic_prefix=%s center_source=%s search_center_y=%.3f configured_gate_center=(%.3f %.3f) gate_center_y_frame=%s effective_gate_center_y=%.3f",
+                 topic_prefix_.c_str(),
+                 use_explicit_gate_center_y_ ? "explicit_gate_center_y" : "gate_search_midpoint",
+                 gateSearchCenterY(), gate_center_x_, gate_center_y_, gate_center_y_frame_.c_str(), gateCenterY());
     }
 
 private:
+    std::string makeTopic(const std::string& suffix) const {
+        return topic_prefix_ + suffix;
+    }
+
     void odomCb(const nav_msgs::Odometry::ConstPtr& msg) {
         odom_pos_ = Eigen::Vector3d(msg->pose.pose.position.x,
                                     msg->pose.pose.position.y,
@@ -280,11 +299,17 @@ private:
         have_odom_ = true;
 
         if (!have_home_) {
-            home_pos_ = odom_pos_;
-            home_yaw_ = odom_yaw_;
+            if (use_manual_home_) {
+                home_pos_ = Eigen::Vector3d(manual_home_x_, manual_home_y_, manual_home_z_);
+                home_yaw_ = manual_home_yaw_;
+            } else {
+                home_pos_ = odom_pos_;
+                home_yaw_ = odom_yaw_;
+            }
             have_home_ = true;
-            ROS_INFO("[frame_cloud_debug] home locked at (%.2f %.2f %.2f), yaw=%.2f",
-                     home_pos_.x(), home_pos_.y(), home_pos_.z(), home_yaw_);
+            ROS_INFO("[frame_cloud_debug] home locked at (%.2f %.2f %.2f), yaw=%.2f source=%s",
+                     home_pos_.x(), home_pos_.y(), home_pos_.z(), home_yaw_,
+                     use_manual_home_ ? "manual" : "odom_first_sample");
         }
     }
 
@@ -521,7 +546,7 @@ private:
             GateDetection detection = makePartialDetection(single_post, *post_roi);
             if (detection.valid) {
                 history_.clear();
-                const std::string status = single_post.local_center.y() >= gateSearchCenterY()
+                const std::string status = single_post.local_center.y() >= gateCenterY()
                                                ? "valid_partial_left"
                                                : "valid_partial_right";
                 publishOutputs(detection, msg->header.stamp);
@@ -624,9 +649,20 @@ private:
         return 0.5 * (gate_search_y_min_ + gate_search_y_max_);
     }
 
+    double gateCenterY() const {
+        if (use_explicit_gate_center_y_ && std::isfinite(gate_center_y_)) {
+            if (gate_center_y_frame_ == "world" && use_local_rule_roi_ && have_home_) {
+                const double world_x = std::isfinite(gate_center_x_) ? gate_center_x_ : home_pos_.x();
+                return worldToFieldLocalXY(Eigen::Vector3d(world_x, gate_center_y_, home_pos_.z())).y();
+            }
+            return gate_center_y_;
+        }
+        return gateSearchCenterY();
+    }
+
     bool passesGateCenterConstraint(double center_y, double tolerance) const {
         if (!enforce_gate_center_constraint_) return true;
-        return std::abs(center_y - gateSearchCenterY()) <= tolerance;
+        return std::abs(center_y - gateCenterY()) <= tolerance;
     }
 
     double pairHeightDelta(const GatePostCandidate& a,
@@ -915,7 +951,7 @@ private:
             if (post_band.valid) return post_band;
 
             GatePostCandidate synthetic_missing = visible_post;
-            const double mid_y = gateSearchCenterY();
+            const double mid_y = gateCenterY();
             synthetic_missing.local_center.y() = visible_post.local_center.y() >= mid_y
                                                      ? visible_post.local_center.y() - gate_width_expected_
                                                      : visible_post.local_center.y() + gate_width_expected_;
@@ -1165,7 +1201,7 @@ private:
         if (!pairHeightCompatible(left, right)) return false;
 
         const double width_penalty = std::abs(lateral_gap - gate_width_expected_);
-        const double center_penalty = std::abs(pair_center_y - gateSearchCenterY());
+        const double center_penalty = std::abs(pair_center_y - gateCenterY());
         const double thickness_penalty = std::max(0.0, whole.local_forward_width - 0.08);
         const double height_bonus = std::min(1.5, whole.height);
         const double point_bonus = 0.0005 * static_cast<double>(whole.points);
@@ -1244,7 +1280,7 @@ private:
                 if (avg_forward < gateForwardMin() || avg_forward > gateForwardMax()) continue;
 
                 const double gap_penalty = std::abs(lateral_gap - gate_width_expected_);
-                const double center_penalty = std::abs(pair_center_y - gateSearchCenterY());
+                const double center_penalty = std::abs(pair_center_y - gateCenterY());
                 const double height_penalty = pairHeightDelta(a, b);
                 const double score = a.confidence + b.confidence -
                                      0.65 * forward_delta -
@@ -1275,7 +1311,7 @@ private:
                           GatePostCandidate& out_post) const {
         if (candidates.empty()) return false;
 
-        const double mid_y = gateSearchCenterY();
+        const double mid_y = gateCenterY();
         double best_score = -std::numeric_limits<double>::infinity();
         bool found = false;
         for (const auto& c : candidates) {
@@ -1358,7 +1394,7 @@ private:
         GateDetection d;
         d.partial = true;
 
-        const double mid_y = gateSearchCenterY();
+        const double mid_y = gateCenterY();
         const bool visible_left = visible_post.local_center.y() >= mid_y;
         const double visible_y = visible_post.local_center.y();
         const double missing_y = visible_left
@@ -1512,6 +1548,8 @@ private:
 
         std::ostringstream oss;
         oss << "[frame_cloud_debug] status=" << status
+            << " topic_prefix=" << topic_prefix_
+            << " gate_center_y=" << gateCenterY()
             << " frame=" << msg.header.frame_id
             << " input=" << input_size
             << " down=" << down_size
@@ -1812,6 +1850,16 @@ private:
     ros::Publisher post_pub_;
     ros::Publisher marker_pub_;
 
+    std::string topic_prefix_ = "/craic_debug/frame_cloud";
+    bool use_explicit_gate_center_y_ = false;
+    double gate_center_x_ = std::numeric_limits<double>::quiet_NaN();
+    double gate_center_y_ = std::numeric_limits<double>::quiet_NaN();
+    std::string gate_center_y_frame_ = "local";
+    bool use_manual_home_ = false;
+    double manual_home_x_ = 0.0;
+    double manual_home_y_ = 0.0;
+    double manual_home_z_ = 0.0;
+    double manual_home_yaw_ = 0.0;
     std::string cloud_topic_;
     std::string odom_topic_;
     std::string configured_frame_id_;

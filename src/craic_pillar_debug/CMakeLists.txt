@@ -83,6 +83,32 @@ add_dependencies(frame_cloud_debug_node
   ${catkin_EXPORTED_TARGETS}
 )
 
+add_executable(frame_cloud_debug_old_node
+  src/frame_cloud_debug_node.cpp
+)
+
+target_link_libraries(frame_cloud_debug_old_node
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+)
+
+add_dependencies(frame_cloud_debug_old_node
+  ${catkin_EXPORTED_TARGETS}
+)
+
+add_executable(frame_cloud_debug_new_node
+  src/frame_cloud_debug_node.cpp
+)
+
+target_link_libraries(frame_cloud_debug_new_node
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+)
+
+add_dependencies(frame_cloud_debug_new_node
+  ${catkin_EXPORTED_TARGETS}
+)
+
 add_executable(frame_cross_demo_node
   src/frame_cross_demo_node.cpp
 )
