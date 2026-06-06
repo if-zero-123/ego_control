@@ -901,9 +901,9 @@ private:
         if (height_mode_ == "fixed") {
             HeightEstimate estimate;
             estimate.valid = true;
-            estimate.center_z = flight_z_;
-            estimate.low_z = flight_z_;
-            estimate.high_z = flight_z_;
+            estimate.center_z = gate_center_z_;
+            estimate.low_z = gate_center_z_;
+            estimate.high_z = gate_center_z_;
             estimate.source = "fixed";
             return estimate;
         }
@@ -948,9 +948,9 @@ private:
         if (height_mode_ == "fixed") {
             HeightEstimate estimate;
             estimate.valid = true;
-            estimate.center_z = flight_z_;
-            estimate.low_z = flight_z_;
-            estimate.high_z = flight_z_;
+            estimate.center_z = gate_center_z_;
+            estimate.low_z = gate_center_z_;
+            estimate.high_z = gate_center_z_;
             estimate.source = "fixed";
             return estimate;
         }
@@ -989,8 +989,8 @@ private:
 
     double goalZ(double center_z) const {
         if (height_mode_ == "known_center") return crossing_z_;
-        if (height_mode_ == "fixed") return flight_z_;
-        return (goal_z_follows_center_ ? center_z : flight_z_) + goal_z_bias_;
+        if (height_mode_ == "fixed") return crossing_z_;
+        return (goal_z_follows_center_ ? center_z : crossing_z_) + goal_z_bias_;
     }
 
     double gateForwardMin() const {

@@ -78,6 +78,7 @@ const char* frameRankName(int rank) {
 
 struct FrameCenterSample {
     Eigen::Vector3d center = Eigen::Vector3d::Zero();
+    Eigen::Vector3d abs_error = Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
     ros::Time stamp;
     std::string status;
     int rank = 0;
@@ -160,10 +161,11 @@ public:
         pnh_.param<double>("expected_frame_y", expected_frame_center_.y(), -1.25);
         pnh_.param<double>("expected_frame_z", expected_frame_center_.z(), 1.25);
         pnh_.param<std::string>("frame_center_mode", frame_center_mode_, "auto_detect");
-        pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.55);
+        pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.30);
         pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.1);
-        pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 0.35);
-        pnh_.param<double>("frame_pass_guard_timeout", frame_pass_guard_timeout_, 10.0);
+        pnh_.param<double>("frame_post_y_offset", frame_post_y_offset_, -0.145);
+        pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 0.50);
+        pnh_.param<double>("frame_pass_guard_timeout", frame_pass_guard_timeout_, 30.0);
         pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 5.0);
         pnh_.param<double>("frame_valid_max_age", frame_valid_max_age_, 0.8);
         pnh_.param<double>("frame_lock_stability_threshold", frame_lock_stability_threshold_, 0.12);
@@ -186,7 +188,7 @@ public:
         pnh_.param<double>("attack_zone_x", attack_zone_.x(), 0.0);
         pnh_.param<double>("attack_zone_y", attack_zone_.y(), -0.8);
         pnh_.param<double>("attack_zone_z", attack_zone_.z(), 1.25);
-        pnh_.param<double>("attack_height", attack_height_, 0.3);
+        pnh_.param<double>("attack_height", attack_height_, 0.35);
         pnh_.param<double>("balloon_wait_timeout", balloon_wait_timeout_, 8.0);
         pnh_.param<double>("balloon_valid_max_age", balloon_valid_max_age_, 0.8);
         pnh_.param<double>("balloon_standoff", balloon_standoff_, 0.70);
@@ -201,8 +203,9 @@ public:
         pnh_.param<double>("balloon_center_z_bias", balloon_center_z_bias_, 0.0);
         pnh_.param<double>("balloon_align_z_min", balloon_align_z_min_, 0.25);
         pnh_.param<double>("balloon_align_z_max", balloon_align_z_max_, 0.60);
-        pnh_.param<double>("balloon_needle_length", balloon_needle_length_, 0.18);
+        pnh_.param<double>("balloon_needle_length", balloon_needle_length_, 0.06);
         pnh_.param<double>("balloon_puncture_extra", balloon_puncture_extra_, 0.04);
+        pnh_.param<double>("balloon_puncture_max_distance", balloon_puncture_max_distance_, 0.80);
         pnh_.param<double>("balloon_servo_timeout", balloon_servo_timeout_, 8.0);
         pnh_.param<double>("balloon_servo_u_threshold", balloon_servo_u_threshold_, 0.08);
         pnh_.param<double>("balloon_servo_v_threshold", balloon_servo_v_threshold_, 0.10);
@@ -222,13 +225,13 @@ public:
         pnh_.param<double>("balloon_return_home_land_z", balloon_return_home_land_z_, 1.0);
 
         pnh_.param<double>("override_move_timeout", override_move_timeout_, 30.0);
-        pnh_.param<double>("override_pos_threshold", override_pos_threshold_, 0.16);
+        pnh_.param<double>("override_pos_threshold", override_pos_threshold_, 0.10);
         pnh_.param<double>("override_smooth_speed", override_smooth_speed_, 0.35);
         pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
         pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.10);
         pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.25);
         pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 0.5);
-        pnh_.param<double>("attack_zone_overrun_x", attack_zone_overrun_x_, 0.25);
+        pnh_.param<double>("attack_zone_overrun_x", attack_zone_overrun_x_, 0.30);
         pnh_.param<bool>("robust_land_enable", robust_land_enable_, true);
         pnh_.param<double>("robust_land_soft_z", robust_land_soft_z_, 0.10);
         pnh_.param<double>("robust_land_soft_speed", robust_land_soft_speed_, 0.08);
@@ -293,7 +296,7 @@ public:
         logStage("FRAME_CENTER", "wait frame center with expected fallback");
         const Eigen::Vector3d frame_center = waitFrameCenterWithFallback();
         const Eigen::Vector3d frame_post_control(frame_center.x() + frame_post_x_offset_,
-                                                 frame_center.y(),
+                                                 frame_center.y() + frame_post_y_offset_,
                                                  frame_center.z());
         ROS_INFO("[craic_demo] FRAME_POST_CONTROL center=(%.2f %.2f %.2f) target=(%.2f %.2f %.2f)",
                  frame_center.x(), frame_center.y(), frame_center.z(),
@@ -694,7 +697,7 @@ private:
         ros::Time last_sample_stamp;
         int rejected_samples = 0;
 
-        ROS_INFO("[craic_demo] FRAME_CENTER robust_lock timeout=%.1f expected=(%.2f %.2f %.2f) reject_dist=%.2f stable<=%.2f frames strong=%d medium=%d partial=%d",
+        ROS_INFO("[craic_demo] FRAME_CENTER robust_lock timeout=%.1f expected=(%.2f %.2f %.2f) reject_axis<=%.2f stable<=%.2f frames strong=%d medium=%d partial=%d",
                  frame_detect_timeout_,
                  expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z(),
                  frame_center_reject_distance_, frame_lock_stability_threshold_,
@@ -711,17 +714,19 @@ private:
                 sample.stamp = frame_center_recv_stamp_;
                 sample.status = frame_status_;
                 sample.rank = frameStatusRank(frame_status_);
-                sample.dist_to_expected = (frame_center_ - expected_frame_center_).norm();
+                sample.abs_error = (frame_center_ - expected_frame_center_).cwiseAbs();
+                sample.dist_to_expected = sample.abs_error.norm();
 
-                if (sample.dist_to_expected <= frame_center_reject_distance_) {
+                if (frameCenterWithinRejectBounds(sample.center)) {
                     samples.push_back(sample);
                     pruneFrameSamples(samples);
                 } else {
                     ++rejected_samples;
                     ROS_WARN_THROTTLE(mission_log_period_,
-                                      "[craic_demo] FRAME_CENTER reject_sample status=%s rank=%s center=(%.2f %.2f %.2f) dist=%.2f limit=%.2f action=continue_wait",
+                                      "[craic_demo] FRAME_CENTER reject_sample status=%s rank=%s center=(%.2f %.2f %.2f) err=(%.2f %.2f %.2f) dist=%.2f axis_limit=%.2f action=continue_wait",
                                       sample.status.c_str(), frameRankName(sample.rank),
                                       sample.center.x(), sample.center.y(), sample.center.z(),
+                                      sample.abs_error.x(), sample.abs_error.y(), sample.abs_error.z(),
                                       sample.dist_to_expected, frame_center_reject_distance_);
                 }
             }
@@ -833,8 +838,7 @@ private:
 
         std::vector<FrameCenterSample> window(ranked.end() - required, ranked.end());
         const Eigen::Vector3d center = medianCenter(window);
-        const double dist = (center - expected_frame_center_).norm();
-        if (dist > frame_center_reject_distance_) return false;
+        if (!frameCenterWithinRejectBounds(center)) return false;
 
         double span = 0.0;
         for (const auto& sample : window) {
@@ -854,12 +858,21 @@ private:
                       const Eigen::Vector3d& center,
                       double span,
                       int used_frames) const {
-        const double dist = (center - expected_frame_center_).norm();
-        ROS_INFO("[craic_demo] FRAME_CENTER source=detected lock=%s status=%s center=(%.2f %.2f %.2f) expected=(%.2f %.2f %.2f) dist=%.2f stable_span=%.3f frames=%d",
+        const Eigen::Vector3d abs_error = (center - expected_frame_center_).cwiseAbs();
+        const double dist = abs_error.norm();
+        ROS_INFO("[craic_demo] FRAME_CENTER source=detected lock=%s status=%s center=(%.2f %.2f %.2f) expected=(%.2f %.2f %.2f) err=(%.2f %.2f %.2f) dist=%.2f stable_span=%.3f frames=%d",
                  rank_label.c_str(), status.c_str(),
                  center.x(), center.y(), center.z(),
                  expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z(),
+                 abs_error.x(), abs_error.y(), abs_error.z(),
                  dist, span, used_frames);
+    }
+
+    bool frameCenterWithinRejectBounds(const Eigen::Vector3d& center) const {
+        const Eigen::Vector3d abs_error = (center - expected_frame_center_).cwiseAbs();
+        return abs_error.x() <= frame_center_reject_distance_ &&
+               abs_error.y() <= frame_center_reject_distance_ &&
+               abs_error.z() <= frame_center_reject_distance_;
     }
 
     bool waitQrOrSearch(const Eigen::Vector3d& qr_goal, double yaw) {
@@ -991,8 +1004,6 @@ private:
     }
 
     bool attackBalloon(double attack_yaw) {
-        const Eigen::Vector2d forward(std::cos(attack_yaw), std::sin(attack_yaw));
-        const Eigen::Vector2d left(-std::sin(attack_yaw), std::cos(attack_yaw));
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] BALLOON_ATTACK failed reason=enable_override");
             return false;
@@ -1008,14 +1019,17 @@ private:
                 break;
             }
 
+            const double puncture_yaw = attack_yaw;
+            const Eigen::Vector2d forward(std::cos(puncture_yaw), std::sin(puncture_yaw));
+            const Eigen::Vector2d left(-std::sin(puncture_yaw), std::cos(puncture_yaw));
             Eigen::Vector3d approach = balloonApproachTarget(balloon, forward);
             ROS_INFO("[craic_demo] BALLOON_APPROACH attempt=%d target=(%.2f %.2f %.2f) balloon=(%.2f %.2f %.2f) standoff=%.2f yaw=%.3f",
                      attempt,
                      approach.x(), approach.y(), approach.z(),
                      balloon.x(), balloon.y(), balloon.z(),
-                     balloon_standoff_, attack_yaw);
+                     balloon_standoff_, puncture_yaw);
 
-            MoveResult approach_result = moveOverrideLoop("balloon_safe_standoff", approach, attack_yaw,
+            MoveResult approach_result = moveOverrideLoop("balloon_safe_standoff", approach, puncture_yaw,
                                                           override_pos_threshold_,
                                                           ros::Time::now() + ros::Duration(balloon_approach_timeout_),
                                                           false);
@@ -1025,12 +1039,12 @@ private:
             }
 
             BalloonServo locked_servo;
-            if (!servoAlign(attack_yaw, forward, left, locked_servo)) {
+            if (!servoAlign(puncture_yaw, forward, left, locked_servo)) {
                 ROS_WARN("[craic_demo] BALLOON_SERVO_ALIGN attempt=%d result=timeout", attempt);
                 continue;
             }
 
-            if (!servoFineForward(attack_yaw, forward, left, locked_servo)) {
+            if (!servoFineForward(puncture_yaw, forward, left, locked_servo)) {
                 ROS_WARN("[craic_demo] BALLOON_FINE_FORWARD attempt=%d result=failed", attempt);
                 continue;
             }
@@ -1051,12 +1065,13 @@ private:
                      locked_servo.bbox_x, locked_servo.bbox_y, locked_servo.bbox_w, locked_servo.bbox_h,
                      roi.x, roi.y, roi.w, roi.h, roi.baseline_area);
 
-            if (!driveAlongForward("balloon_puncture", attack_yaw, forward,
-                                   balloon_puncture_speed_, balloon_puncture_distance_)) {
+            const double puncture_distance = effectiveBalloonPunctureDistance(forward);
+            if (!driveAlongForward("balloon_puncture", puncture_yaw, forward,
+                                   balloon_puncture_speed_, puncture_distance)) {
                 ROS_WARN("[craic_demo] BALLOON_PUNCTURE attempt=%d result=distance_not_reached", attempt);
             }
 
-            driveAlongForward("balloon_backoff", attack_yaw, forward,
+            driveAlongForward("balloon_backoff", puncture_yaw, forward,
                               -std::abs(balloon_puncture_speed_), balloon_backoff_distance_);
             popped = verifyBalloonPopped(roi);
             ROS_INFO("[craic_demo] BALLOON_VERIFY attempt=%d popped=%s", attempt, yesNo(popped));
@@ -1153,30 +1168,23 @@ private:
 
     bool servoFineForward(double yaw,
                           const Eigen::Vector2d& forward,
-                          const Eigen::Vector2d& left,
+                          const Eigen::Vector2d& /*left*/,
                           BalloonServo& locked) {
         const Eigen::Vector3d start = api_.getOdomPosition();
         const ros::Time deadline = ros::Time::now() + ros::Duration(
             std::max(2.0, balloon_fine_forward_distance_ / std::max(0.03, balloon_fine_forward_speed_) + 1.0));
         ros::Rate rate(50);
         bool reached = false;
+        locked = balloon_servo_;
         while (ros::ok() && ros::Time::now() < deadline) {
             ros::spinOnce();
-            double lateral_speed = 0.0;
-            double z_speed = 0.0;
             if (freshBalloonServo()) {
                 locked = balloon_servo_;
-                lateral_speed = clampValue(-balloon_servo_lateral_gain_ * locked.err_u,
-                                           -balloon_servo_max_lateral_speed_,
-                                           balloon_servo_max_lateral_speed_);
-                z_speed = clampValue(-balloon_servo_z_gain_ * locked.err_v,
-                                     -balloon_servo_max_z_speed_,
-                                     balloon_servo_max_z_speed_);
             }
 
-            sendVelocityCmdWithYaw(balloon_fine_forward_speed_ * forward.x() + lateral_speed * left.x(),
-                                   balloon_fine_forward_speed_ * forward.y() + lateral_speed * left.y(),
-                                   z_speed,
+            sendVelocityCmdWithYaw(balloon_fine_forward_speed_ * forward.x(),
+                                   balloon_fine_forward_speed_ * forward.y(),
+                                   0.0,
                                    yaw);
             const Eigen::Vector3d now = api_.getOdomPosition();
             const Eigen::Vector2d delta(now.x() - start.x(), now.y() - start.y());
@@ -1191,6 +1199,33 @@ private:
         ROS_INFO("[craic_demo] BALLOON_FINE_FORWARD reached=%s distance=%.2f speed=%.2f",
                  yesNo(reached), balloon_fine_forward_distance_, balloon_fine_forward_speed_);
         return reached;
+    }
+
+    double effectiveBalloonPunctureDistance(const Eigen::Vector2d& forward) const {
+        double remaining_from_live_point = std::numeric_limits<double>::quiet_NaN();
+        if (freshBalloonWorldPoint()) {
+            const Eigen::Vector3d now = api_.getOdomPosition();
+            const Eigen::Vector2d to_balloon(balloon_world_point_.x() - now.x(),
+                                             balloon_world_point_.y() - now.y());
+            remaining_from_live_point = to_balloon.dot(forward) - balloon_needle_length_ + balloon_puncture_extra_;
+        }
+        const double remaining_from_nominal =
+            balloon_standoff_ - balloon_fine_forward_distance_ - balloon_needle_length_ + balloon_puncture_extra_;
+        const double raw = std::isfinite(remaining_from_live_point) ? remaining_from_live_point : remaining_from_nominal;
+        const double effective = clampValue(std::max(balloon_puncture_distance_, raw),
+                                            balloon_puncture_distance_,
+                                            balloon_puncture_max_distance_);
+        ROS_INFO("[craic_demo] BALLOON_PUNCTURE_DISTANCE effective=%.2f live=%.2f nominal=%.2f min=%.2f max=%.2f standoff=%.2f fine=%.2f needle=%.2f extra=%.2f",
+                 effective,
+                 remaining_from_live_point,
+                 remaining_from_nominal,
+                 balloon_puncture_distance_,
+                 balloon_puncture_max_distance_,
+                 balloon_standoff_,
+                 balloon_fine_forward_distance_,
+                 balloon_needle_length_,
+                 balloon_puncture_extra_);
+        return effective;
     }
 
     bool driveAlongForward(const std::string& label,
@@ -1698,10 +1733,11 @@ private:
     Eigen::Vector3d initial_wait_ = Eigen::Vector3d(0.0, -0.85, 1.0);
     Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(3.2, -1.25, 1.25);
     std::string frame_center_mode_ = "auto_detect";
-    double frame_center_reject_distance_ = 0.55;
+    double frame_center_reject_distance_ = 0.30;
     double frame_post_x_offset_ = 1.1;
-    double frame_pass_guard_x_offset_ = 0.35;
-    double frame_pass_guard_timeout_ = 10.0;
+    double frame_post_y_offset_ = -0.145;
+    double frame_pass_guard_x_offset_ = 0.50;
+    double frame_pass_guard_timeout_ = 30.0;
     double frame_detect_timeout_ = 5.0;
     double frame_valid_max_age_ = 0.8;
     double frame_lock_stability_threshold_ = 0.12;
@@ -1720,7 +1756,7 @@ private:
     double qr_search_hold_ = 0.35;
 
     Eigen::Vector3d attack_zone_ = Eigen::Vector3d(0.0, -0.8, 1.25);
-    double attack_height_ = 0.3;
+    double attack_height_ = 0.35;
     double balloon_wait_timeout_ = 8.0;
     double balloon_valid_max_age_ = 0.8;
     double balloon_standoff_ = 0.70;
@@ -1735,8 +1771,9 @@ private:
     double balloon_center_z_bias_ = 0.0;
     double balloon_align_z_min_ = 0.25;
     double balloon_align_z_max_ = 0.60;
-    double balloon_needle_length_ = 0.18;
+    double balloon_needle_length_ = 0.06;
     double balloon_puncture_extra_ = 0.04;
+    double balloon_puncture_max_distance_ = 0.80;
     double balloon_servo_timeout_ = 8.0;
     double balloon_servo_u_threshold_ = 0.08;
     double balloon_servo_v_threshold_ = 0.10;
@@ -1756,13 +1793,13 @@ private:
     double balloon_return_home_land_z_ = 1.0;
 
     double override_move_timeout_ = 30.0;
-    double override_pos_threshold_ = 0.16;
+    double override_pos_threshold_ = 0.10;
     double override_smooth_speed_ = 0.35;
     double override_yaw_timeout_ = 10.0;
     double override_yaw_threshold_ = 0.10;
     double override_yaw_hold_time_ = 0.25;
     double override_yaw_rate_ = 0.5;
-    double attack_zone_overrun_x_ = 0.25;
+    double attack_zone_overrun_x_ = 0.30;
     bool robust_land_enable_ = true;
     double robust_land_soft_z_ = 0.10;
     double robust_land_soft_speed_ = 0.08;

@@ -25,6 +25,7 @@
     <arg name="raw_cloud_topic" default="/cloud_registered" />
     <arg name="occupancy_topic" default="/drone_0_ego_planner_node/grid_map/occupancy" />
     <arg name="occupancy_inflate_topic" default="/drone_0_ego_planner_node/grid_map/occupancy_inflate" />
+    <arg name="qr_debug_image_topic" default="/usb_camera_vision/aruco_debug_image" />
     <!--
         网页 3D 视图抽样参数。
         max_cloud_points 越大点云越密，但手机浏览器会更吃性能。
@@ -51,6 +52,7 @@
         <param name="raw_cloud_topic" value="$(arg raw_cloud_topic)" />
         <param name="occupancy_topic" value="$(arg occupancy_topic)" />
         <param name="occupancy_inflate_topic" value="$(arg occupancy_inflate_topic)" />
+        <param name="qr_debug_image_topic" value="$(arg qr_debug_image_topic)" />
         <param name="max_cloud_points" value="$(arg max_cloud_points)" />
         <param name="max_map_points" value="$(arg max_map_points)" />
         <param name="cloud_accumulate_frames" value="$(arg cloud_accumulate_frames)" />

@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
+import base64
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -19,8 +20,15 @@ import sensor_msgs.point_cloud2 as pc2
 from geometry_msgs.msg import PointStamped
 from mavros_msgs.msg import State
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import Int32MultiArray, String, UInt8
+
+try:
+    import cv2
+    import numpy as np
+except Exception:
+    cv2 = None
+    np = None
 
 try:
     import rosnode
@@ -42,9 +50,25 @@ PARAM_SPECS = {
     "attack_zone_y": (-5.0, 5.0),
     "attack_zone_z": (0.05, 3.0),
     "attack_height": (0.05, 2.0),
+    "frame_unified_z": (0.05, 3.0),
+    "frame_center_reject_distance": (0.0, 2.0),
+    "frame_detect_timeout": (0.0, 30.0),
+    "frame_post_y_offset": (-2.0, 2.0),
+    "frame_pass_guard_x_offset": (0.0, 2.0),
+    "frame_pass_guard_timeout": (0.0, 120.0),
+    "attack_zone_overrun_x": (-2.0, 2.0),
+    "qr_search_timeout": (0.0, 60.0),
+    "qr_search_raise_z": (0.0, 1.0),
+    "qr_search_offset": (0.0, 2.0),
 }
 MODE_VALUES = ("auto_detect", "expected_direct")
-CONTROL_PARAM_NAMES = list(PARAM_SPECS.keys()) + ["frame_center_mode"]
+BOOL_PARAM_NAMES = ("frame_use_unified_z",)
+WEB_ONLY_PARAM_NAMES = ("qr_demo_result_id",)
+CONTROL_PARAM_NAMES = list(PARAM_SPECS.keys()) + ["frame_center_mode"] + list(BOOL_PARAM_NAMES)
+QR_IMAGE_MAX_SIDE = 960
+QR_IMAGE_JPEG_QUALITY = 85
+QR_SUCCESS_LOCK_DELAY_SEC = 0.35
+QR_SUCCESS_LOCK_MIN_IMAGES_AFTER_ID = 3
 
 
 INDEX_HTML = r"""<!doctype html>
@@ -187,6 +211,18 @@ INDEX_HTML = r"""<!doctype html>
     }
     .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 5px; }
     .config-section .panel-body { overflow: hidden; }
+    .config-section.collapsed .panel-body { display: none; }
+    .config-section.collapsed { min-height: 0; }
+    .config-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 28px;
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+    .config-toggle::before { content: "▾"; }
+    .config-section.collapsed .config-toggle::before { content: "▸"; }
     .forms { display: grid; grid-template-rows: auto auto auto auto minmax(140px, 1fr); gap: 8px; height: 100%; min-height: 0; }
     .group { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #141923; min-height: 0; }
     .group h3 { margin: 0 0 7px; font-size: 13px; }
@@ -215,6 +251,20 @@ INDEX_HTML = r"""<!doctype html>
     .field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .field label { color: var(--muted); font-size: 12px; }
     .field input { padding: 5px 6px; min-height: 29px; width: 100%; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-width: 0; }
+    .check-field {
+      min-height: 29px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #d5dbe7;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      background: #0f141d;
+      border-radius: 6px;
+      padding: 5px 7px;
+    }
+    .check-field input { width: auto; }
     .mode-row { display: grid; gap: 7px; }
     .mode-compact {
       display: grid;
@@ -265,6 +315,41 @@ INDEX_HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 8px;
+    }
+    details.qr-frame {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #10151d;
+      overflow: hidden;
+    }
+    details.qr-frame summary {
+      cursor: pointer;
+      padding: 8px 10px;
+      color: #d5dbe7;
+      background: #151a22;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .qr-frame-body { padding: 8px; }
+    .qr-frame-body img {
+      display: block;
+      width: 100%;
+      max-height: 520px;
+      object-fit: contain;
+      background: #05070b;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+    }
+    .qr-empty {
+      min-height: 120px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #0b0f15;
+      font-size: 12px;
     }
     @media (max-width: 1180px) {
       main {
@@ -348,10 +433,17 @@ INDEX_HTML = r"""<!doctype html>
           <div class="k">Yaw</div><div id="odomYaw">--</div>
           <div class="k">门框状态</div><div id="frameStatus">--</div>
           <div class="k">门框中心</div><div id="frameCenter">--</div>
-          <div class="k">二维码</div><div id="qrIds">--</div>
+          <div class="k">识别结果</div><div><input id="qr_demo_result_id" type="number" min="0" max="249" step="1" value="0"></div>
           <div class="k">气球 world</div><div id="balloonWorld">--</div>
           <div class="k">启动命令</div><div id="lastCommand">--</div>
         </div>
+        <details class="qr-frame">
+          <summary>识别成功图像</summary>
+          <div class="qr-frame-body">
+            <img id="qrSuccessImage" alt="识别成功图像" style="display:none">
+            <div id="qrImageEmpty" class="qr-empty">暂无识别成功图像</div>
+          </div>
+        </details>
       </div>
     </section>
 
@@ -377,8 +469,11 @@ INDEX_HTML = r"""<!doctype html>
       </div>
     </section>
 
-    <section class="config-section">
-      <div class="panel-head">本次任务参数</div>
+    <section class="config-section" id="configSection">
+      <div class="panel-head">
+        <span>本次任务参数</span>
+        <button id="configToggleBtn" class="small config-toggle" type="button">收起</button>
+      </div>
       <div class="panel-body forms">
         <div class="param-compact">
           <div class="settings-title">可修改参数</div>
@@ -389,7 +484,12 @@ INDEX_HTML = r"""<!doctype html>
           <div class="param-table">
             <div class="param-row"><div class="param-name">起飞对中</div><div class="row3" data-group="initial_wait"></div></div>
             <div class="param-row"><div class="param-name">门框中心</div><div class="row3" data-group="expected_frame"></div></div>
+            <div class="param-row"><div class="param-name">门框高度</div><div class="row2" data-group="frame_height"></div></div>
+            <div class="param-row"><div class="param-name">门框识别</div><div class="row2" data-group="frame_detect"></div></div>
+            <div class="param-row"><div class="param-name">穿门保护</div><div class="row3" data-group="frame_pass_guard"></div></div>
+            <div class="param-row"><div class="param-name">回区保护</div><div class="row2" data-group="attack_guard"></div></div>
             <div class="param-row"><div class="param-name">二维码点</div><div class="row3" data-group="qr_goal"></div></div>
+            <div class="param-row"><div class="param-name">二维码搜索</div><div class="row3" data-group="qr_search"></div></div>
             <div class="param-row"><div class="param-name">打击区</div><div class="row3" data-group="attack_zone"></div></div>
             <div class="param-row"><div class="param-name">击打高度</div><div class="row3" data-group="attack_height"></div></div>
           </div>
@@ -436,14 +536,26 @@ const PARAMS = [
   ['expected_frame_x', 'x'], ['expected_frame_y', 'y'], ['expected_frame_z', 'z'],
   ['qr_goal_x', 'x'], ['qr_goal_y', 'y'], ['qr_goal_z', 'z'],
   ['attack_zone_x', 'x'], ['attack_zone_y', 'y'], ['attack_zone_z', 'z'],
-  ['attack_height', 'z']
+  ['attack_height', 'z'],
+  ['frame_unified_z', 'z'],
+  ['frame_center_reject_distance', '中心容差'],
+  ['frame_detect_timeout', '识别超时'],
+  ['frame_post_y_offset', '穿门Y偏移'],
+  ['frame_pass_guard_x_offset', '过门判定X'],
+  ['frame_pass_guard_timeout', '穿门超时'],
+  ['attack_zone_overrun_x', '回区判定X'],
+  ['qr_search_timeout', '超时'],
+  ['qr_search_raise_z', '上升'],
+  ['qr_search_offset', '距离']
 ];
+const WEB_ONLY_PARAMS = ['qr_demo_result_id'];
 let token = '';
 let defaults = {};
 let latestScene = null;
 let latestStatus = null;
 let poweroffEnabled = false;
 let rebootEnabled = false;
+let qrLocked = false;
 
 function fmt(n, d=2) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return '--';
@@ -467,18 +579,37 @@ function setBadge(el, text, cls) {
 function makeInput(name, label) {
   return `<div class="field"><label>${label}</label><input id="${name}" type="number" step="0.01" class="param"></div>`;
 }
+function makeCheck(name, label) {
+  return `<label class="check-field"><input id="${name}" type="checkbox" class="param">${label}</label>`;
+}
+function boolValue(v) {
+  return v === true || v === 1 || String(v).toLowerCase() === 'true' || String(v) === '1';
+}
 function buildForm() {
   document.querySelector('[data-group="initial_wait"]').innerHTML =
     makeInput('initial_wait_x','X') + makeInput('initial_wait_y','Y') + makeInput('initial_wait_z','Z');
   document.querySelector('[data-group="expected_frame"]').innerHTML =
     makeInput('expected_frame_x','X') + makeInput('expected_frame_y','Y') + makeInput('expected_frame_z','Z');
+  document.querySelector('[data-group="frame_height"]').innerHTML =
+    makeCheck('frame_use_unified_z','统一') + makeInput('frame_unified_z','Z');
+  document.querySelector('[data-group="frame_detect"]').innerHTML =
+    makeInput('frame_center_reject_distance','中心容差') +
+    makeInput('frame_detect_timeout','识别超时');
+  document.querySelector('[data-group="frame_pass_guard"]').innerHTML =
+    makeInput('frame_post_y_offset','Y偏移') +
+    makeInput('frame_pass_guard_x_offset','过门判定X') +
+    makeInput('frame_pass_guard_timeout','穿门超时');
+  document.querySelector('[data-group="attack_guard"]').innerHTML =
+    makeInput('attack_zone_overrun_x','回区判定X');
   document.querySelector('[data-group="qr_goal"]').innerHTML =
     makeInput('qr_goal_x','X') + makeInput('qr_goal_y','Y') + makeInput('qr_goal_z','Z');
+  document.querySelector('[data-group="qr_search"]').innerHTML =
+    makeInput('qr_search_timeout','超时') + makeInput('qr_search_raise_z','上升') + makeInput('qr_search_offset','距离');
   document.querySelector('[data-group="attack_zone"]').innerHTML =
     makeInput('attack_zone_x','X') + makeInput('attack_zone_y','Y') + makeInput('attack_zone_z','Z');
   document.querySelector('[data-group="attack_height"]').innerHTML =
     makeInput('attack_height','Z 高度');
-  document.querySelectorAll('.param, input[name="frame_center_mode"]').forEach(el => {
+  document.querySelectorAll('.param, input[name="frame_center_mode"], #qr_demo_result_id').forEach(el => {
     el.addEventListener('input', updatePreview);
     el.addEventListener('change', updatePreview);
   });
@@ -486,6 +617,7 @@ function buildForm() {
 function formValues() {
   const params = {};
   PARAMS.forEach(([name]) => params[name] = Number(document.getElementById(name).value));
+  params.frame_use_unified_z = document.getElementById('frame_use_unified_z').checked;
   params.frame_center_mode = document.querySelector('input[name="frame_center_mode"]:checked').value;
   return params;
 }
@@ -501,16 +633,25 @@ function taskPointsFromForm() {
 function updatePreview() {
   const p = formValues();
   const modeText = p.frame_center_mode === 'expected_direct' ? '直接预期' : '先识别';
+  const heightText = p.frame_use_unified_z ? `统一 ${fmt(p.frame_unified_z)}` : '自动';
   document.getElementById('paramPreview').textContent =
     `模式: ${modeText}\n` +
     `对中 (${fmt(p.initial_wait_x)},${fmt(p.initial_wait_y)},${fmt(p.initial_wait_z)})  门框 (${fmt(p.expected_frame_x)},${fmt(p.expected_frame_y)},${fmt(p.expected_frame_z)})\n` +
+    `门框识别: 中心容差${fmt(p.frame_center_reject_distance)}  识别超时${fmt(p.frame_detect_timeout)}s  高度${heightText}\n` +
+    `穿门保护: Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
+    `QR搜索 超时${fmt(p.qr_search_timeout)}s 上升${fmt(p.qr_search_raise_z)} 距离${fmt(p.qr_search_offset)}\n` +
     `QR (${fmt(p.qr_goal_x)},${fmt(p.qr_goal_y)},${fmt(p.qr_goal_z)})  打击区 (${fmt(p.attack_zone_x)},${fmt(p.attack_zone_y)},${fmt(p.attack_zone_z)})  高度 ${fmt(p.attack_height)}`;
 }
 function paramsPreviewText(p, emptyText) {
   if (!p || !Object.keys(p).length) return emptyText !== undefined ? emptyText : '--';
   const mode = p.frame_center_mode === 'expected_direct' ? '直接预期' : (p.frame_center_mode === 'auto_detect' ? '先识别' : '--');
+  const unified = boolValue(p.frame_use_unified_z);
+  const heightText = unified ? `统一 ${fmt(p.frame_unified_z)}` : '自动';
   return `模式: ${mode}\n` +
     `对中 (${fmt(p.initial_wait_x)},${fmt(p.initial_wait_y)},${fmt(p.initial_wait_z)})  门框 (${fmt(p.expected_frame_x)},${fmt(p.expected_frame_y)},${fmt(p.expected_frame_z)})\n` +
+    `门框识别: 中心容差${fmt(p.frame_center_reject_distance)}  识别超时${fmt(p.frame_detect_timeout)}s  高度${heightText}\n` +
+    `穿门保护: Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
+    `QR搜索 超时${fmt(p.qr_search_timeout)}s 上升${fmt(p.qr_search_raise_z)} 距离${fmt(p.qr_search_offset)}\n` +
     `QR (${fmt(p.qr_goal_x)},${fmt(p.qr_goal_y)},${fmt(p.qr_goal_z)})  打击区 (${fmt(p.attack_zone_x)},${fmt(p.attack_zone_y)},${fmt(p.attack_zone_z)})  高度 ${fmt(p.attack_height)}`;
 }
 async function loadDefaults() {
@@ -521,6 +662,11 @@ async function loadDefaults() {
     const el = document.getElementById(name);
     el.value = defaults[name] !== undefined ? defaults[name] : 0;
   });
+  WEB_ONLY_PARAMS.forEach(name => {
+    const el = document.getElementById(name);
+    if (el) el.value = defaults[name] !== undefined ? defaults[name] : 0;
+  });
+  document.getElementById('frame_use_unified_z').checked = boolValue(defaults.frame_use_unified_z ?? true);
   const mode = defaults.frame_center_mode || 'auto_detect';
   const radio = document.querySelector(`input[name="frame_center_mode"][value="${mode}"]`);
   if (radio) radio.checked = true;
@@ -544,6 +690,7 @@ async function login() {
 async function startMission() {
   try {
     if (!confirm('确认开始本次飞行任务？')) return;
+    resetQrSuccessView();
     const data = await api('/api/start', {method:'POST', body: JSON.stringify({params: formValues()})});
     setBadge(document.getElementById('runBadge'), '任务已启动', 'ok');
     document.getElementById('logs').textContent = data.command || '';
@@ -596,6 +743,7 @@ async function restartMission() {
   try {
     if (!confirm('确认停止当前主程序并重新开始本次任务？')) return;
     const data = await api('/api/restart', {method:'POST', body: JSON.stringify({params: formValues()})});
+    resetQrSuccessView();
     setBadge(document.getElementById('runBadge'), '任务已重启', 'ok');
     document.getElementById('logs').textContent = (data.stop?.messages || []).join('\n') + '\n' + (data.start?.command || '');
     if (data.start?.effective_params) {
@@ -608,6 +756,49 @@ async function restartMission() {
 function pointText(p, d=2) {
   if (!p || p.x === null || p.x === undefined) return '--';
   return `(${fmt(p.x, d)}, ${fmt(p.y, d)}, ${fmt(p.z, d)})`;
+}
+function resetQrSuccessView() {
+  qrLocked = false;
+  const input = document.getElementById('qr_demo_result_id');
+  if (input) {
+    input.readOnly = false;
+    input.value = defaults.qr_demo_result_id !== undefined ? defaults.qr_demo_result_id : 0;
+  }
+  const img = document.getElementById('qrSuccessImage');
+  const empty = document.getElementById('qrImageEmpty');
+  if (img) {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+  if (empty) empty.style.display = 'grid';
+}
+function updateQrSuccess(per) {
+  const ids = per.qr_ids || [];
+  const input = document.getElementById('qr_demo_result_id');
+  if (ids.length && input) {
+    input.value = ids[0];
+    input.readOnly = true;
+    qrLocked = true;
+  }
+}
+async function refreshQrSuccessImage() {
+  const img = document.getElementById('qrSuccessImage');
+  if (img && img.style.display !== 'none' && img.getAttribute('src')) return;
+  try {
+    const image = await api('/api/qr_success_image');
+    updateQrSuccessImage(image || {});
+  } catch (e) { console.log(e); }
+}
+function updateQrSuccessImage(image) {
+  if (image.data_url) {
+    const img = document.getElementById('qrSuccessImage');
+    const empty = document.getElementById('qrImageEmpty');
+    if (img) {
+      img.src = image.data_url;
+      img.style.display = 'block';
+    }
+    if (empty) empty.style.display = 'none';
+  }
 }
 function updateStatusUI(data) {
   latestStatus = data;
@@ -637,7 +828,7 @@ function updateStatusUI(data) {
   document.getElementById('odomYaw').textContent = fmt(odom.yaw, 3);
   document.getElementById('frameStatus').textContent = per.frame_status || '--';
   document.getElementById('frameCenter').textContent = pointText(per.frame_center);
-  document.getElementById('qrIds').textContent = per.qr_ids && per.qr_ids.length ? per.qr_ids.join(', ') : '--';
+  updateQrSuccess(per);
   document.getElementById('balloonWorld').textContent = pointText(per.balloon_world);
   document.getElementById('lastCommand').textContent = mission.last_command || '--';
   document.getElementById('ageBadge').textContent = new Date().toLocaleTimeString();
@@ -651,8 +842,9 @@ function updateStatusUI(data) {
       ? (token ? '已解锁，点击电源按钮会立即执行。' : '点击电源按钮输入一次 PIN 后直接执行。')
       : '后端未允许电源控制。';
   const mp = mission.params || {};
+  const activeParams = Object.assign({}, mp.last_effective || {}, mp.active || {});
   document.getElementById('activeParamPreview').textContent =
-    paramsPreviewText(mp.active, '') ||
+    paramsPreviewText(activeParams, '') ||
     paramsPreviewText(mp.last_effective, '还没有启动任务');
 }
 async function refreshStatus() {
@@ -742,6 +934,13 @@ function resetView() {
     pan = [2.2, -0.5, 0.7];
   }
   drawScene();
+}
+function toggleConfigSection() {
+  const section = document.getElementById('configSection');
+  const btn = document.getElementById('configToggleBtn');
+  if (!section || !btn) return;
+  const collapsed = section.classList.toggle('collapsed');
+  btn.textContent = collapsed ? '展开' : '收起';
 }
 function matMul(a,b) {
   const r = new Float32Array(16);
@@ -868,14 +1067,17 @@ document.getElementById('restartBtn').addEventListener('click', restartMission);
 document.getElementById('shutdownBtn').addEventListener('click', shutdownHost);
 document.getElementById('rebootBtn').addEventListener('click', rebootHost);
 document.getElementById('resetViewBtn').addEventListener('click', resetView);
+document.getElementById('configToggleBtn').addEventListener('click', toggleConfigSection);
 document.getElementById('pin').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
 buildForm();
 initGL();
 loadDefaults().catch(e => alert(e.message));
 setInterval(refreshStatus, 300);
 setInterval(refreshScene, 500);
+setInterval(refreshQrSuccessImage, 700);
 refreshStatus();
 refreshScene();
+refreshQrSuccessImage();
 </script>
 </body>
 </html>
@@ -893,6 +1095,63 @@ def point_dict(x=None, y=None, z=None, stamp=None):
     if stamp is not None:
         age = max(0.0, time.time() - stamp)
     return {"x": x, "y": y, "z": z, "age": age}
+
+
+def image_to_bgr(msg):
+    if cv2 is None or np is None:
+        raise ValueError("opencv is unavailable")
+    encoding = msg.encoding.lower()
+    data = np.frombuffer(msg.data, dtype=np.uint8)
+    if msg.height == 0 or msg.width == 0:
+        raise ValueError("empty image")
+    if encoding in ("bgr8", "rgb8"):
+        image = reshape_with_step(data, msg.height, msg.width, 3, msg.step)
+        if encoding == "rgb8":
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        return np.ascontiguousarray(image)
+    if encoding in ("mono8", "8uc1"):
+        image = reshape_with_step(data, msg.height, msg.width, 1, msg.step).reshape((msg.height, msg.width))
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if encoding in ("bgra8", "rgba8"):
+        image = reshape_with_step(data, msg.height, msg.width, 4, msg.step)
+        code = cv2.COLOR_BGRA2BGR if encoding == "bgra8" else cv2.COLOR_RGBA2BGR
+        return cv2.cvtColor(image, code)
+    if encoding in ("yuyv", "yuyv422", "yuv422", "yuv422_yuy2"):
+        image = reshape_with_step(data, msg.height, msg.width, 2, msg.step)
+        return cv2.cvtColor(image, cv2.COLOR_YUV2BGR_YUY2)
+    if encoding in ("uyvy", "uyvy422", "yuv422_uyvy"):
+        image = reshape_with_step(data, msg.height, msg.width, 2, msg.step)
+        return cv2.cvtColor(image, cv2.COLOR_YUV2BGR_UYVY)
+    raise ValueError("unsupported encoding '%s'" % msg.encoding)
+
+
+def reshape_with_step(data, height, width, channels, step):
+    expected_row_bytes = width * channels
+    if step < expected_row_bytes:
+        raise ValueError("step %d is smaller than expected row bytes %d" % (step, expected_row_bytes))
+    expected_total_bytes = step * height
+    if data.size < expected_total_bytes:
+        raise ValueError("image data has %d bytes, expected at least %d" % (data.size, expected_total_bytes))
+    rows = data[:expected_total_bytes].reshape((height, step))
+    cropped = rows[:, :expected_row_bytes]
+    return cropped.reshape((height, width, channels))
+
+
+def image_msg_to_data_url(msg):
+    bgr = image_to_bgr(msg)
+    h, w = bgr.shape[:2]
+    max_side = max(h, w)
+    if max_side > QR_IMAGE_MAX_SIDE:
+        scale = float(QR_IMAGE_MAX_SIDE) / float(max_side)
+        bgr = cv2.resize(bgr, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+    ok, encoded = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), QR_IMAGE_JPEG_QUALITY])
+    if not ok:
+        raise ValueError("jpeg encode failed")
+    return {
+        "data_url": "data:image/jpeg;base64," + base64.b64encode(encoded.tobytes()).decode("ascii"),
+        "width": int(bgr.shape[1]),
+        "height": int(bgr.shape[0]),
+    }
 
 
 class CraicWebControl:
@@ -917,6 +1176,7 @@ class CraicWebControl:
         self.raw_cloud_topic = pnh("~raw_cloud_topic", "/cloud_registered")
         self.occ_topic = pnh("~occupancy_topic", "/drone_0_ego_planner_node/grid_map/occupancy")
         self.inflate_topic = pnh("~occupancy_inflate_topic", "/drone_0_ego_planner_node/grid_map/occupancy_inflate")
+        self.qr_debug_image_topic = pnh("~qr_debug_image_topic", "/usb_camera_vision/aruco_debug_image")
 
         self.lock = threading.RLock()
         self.tokens = set()
@@ -936,6 +1196,10 @@ class CraicWebControl:
         self.frame_status = ""
         self.frame_center = point_dict()
         self.qr_ids = []
+        self.latest_qr_image_msg = None
+        self.qr_success_image = {}
+        self.qr_success_pending_since = None
+        self.qr_success_image_after_id_count = 0
         self.balloon_world = point_dict()
         self.scene = {"cloud": [], "occupancy": [], "occupancy_inflate": []}
         self.scene_buffers = {
@@ -957,6 +1221,7 @@ class CraicWebControl:
         rospy.Subscriber("/craic/frame_status", String, self._frame_status_cb, queue_size=1)
         rospy.Subscriber("/craic/frame_center", PointStamped, self._frame_center_cb, queue_size=1)
         rospy.Subscriber("/usb_camera_vision/aruco_ids", Int32MultiArray, self._qr_cb, queue_size=1)
+        rospy.Subscriber(self.qr_debug_image_topic, Image, self._qr_image_cb, queue_size=1, buff_size=2**24)
         rospy.Subscriber("/balloon/world_point", PointStamped, self._balloon_cb, queue_size=1)
         rospy.Subscriber(self.raw_cloud_topic, PointCloud2, lambda m: self._cloud_cb(m, "cloud", self.max_cloud_points, self.cloud_period), queue_size=1)
         rospy.Subscriber(self.occ_topic, PointCloud2, lambda m: self._cloud_cb(m, "occupancy", self.max_map_points, self.map_period), queue_size=1)
@@ -976,7 +1241,28 @@ class CraicWebControl:
             rospy.logwarn("[craic_web_control] failed to parse launch defaults: %s", exc)
         for name in PARAM_SPECS:
             defaults.setdefault(name, "0.0")
+        for name in BOOL_PARAM_NAMES:
+            defaults.setdefault(name, "false")
+        defaults.setdefault("qr_demo_result_id", "0")
         defaults.setdefault("frame_center_mode", "auto_detect")
+        defaults = self._resolve_default_refs(defaults)
+        return defaults
+
+    @staticmethod
+    def _resolve_default_refs(defaults):
+        pattern = re.compile(r"^\$\(arg ([A-Za-z0-9_]+)\)$")
+        changed = True
+        while changed:
+            changed = False
+            for name, value in list(defaults.items()):
+                if not isinstance(value, str):
+                    continue
+                match = pattern.match(value.strip())
+                if match:
+                    ref = match.group(1)
+                    if ref in defaults and defaults[ref] != value:
+                        defaults[name] = defaults[ref]
+                        changed = True
         return defaults
 
     def _odom_cb(self, msg):
@@ -1013,7 +1299,37 @@ class CraicWebControl:
 
     def _qr_cb(self, msg):
         with self.lock:
-            self.qr_ids = [int(v) for v in msg.data]
+            ids = [int(v) for v in msg.data]
+            self.qr_ids = ids
+            if self.qr_success_image:
+                return
+            if ids:
+                if self.qr_success_pending_since is None:
+                    self.qr_success_pending_since = time.time()
+                    self.qr_success_image_after_id_count = 0
+            else:
+                self.qr_success_pending_since = None
+                self.qr_success_image_after_id_count = 0
+
+    def _qr_image_cb(self, msg):
+        with self.lock:
+            self.latest_qr_image_msg = msg
+            self._lock_qr_success_image_locked()
+
+    def _lock_qr_success_image_locked(self):
+        if (not self.qr_ids or self.qr_success_image or
+                self.latest_qr_image_msg is None or
+                self.qr_success_pending_since is None):
+            return
+        self.qr_success_image_after_id_count += 1
+        waited = time.time() - self.qr_success_pending_since
+        if (waited < QR_SUCCESS_LOCK_DELAY_SEC or
+                self.qr_success_image_after_id_count < QR_SUCCESS_LOCK_MIN_IMAGES_AFTER_ID):
+            return
+        try:
+            self.qr_success_image = image_msg_to_data_url(self.latest_qr_image_msg)
+        except Exception as exc:
+            rospy.logwarn_throttle(2.0, "[craic_web_control] qr success image encode failed: %s", exc)
 
     def _balloon_cb(self, msg):
         p = msg.point
@@ -1125,6 +1441,10 @@ class CraicWebControl:
                 },
             }
 
+    def qr_success_image_status(self):
+        with self.lock:
+            return dict(self.qr_success_image)
+
     def scene_status(self):
         with self.lock:
             scene = {k: list(v) for k, v in self.scene.items()}
@@ -1159,12 +1479,37 @@ class CraicWebControl:
         effective["frame_center_mode"] = mode
         if mode != self.defaults.get("frame_center_mode", "auto_detect"):
             clean["frame_center_mode"] = mode
+        for name in BOOL_PARAM_NAMES:
+            value = self._parse_bool(params.get(name, self.defaults.get(name, "false")), name)
+            default_value = self._parse_bool(self.defaults.get(name, "false"), name)
+            effective[name] = "true" if value else "false"
+            if value != default_value:
+                clean[name] = "true" if value else "false"
         return clean, effective
+
+    @staticmethod
+    def _parse_bool(value, name):
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in ("true", "1", "yes", "on"):
+            return True
+        if text in ("false", "0", "no", "off"):
+            return False
+        raise ValueError("%s must be true or false" % name)
+
+    def reset_qr_success(self):
+        with self.lock:
+            self.qr_ids = []
+            self.qr_success_image = {}
+            self.qr_success_pending_since = None
+            self.qr_success_image_after_id_count = 0
 
     def start_mission(self, params):
         if self.mission_running() or self.external_mission_running():
             raise RuntimeError("mission is already running")
         clean, effective = self.validate_params(params)
+        self.reset_qr_success()
         cmd = ["roslaunch", self.mission_package, self.mission_launch]
         for name in sorted(clean.keys()):
             cmd.append("%s:=%s" % (name, clean[name]))
@@ -1228,6 +1573,7 @@ class CraicWebControl:
         deadline = time.time() + 8.0
         while time.time() < deadline and (self.mission_running() or self.external_mission_running()):
             time.sleep(0.2)
+        self.reset_qr_success()
         start_result = self.start_mission(params)
         return {"stop": stop_result, "start": start_result}
 
@@ -1324,6 +1670,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"defaults": self.app.defaults, "modes": list(MODE_VALUES)})
             elif self.path == "/api/status":
                 self._send_json(self.app.status())
+            elif self.path == "/api/qr_success_image":
+                self._send_json(self.app.qr_success_image_status())
             elif self.path == "/api/scene":
                 self._send_json(self.app.scene_status())
             else:
