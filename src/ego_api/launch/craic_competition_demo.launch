@@ -24,7 +24,7 @@
     4. 主任务订阅 /craic/frame_center 和 /craic/frame_status，等待稳定门框中心。
     5. 若识别稳定且离 expected_frame 的 xyz 单轴误差都不超过 frame_center_reject_distance，则使用识别值。
     6. 若识别超时、不稳定、状态无效、距离过大，则使用 expected_frame=(3.2,-1.25,1.25)。
-    7. 计算 frame_post_control=(center.x+1.1, center.y-0.135, center.z)。
+    7. 计算 frame_post_control：识别中心用 (center.x+1.1, center.y-0.135, center.z)，默认中心用 (center.x+1.1, center.y, center.z)。
     8. EGO 第一次穿门飞到 frame_post_control，并启用 x 过门保护。
     9. override 原地平滑转到 reverse_yaw，也就是 initial_yaw+180 度。
     10. override 平滑位置控制到 QR 点 (4.0,0.25,1.3)。
@@ -148,7 +148,7 @@
         expected_frame_x/y/z：门框中心预期值，识别超时或识别点偏差过大时使用它。
         frame_center_reject_distance：识别中心到预期中心的 xyz 单轴误差阈值，任一轴超过则拒绝该样本。
         frame_post_x_offset：门后 EGO 控制点相对门框中心的 x 正方向偏移，当前为 center.x + 1.1。
-        frame_post_y_offset：门后 EGO 控制点相对门框中心的 y 偏移，当前为 center.y - 0.135。
+        frame_post_y_offset：门后 EGO 控制点相对识别门框中心的 y 偏移，当前为 center.y - 0.135；如果使用 expected_frame 默认中心，则不加该 y 偏移。
         frame_pass_guard_x_offset：第一次 EGO 穿门时的放行保护，当前 x 超过 center.x + 0.50 认为已过门。
         frame_pass_guard_timeout：EGO 穿门超过该时间仍未 reach，但已过 pass x，则直接进入下一步任务。
         frame_detect_timeout：主任务等待稳定门框中心的总时间，超时用 expected_frame。
@@ -165,7 +165,7 @@
         飞行影响：
         - expected_frame 决定识别失败后的兜底穿门中心。
         - frame_post_x_offset 决定 EGO 第一次穿门后要飞到多远。
-        - frame_post_y_offset 决定 EGO 第一次穿门后目标点的左右修正量。
+        - frame_post_y_offset 决定识别成功时 EGO 第一次穿门后目标点的左右修正量；使用默认中心时不加该偏移。
         - frame_pass_guard 只防止 EGO 已经过门但 reach 没置位导致主任务卡住，不改变 EGO 目标。
     -->
     <arg name="expected_frame_x" default="3.2" />
@@ -714,7 +714,7 @@
         2. ego_bridge takeoff 到 takeoff_height。
         3. override 到 initial_wait。
         4. 读取 /craic/frame_center，5s 内锁定稳定中心，否则用 expected_frame。
-        5. 生成 frame_post_control = (center.x + frame_post_x_offset, center.y + frame_post_y_offset, center.z)。
+        5. 生成 frame_post_control；识别中心加 frame_post_y_offset，默认中心不加 y 偏移。
         6. EGO 飞到 frame_post_control，同时启用 x 过门保护。
         7. override 平滑转到 reverse_yaw。
         8. override 到 QR 点，识别二维码或执行 10s 小范围搜索。

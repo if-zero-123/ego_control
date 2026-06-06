@@ -316,12 +316,16 @@ public:
         }
 
         logStage("FRAME_CENTER", "wait frame center with expected fallback");
-        const Eigen::Vector3d frame_center = waitFrameCenterWithFallback();
+        const FrameCenterSelection frame_selection = waitFrameCenterWithFallback();
+        const Eigen::Vector3d& frame_center = frame_selection.center;
+        const double frame_post_y_offset = frame_selection.detected ? frame_post_y_offset_ : 0.0;
         const Eigen::Vector3d frame_post_control(frame_center.x() + frame_post_x_offset_,
-                                                 frame_center.y() + frame_post_y_offset_,
+                                                 frame_center.y() + frame_post_y_offset,
                                                  frame_center.z());
-        ROS_INFO("[craic_demo] FRAME_POST_CONTROL center=(%.2f %.2f %.2f) target=(%.2f %.2f %.2f)",
+        ROS_INFO("[craic_demo] FRAME_POST_CONTROL center_source=%s center=(%.2f %.2f %.2f) y_offset=%.3f target=(%.2f %.2f %.2f)",
+                 frame_selection.detected ? "detected" : "expected",
                  frame_center.x(), frame_center.y(), frame_center.z(),
+                 frame_post_y_offset,
                  frame_post_control.x(), frame_post_control.y(), frame_post_control.z());
 
         logStage("FRAME_POST_EGO", "ego goal to frame post control with pass guard");
@@ -725,11 +729,19 @@ private:
         return reached && disabled;
     }
 
-    Eigen::Vector3d waitFrameCenterWithFallback() {
+    struct FrameCenterSelection {
+        FrameCenterSelection(const Eigen::Vector3d& c, bool d)
+            : center(c), detected(d) {}
+
+        Eigen::Vector3d center;
+        bool detected;
+    };
+
+    FrameCenterSelection waitFrameCenterWithFallback() {
         if (frame_center_mode_ == "expected_direct") {
             ROS_INFO("[craic_demo] FRAME_CENTER source=expected_direct expected=(%.2f %.2f %.2f)",
                      expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z());
-            return expected_frame_center_;
+            return FrameCenterSelection{expected_frame_center_, false};
         }
         if (frame_center_mode_ != "auto_detect") {
             ROS_WARN("[craic_demo] FRAME_CENTER invalid_mode mode=%s action=auto_detect",
@@ -784,19 +796,19 @@ private:
             if (tryLockFrameSamples(samples, 3, frame_strong_lock_frames_,
                                     &locked, &lock_status, &lock_span, &lock_used)) {
                 logFrameLock("strong", lock_status, locked, lock_span, lock_used);
-                return locked;
+                return FrameCenterSelection{locked, true};
             }
             if (elapsed >= frame_medium_min_wait_ &&
                 tryLockFrameSamples(samples, 2, frame_medium_lock_frames_,
                                     &locked, &lock_status, &lock_span, &lock_used)) {
                 logFrameLock("medium", lock_status, locked, lock_span, lock_used);
-                return locked;
+                return FrameCenterSelection{locked, true};
             }
             if (elapsed >= frame_partial_min_wait_ &&
                 tryLockFrameSamples(samples, 1, frame_partial_lock_frames_,
                                     &locked, &lock_status, &lock_span, &lock_used)) {
                 logFrameLock("partial", lock_status, locked, lock_span, lock_used);
-                return locked;
+                return FrameCenterSelection{locked, true};
             }
 
             if (!simple_logs_) {
@@ -843,7 +855,7 @@ private:
                  rejected_samples, yesNo(have_frame_center_), frame_status_.c_str(),
                  center_age, status_age,
                  expected_frame_center_.x(), expected_frame_center_.y(), expected_frame_center_.z());
-        return expected_frame_center_;
+        return FrameCenterSelection{expected_frame_center_, false};
     }
 
     bool freshFrameCenter() const {
