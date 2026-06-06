@@ -128,6 +128,16 @@ struct BalloonServo {
     double bbox_h = 0.0;
 };
 
+struct BalloonDetection {
+    bool found = false;
+    double depth = 0.0;
+    double u = 0.0;
+    double v = 0.0;
+    double confidence = 0.0;
+    int state = 0;
+    int depth_source = 0;
+};
+
 struct VerifyRoi {
     double x = 0.0;
     double y = 0.0;
@@ -192,7 +202,7 @@ public:
         pnh_.param<double>("balloon_wait_timeout", balloon_wait_timeout_, 8.0);
         pnh_.param<double>("balloon_valid_max_age", balloon_valid_max_age_, 0.8);
         pnh_.param<double>("balloon_standoff", balloon_standoff_, 0.70);
-        pnh_.param<double>("balloon_puncture_distance", balloon_puncture_distance_, 0.20);
+        pnh_.param<double>("balloon_puncture_distance", balloon_puncture_distance_, 0.40);
         pnh_.param<double>("balloon_puncture_speed", balloon_puncture_speed_, 0.14);
         pnh_.param<double>("balloon_approach_timeout", balloon_approach_timeout_, 8.0);
         pnh_.param<double>("balloon_align_timeout", balloon_align_timeout_, 6.0);
@@ -203,9 +213,8 @@ public:
         pnh_.param<double>("balloon_center_z_bias", balloon_center_z_bias_, 0.0);
         pnh_.param<double>("balloon_align_z_min", balloon_align_z_min_, 0.25);
         pnh_.param<double>("balloon_align_z_max", balloon_align_z_max_, 0.60);
-        pnh_.param<double>("balloon_needle_length", balloon_needle_length_, 0.06);
+        pnh_.param<double>("balloon_needle_length", balloon_needle_length_, 0.18);
         pnh_.param<double>("balloon_puncture_extra", balloon_puncture_extra_, 0.04);
-        pnh_.param<double>("balloon_puncture_max_distance", balloon_puncture_max_distance_, 0.80);
         pnh_.param<double>("balloon_servo_timeout", balloon_servo_timeout_, 8.0);
         pnh_.param<double>("balloon_servo_u_threshold", balloon_servo_u_threshold_, 0.08);
         pnh_.param<double>("balloon_servo_v_threshold", balloon_servo_v_threshold_, 0.10);
@@ -216,6 +225,11 @@ public:
         pnh_.param<double>("balloon_servo_max_z_speed", balloon_servo_max_z_speed_, 0.08);
         pnh_.param<double>("balloon_fine_forward_speed", balloon_fine_forward_speed_, 0.07);
         pnh_.param<double>("balloon_fine_forward_distance", balloon_fine_forward_distance_, 0.20);
+        pnh_.param<double>("balloon_close_depth", balloon_close_depth_, 0.32);
+        pnh_.param<double>("balloon_depth_approach_timeout", balloon_depth_approach_timeout_, 14.0);
+        pnh_.param<double>("balloon_depth_approach_max_distance", balloon_depth_approach_max_distance_, 0.85);
+        pnh_.param<double>("balloon_depth_min_valid", balloon_depth_min_valid_, 0.05);
+        pnh_.param<double>("balloon_puncture_depth_jump", balloon_puncture_depth_jump_, 0.18);
         pnh_.param<double>("balloon_backoff_distance", balloon_backoff_distance_, 0.12);
         pnh_.param<double>("balloon_pop_verify_timeout", balloon_pop_verify_timeout_, 1.0);
         pnh_.param<double>("balloon_pop_area_drop_ratio", balloon_pop_area_drop_ratio_, 0.35);
@@ -249,6 +263,7 @@ public:
         pnh_.param<std::string>("frame_status_topic", frame_status_topic_, "/craic/frame_status");
         pnh_.param<std::string>("qr_ids_topic", qr_ids_topic_, "/usb_camera_vision/aruco_ids");
         pnh_.param<std::string>("balloon_world_topic", balloon_world_topic_, "/balloon/world_point");
+        pnh_.param<std::string>("balloon_detection_topic", balloon_detection_topic_, "/balloon/detection");
         pnh_.param<std::string>("balloon_servo_topic", balloon_servo_topic_, "/balloon/servo");
         pnh_.param<std::string>("balloon_verify_roi_topic", balloon_verify_roi_topic_, "/balloon/verify_roi");
         pnh_.param<std::string>("balloon_verify_roi_result_topic",
@@ -259,6 +274,7 @@ public:
         frame_status_sub_ = nh_.subscribe(frame_status_topic_, 1, &CraicCompetitionDemo::frameStatusCb, this);
         qr_ids_sub_ = nh_.subscribe(qr_ids_topic_, 1, &CraicCompetitionDemo::qrIdsCb, this);
         balloon_world_sub_ = nh_.subscribe(balloon_world_topic_, 1, &CraicCompetitionDemo::balloonWorldCb, this);
+        balloon_detection_sub_ = nh_.subscribe(balloon_detection_topic_, 1, &CraicCompetitionDemo::balloonDetectionCb, this);
         balloon_servo_sub_ = nh_.subscribe(balloon_servo_topic_, 1, &CraicCompetitionDemo::balloonServoCb, this);
         balloon_verify_result_sub_ = nh_.subscribe(balloon_verify_roi_result_topic_,
                                                   1,
@@ -371,7 +387,7 @@ public:
             }
             ROS_WARN("[craic_demo] BALLOON_RETURN_HOME failed action=robust_land");
         } else {
-            ROS_WARN("[craic_demo] BALLOON_ATTACK result=not_completed action=no_blind_puncture");
+            ROS_WARN("[craic_demo] BALLOON_ATTACK result=not_completed action=land_after_attempts");
         }
 
         logStage("LAND", land_after_finish_ ? "robust soft land and disarm" : "hold and finish");
@@ -1003,6 +1019,15 @@ private:
                (ros::Time::now() - balloon_world_stamp_).toSec() <= balloon_valid_max_age_;
     }
 
+    bool freshBalloonDepth() const {
+        return have_balloon_detection_ &&
+               balloon_detection_.found &&
+               balloon_detection_stamp_.isValid() &&
+               (ros::Time::now() - balloon_detection_stamp_).toSec() <= balloon_valid_max_age_ &&
+               std::isfinite(balloon_detection_.depth) &&
+               balloon_detection_.depth > balloon_depth_min_valid_;
+    }
+
     bool attackBalloon(double attack_yaw) {
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] BALLOON_ATTACK failed reason=enable_override");
@@ -1045,7 +1070,7 @@ private:
             }
 
             if (!servoFineForward(puncture_yaw, forward, left, locked_servo)) {
-                ROS_WARN("[craic_demo] BALLOON_FINE_FORWARD attempt=%d result=failed", attempt);
+                ROS_WARN("[craic_demo] BALLOON_DEPTH_APPROACH attempt=%d result=failed", attempt);
                 continue;
             }
 
@@ -1065,9 +1090,7 @@ private:
                      locked_servo.bbox_x, locked_servo.bbox_y, locked_servo.bbox_w, locked_servo.bbox_h,
                      roi.x, roi.y, roi.w, roi.h, roi.baseline_area);
 
-            const double puncture_distance = effectiveBalloonPunctureDistance(forward);
-            if (!driveAlongForward("balloon_puncture", puncture_yaw, forward,
-                                   balloon_puncture_speed_, puncture_distance)) {
+            if (!drivePunctureUntilPopped(puncture_yaw, forward, roi)) {
                 ROS_WARN("[craic_demo] BALLOON_PUNCTURE attempt=%d result=distance_not_reached", attempt);
             }
 
@@ -1168,64 +1191,69 @@ private:
 
     bool servoFineForward(double yaw,
                           const Eigen::Vector2d& forward,
-                          const Eigen::Vector2d& /*left*/,
+                          const Eigen::Vector2d& left,
                           BalloonServo& locked) {
         const Eigen::Vector3d start = api_.getOdomPosition();
-        const ros::Time deadline = ros::Time::now() + ros::Duration(
-            std::max(2.0, balloon_fine_forward_distance_ / std::max(0.03, balloon_fine_forward_speed_) + 1.0));
+        const ros::Time deadline = ros::Time::now() + ros::Duration(std::max(2.0, balloon_depth_approach_timeout_));
         ros::Rate rate(50);
-        bool reached = false;
-        locked = balloon_servo_;
+        bool close = false;
+        bool max_distance_reached = false;
+        bool have_depth_sample = false;
+        double last_depth = std::numeric_limits<double>::quiet_NaN();
+        double progress = 0.0;
         while (ros::ok() && ros::Time::now() < deadline) {
             ros::spinOnce();
+            double lateral_speed = 0.0;
+            double z_speed = 0.0;
             if (freshBalloonServo()) {
                 locked = balloon_servo_;
+                lateral_speed = clampValue(-balloon_servo_lateral_gain_ * locked.err_u,
+                                           -balloon_servo_max_lateral_speed_,
+                                           balloon_servo_max_lateral_speed_);
+                z_speed = clampValue(-balloon_servo_z_gain_ * locked.err_v,
+                                     -balloon_servo_max_z_speed_,
+                                     balloon_servo_max_z_speed_);
             }
 
-            sendVelocityCmdWithYaw(balloon_fine_forward_speed_ * forward.x(),
-                                   balloon_fine_forward_speed_ * forward.y(),
-                                   0.0,
+            if (freshBalloonDepth()) {
+                have_depth_sample = true;
+                last_depth = balloon_detection_.depth;
+                if (last_depth <= balloon_close_depth_) {
+                    close = true;
+                    break;
+                }
+            }
+
+            sendVelocityCmdWithYaw(balloon_fine_forward_speed_ * forward.x() + lateral_speed * left.x(),
+                                   balloon_fine_forward_speed_ * forward.y() + lateral_speed * left.y(),
+                                   z_speed,
                                    yaw);
             const Eigen::Vector3d now = api_.getOdomPosition();
             const Eigen::Vector2d delta(now.x() - start.x(), now.y() - start.y());
-            const double progress = delta.dot(forward);
-            if (progress >= balloon_fine_forward_distance_) {
-                reached = true;
+            progress = delta.dot(forward);
+            if (progress >= balloon_depth_approach_max_distance_) {
+                max_distance_reached = true;
                 break;
             }
+            ROS_INFO_THROTTLE(0.5,
+                              "[craic_demo] BALLOON_DEPTH_APPROACH depth=%.2f target=%.2f progress=%.2f max=%.2f speed=%.2f depth_fresh=%s",
+                              last_depth,
+                              balloon_close_depth_,
+                              progress,
+                              balloon_depth_approach_max_distance_,
+                              balloon_fine_forward_speed_,
+                              yesNo(have_depth_sample));
             rate.sleep();
         }
         holdOverride(0.15, yaw);
-        ROS_INFO("[craic_demo] BALLOON_FINE_FORWARD reached=%s distance=%.2f speed=%.2f",
-                 yesNo(reached), balloon_fine_forward_distance_, balloon_fine_forward_speed_);
-        return reached;
-    }
-
-    double effectiveBalloonPunctureDistance(const Eigen::Vector2d& forward) const {
-        double remaining_from_live_point = std::numeric_limits<double>::quiet_NaN();
-        if (freshBalloonWorldPoint()) {
-            const Eigen::Vector3d now = api_.getOdomPosition();
-            const Eigen::Vector2d to_balloon(balloon_world_point_.x() - now.x(),
-                                             balloon_world_point_.y() - now.y());
-            remaining_from_live_point = to_balloon.dot(forward) - balloon_needle_length_ + balloon_puncture_extra_;
-        }
-        const double remaining_from_nominal =
-            balloon_standoff_ - balloon_fine_forward_distance_ - balloon_needle_length_ + balloon_puncture_extra_;
-        const double raw = std::isfinite(remaining_from_live_point) ? remaining_from_live_point : remaining_from_nominal;
-        const double effective = clampValue(std::max(balloon_puncture_distance_, raw),
-                                            balloon_puncture_distance_,
-                                            balloon_puncture_max_distance_);
-        ROS_INFO("[craic_demo] BALLOON_PUNCTURE_DISTANCE effective=%.2f live=%.2f nominal=%.2f min=%.2f max=%.2f standoff=%.2f fine=%.2f needle=%.2f extra=%.2f",
-                 effective,
-                 remaining_from_live_point,
-                 remaining_from_nominal,
-                 balloon_puncture_distance_,
-                 balloon_puncture_max_distance_,
-                 balloon_standoff_,
-                 balloon_fine_forward_distance_,
-                 balloon_needle_length_,
-                 balloon_puncture_extra_);
-        return effective;
+        ROS_INFO("[craic_demo] BALLOON_DEPTH_APPROACH reached=%s depth=%.2f target=%.2f progress=%.2f max_distance=%s speed=%.2f",
+                 yesNo(close),
+                 last_depth,
+                 balloon_close_depth_,
+                 progress,
+                 yesNo(max_distance_reached),
+                 balloon_fine_forward_speed_);
+        return close;
     }
 
     bool driveAlongForward(const std::string& label,
@@ -1259,6 +1287,74 @@ private:
         ROS_INFO("[craic_demo] DRIVE_FORWARD name=%s reached=%s distance=%.2f speed=%.2f",
                  label.c_str(), yesNo(reached), abs_distance, signed_speed);
         return reached;
+    }
+
+    bool drivePunctureUntilPopped(double yaw,
+                                  const Eigen::Vector2d& forward,
+                                  const VerifyRoi& roi) {
+        const double abs_distance = std::abs(balloon_puncture_distance_);
+        const double signed_speed = std::abs(balloon_puncture_speed_);
+        const Eigen::Vector3d start = api_.getOdomPosition();
+        const ros::Time deadline = ros::Time::now() + ros::Duration(
+            std::max(2.0, abs_distance / std::max(0.03, signed_speed) + 1.0));
+        const double area_threshold = std::max(1.0, roi.baseline_area * balloon_pop_area_drop_ratio_);
+        const bool have_start_depth = freshBalloonDepth();
+        const double start_depth = have_start_depth ? balloon_detection_.depth
+                                                    : std::numeric_limits<double>::quiet_NaN();
+        ros::Rate rate(50);
+        bool reached = false;
+        bool popped = false;
+        std::string reason = "distance";
+        double progress = 0.0;
+        double depth = start_depth;
+        while (ros::ok() && ros::Time::now() < deadline) {
+            ros::spinOnce();
+            if (freshBalloonDepth()) {
+                depth = balloon_detection_.depth;
+                if (have_start_depth && depth >= start_depth + balloon_puncture_depth_jump_) {
+                    popped = true;
+                    reason = "depth_jump";
+                    break;
+                }
+            }
+            if (freshVerifyRoiResult() && verify_roi_result_.area <= area_threshold) {
+                popped = true;
+                reason = "area_drop";
+                break;
+            }
+
+            sendVelocityCmdWithYaw(signed_speed * forward.x(),
+                                   signed_speed * forward.y(),
+                                   0.0,
+                                   yaw);
+            const Eigen::Vector3d now = api_.getOdomPosition();
+            const Eigen::Vector2d delta(now.x() - start.x(), now.y() - start.y());
+            progress = std::abs(delta.dot(forward));
+            if (progress >= abs_distance) {
+                reached = true;
+                break;
+            }
+            ROS_INFO_THROTTLE(0.2,
+                              "[craic_demo] BALLOON_PUNCTURE depth=%.2f start=%.2f jump=%.2f area=%.0f threshold=%.0f progress=%.2f distance=%.2f",
+                              depth,
+                              start_depth,
+                              balloon_puncture_depth_jump_,
+                              freshVerifyRoiResult() ? verify_roi_result_.area : -1.0,
+                              area_threshold,
+                              progress,
+                              abs_distance);
+            rate.sleep();
+        }
+        holdOverride(0.05, yaw);
+        ROS_INFO("[craic_demo] BALLOON_PUNCTURE result reached=%s popped=%s reason=%s depth=%.2f start_depth=%.2f progress=%.2f distance=%.2f",
+                 yesNo(reached),
+                 yesNo(popped),
+                 reason.c_str(),
+                 depth,
+                 start_depth,
+                 progress,
+                 abs_distance);
+        return reached || popped;
     }
 
     VerifyRoi makeVerifyRoi(const BalloonServo& servo) const {
@@ -1660,6 +1756,22 @@ private:
         have_balloon_world_point_ = true;
     }
 
+    void balloonDetectionCb(const std_msgs::Float32MultiArray::ConstPtr& msg) {
+        if (msg->data.size() < 13) {
+            have_balloon_detection_ = false;
+            return;
+        }
+        balloon_detection_.found = msg->data[0] > 0.5f;
+        balloon_detection_.u = msg->data[1];
+        balloon_detection_.v = msg->data[2];
+        balloon_detection_.depth = msg->data[3];
+        balloon_detection_.confidence = msg->data[9];
+        balloon_detection_.state = static_cast<int>(std::round(msg->data[10]));
+        balloon_detection_.depth_source = static_cast<int>(std::round(msg->data[11]));
+        balloon_detection_stamp_ = ros::Time::now();
+        have_balloon_detection_ = true;
+    }
+
     void balloonServoCb(const std_msgs::Float32MultiArray::ConstPtr& msg) {
         if (msg->data.size() < 12) {
             have_balloon_servo_ = false;
@@ -1709,6 +1821,7 @@ private:
     ros::Subscriber frame_status_sub_;
     ros::Subscriber qr_ids_sub_;
     ros::Subscriber balloon_world_sub_;
+    ros::Subscriber balloon_detection_sub_;
     ros::Subscriber balloon_servo_sub_;
     ros::Subscriber balloon_verify_result_sub_;
     ros::Subscriber mavros_state_sub_;
@@ -1720,6 +1833,7 @@ private:
     std::string frame_status_topic_;
     std::string qr_ids_topic_;
     std::string balloon_world_topic_;
+    std::string balloon_detection_topic_;
     std::string balloon_servo_topic_;
     std::string balloon_verify_roi_topic_;
     std::string balloon_verify_roi_result_topic_;
@@ -1760,7 +1874,7 @@ private:
     double balloon_wait_timeout_ = 8.0;
     double balloon_valid_max_age_ = 0.8;
     double balloon_standoff_ = 0.70;
-    double balloon_puncture_distance_ = 0.20;
+    double balloon_puncture_distance_ = 0.40;
     double balloon_puncture_speed_ = 0.14;
     double balloon_approach_timeout_ = 8.0;
     double balloon_align_timeout_ = 6.0;
@@ -1771,9 +1885,8 @@ private:
     double balloon_center_z_bias_ = 0.0;
     double balloon_align_z_min_ = 0.25;
     double balloon_align_z_max_ = 0.60;
-    double balloon_needle_length_ = 0.06;
+    double balloon_needle_length_ = 0.18;
     double balloon_puncture_extra_ = 0.04;
-    double balloon_puncture_max_distance_ = 0.80;
     double balloon_servo_timeout_ = 8.0;
     double balloon_servo_u_threshold_ = 0.08;
     double balloon_servo_v_threshold_ = 0.10;
@@ -1784,6 +1897,11 @@ private:
     double balloon_servo_max_z_speed_ = 0.08;
     double balloon_fine_forward_speed_ = 0.07;
     double balloon_fine_forward_distance_ = 0.20;
+    double balloon_close_depth_ = 0.32;
+    double balloon_depth_approach_timeout_ = 14.0;
+    double balloon_depth_approach_max_distance_ = 0.85;
+    double balloon_depth_min_valid_ = 0.05;
+    double balloon_puncture_depth_jump_ = 0.18;
     double balloon_backoff_distance_ = 0.12;
     double balloon_pop_verify_timeout_ = 1.0;
     double balloon_pop_area_drop_ratio_ = 0.35;
@@ -1827,6 +1945,9 @@ private:
     bool have_balloon_world_point_ = false;
     Eigen::Vector3d balloon_world_point_ = Eigen::Vector3d::Zero();
     ros::Time balloon_world_stamp_;
+    bool have_balloon_detection_ = false;
+    BalloonDetection balloon_detection_;
+    ros::Time balloon_detection_stamp_;
     bool have_balloon_servo_ = false;
     BalloonServo balloon_servo_;
     ros::Time balloon_servo_stamp_;

@@ -237,7 +237,7 @@
     <arg name="balloon_wait_timeout" default="8.0" />
     <arg name="balloon_valid_max_age" default="0.8" />
     <arg name="balloon_standoff" default="0.70" />
-    <arg name="balloon_puncture_distance" default="0.20" />
+    <arg name="balloon_puncture_distance" default="0.40" />
     <arg name="balloon_puncture_speed" default="0.14" />
     <arg name="balloon_approach_timeout" default="8.0" />
     <arg name="balloon_align_timeout" default="6.0" />
@@ -270,9 +270,8 @@
         - balloon_fine_forward_speed 是贴近气球阶段速度。
         - balloon_puncture_speed 是最后扎球前冲速度。
     -->
-    <arg name="balloon_needle_length" default="0.06" />
+    <arg name="balloon_needle_length" default="0.18" />
     <arg name="balloon_puncture_extra" default="0.04" />
-    <arg name="balloon_puncture_max_distance" default="0.80" />
     <arg name="balloon_servo_timeout" default="8.0" />
     <arg name="balloon_servo_u_threshold" default="0.08" />
     <arg name="balloon_servo_v_threshold" default="0.10" />
@@ -283,6 +282,11 @@
     <arg name="balloon_servo_max_z_speed" default="0.08" />
     <arg name="balloon_fine_forward_speed" default="0.07" />
     <arg name="balloon_fine_forward_distance" default="0.20" />
+    <arg name="balloon_close_depth" default="0.32" />
+    <arg name="balloon_depth_approach_timeout" default="14.0" />
+    <arg name="balloon_depth_approach_max_distance" default="0.85" />
+    <arg name="balloon_depth_min_valid" default="0.05" />
+    <arg name="balloon_puncture_depth_jump" default="0.18" />
     <arg name="balloon_backoff_distance" default="0.12" />
     <arg name="balloon_pop_verify_timeout" default="1.0" />
     <arg name="balloon_pop_area_drop_ratio" default="0.35" />
@@ -290,6 +294,7 @@
     <arg name="balloon_pop_verify_roi_min_px" default="120.0" />
     <arg name="balloon_max_retry" default="1" />
     <arg name="balloon_return_home_land_z" default="1.0" />
+    <arg name="balloon_detection_topic" default="/balloon/detection" />
     <arg name="balloon_servo_topic" default="/balloon/servo" />
     <arg name="balloon_verify_roi_topic" default="/balloon/verify_roi" />
     <arg name="balloon_verify_roi_result_topic" default="/balloon/verify_roi_result" />
@@ -476,6 +481,7 @@
     <arg name="balloon_near_red_ratio_min" default="0.30" />
     <arg name="balloon_needle_u" default="-1.0" />
     <arg name="balloon_needle_v" default="-1.0" />
+    <arg name="balloon_needle_down_offset_m" default="0.05" />
 
     <!--
         可选点云自体滤波节点。
@@ -674,6 +680,7 @@
         <arg name="near_red_ratio_min" value="$(arg balloon_near_red_ratio_min)" />
         <arg name="needle_u" value="$(arg balloon_needle_u)" />
         <arg name="needle_v" value="$(arg balloon_needle_v)" />
+        <arg name="needle_down_offset_m" value="$(arg balloon_needle_down_offset_m)" />
     </include>
 
     <!--
@@ -777,7 +784,6 @@
         <param name="balloon_align_z_max" value="$(arg balloon_align_z_max)" />
         <param name="balloon_needle_length" value="$(arg balloon_needle_length)" />
         <param name="balloon_puncture_extra" value="$(arg balloon_puncture_extra)" />
-        <param name="balloon_puncture_max_distance" value="$(arg balloon_puncture_max_distance)" />
         <param name="balloon_servo_timeout" value="$(arg balloon_servo_timeout)" />
         <param name="balloon_servo_u_threshold" value="$(arg balloon_servo_u_threshold)" />
         <param name="balloon_servo_v_threshold" value="$(arg balloon_servo_v_threshold)" />
@@ -788,6 +794,11 @@
         <param name="balloon_servo_max_z_speed" value="$(arg balloon_servo_max_z_speed)" />
         <param name="balloon_fine_forward_speed" value="$(arg balloon_fine_forward_speed)" />
         <param name="balloon_fine_forward_distance" value="$(arg balloon_fine_forward_distance)" />
+        <param name="balloon_close_depth" value="$(arg balloon_close_depth)" />
+        <param name="balloon_depth_approach_timeout" value="$(arg balloon_depth_approach_timeout)" />
+        <param name="balloon_depth_approach_max_distance" value="$(arg balloon_depth_approach_max_distance)" />
+        <param name="balloon_depth_min_valid" value="$(arg balloon_depth_min_valid)" />
+        <param name="balloon_puncture_depth_jump" value="$(arg balloon_puncture_depth_jump)" />
         <param name="balloon_backoff_distance" value="$(arg balloon_backoff_distance)" />
         <param name="balloon_pop_verify_timeout" value="$(arg balloon_pop_verify_timeout)" />
         <param name="balloon_pop_area_drop_ratio" value="$(arg balloon_pop_area_drop_ratio)" />
@@ -795,6 +806,7 @@
         <param name="balloon_pop_verify_roi_min_px" value="$(arg balloon_pop_verify_roi_min_px)" />
         <param name="balloon_max_retry" value="$(arg balloon_max_retry)" />
         <param name="balloon_return_home_land_z" value="$(arg balloon_return_home_land_z)" />
+        <param name="balloon_detection_topic" value="$(arg balloon_detection_topic)" />
         <param name="balloon_servo_topic" value="$(arg balloon_servo_topic)" />
         <param name="balloon_verify_roi_topic" value="$(arg balloon_verify_roi_topic)" />
         <param name="balloon_verify_roi_result_topic" value="$(arg balloon_verify_roi_result_topic)" />
