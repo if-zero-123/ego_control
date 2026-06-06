@@ -173,7 +173,7 @@ public:
         pnh_.param<std::string>("frame_center_mode", frame_center_mode_, "auto_detect");
         pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.30);
         pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.1);
-        pnh_.param<double>("frame_post_y_offset", frame_post_y_offset_, -0.145);
+        pnh_.param<double>("frame_post_y_offset", frame_post_y_offset_, -0.135);
         pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 0.50);
         pnh_.param<double>("frame_pass_guard_timeout", frame_pass_guard_timeout_, 30.0);
         pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 5.0);
@@ -186,8 +186,8 @@ public:
         pnh_.param<double>("frame_partial_min_wait", frame_partial_min_wait_, 2.0);
         pnh_.param<double>("frame_lock_history_duration", frame_lock_history_duration_, 2.0);
 
-        pnh_.param<double>("qr_goal_x", qr_goal_.x(), 4.0);
-        pnh_.param<double>("qr_goal_y", qr_goal_.y(), 0.25);
+        pnh_.param<double>("qr_goal_x", qr_goal_.x(), 4.15);
+        pnh_.param<double>("qr_goal_y", qr_goal_.y(), 0.2);
         pnh_.param<double>("qr_goal_z", qr_goal_.z(), 1.3);
         pnh_.param<double>("qr_initial_wait", qr_initial_wait_, 1.0);
         pnh_.param<double>("qr_search_timeout", qr_search_timeout_, 10.0);
@@ -216,9 +216,12 @@ public:
         pnh_.param<double>("balloon_needle_length", balloon_needle_length_, 0.18);
         pnh_.param<double>("balloon_puncture_extra", balloon_puncture_extra_, 0.04);
         pnh_.param<double>("balloon_servo_timeout", balloon_servo_timeout_, 8.0);
-        pnh_.param<double>("balloon_servo_u_threshold", balloon_servo_u_threshold_, 0.08);
-        pnh_.param<double>("balloon_servo_v_threshold", balloon_servo_v_threshold_, 0.10);
-        pnh_.param<double>("balloon_servo_hold_time", balloon_servo_hold_time_, 0.25);
+        pnh_.param<double>("balloon_servo_u_threshold", balloon_servo_u_threshold_, 0.12);
+        pnh_.param<double>("balloon_servo_v_threshold", balloon_servo_v_threshold_, 0.13);
+        pnh_.param<double>("balloon_servo_hold_time", balloon_servo_hold_time_, 0.12);
+        pnh_.param<double>("balloon_servo_best_accept_timeout", balloon_servo_best_accept_timeout_, 2.8);
+        pnh_.param<double>("balloon_servo_best_u_threshold", balloon_servo_best_u_threshold_, 0.16);
+        pnh_.param<double>("balloon_servo_best_v_threshold", balloon_servo_best_v_threshold_, 0.17);
         pnh_.param<double>("balloon_servo_lateral_gain", balloon_servo_lateral_gain_, 0.18);
         pnh_.param<double>("balloon_servo_z_gain", balloon_servo_z_gain_, 0.12);
         pnh_.param<double>("balloon_servo_max_lateral_speed", balloon_servo_max_lateral_speed_, 0.10);
@@ -245,6 +248,9 @@ public:
         pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.10);
         pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.25);
         pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 0.5);
+        pnh_.param<double>("reverse_yaw_pre_hold", reverse_yaw_pre_hold_, 0.30);
+        pnh_.param<double>("reverse_yaw_post_hold", reverse_yaw_post_hold_, 0.50);
+        pnh_.param<double>("yaw_anchor_drift_warn", yaw_anchor_drift_warn_, 0.15);
         pnh_.param<double>("attack_zone_overrun_x", attack_zone_overrun_x_, 0.30);
         pnh_.param<bool>("robust_land_enable", robust_land_enable_, true);
         pnh_.param<double>("robust_land_soft_z", robust_land_soft_z_, 0.10);
@@ -634,20 +640,29 @@ private:
 
     bool overrideYawAlign(const std::string& label, double target_yaw, double timeout) {
         const double start_yaw = api_.getOdomYaw();
+        const Eigen::Vector3d anchor = api_.getOdomPosition();
+        const bool reverse_turn = label == "reverse_yaw";
         const double rate_limit = std::max(0.05, override_yaw_rate_);
         const double expected_turn_time = std::abs(normalizeYaw(target_yaw - start_yaw)) / rate_limit;
-        const double effective_timeout = std::max(timeout, expected_turn_time + override_yaw_hold_time_ + 1.0);
-        ROS_INFO("[craic_demo] YAW_ALIGN start name=%s target_yaw=%.3f current_yaw=%.3f rate=%.2f timeout=%.1f",
-                 label.c_str(), target_yaw, start_yaw, rate_limit, effective_timeout);
+        const double pre_hold = reverse_turn ? std::max(0.0, reverse_yaw_pre_hold_) : 0.0;
+        const double post_hold = reverse_turn ? std::max(0.0, reverse_yaw_post_hold_) : 0.15;
+        const double effective_timeout = std::max(timeout,
+                                                  expected_turn_time + pre_hold +
+                                                      override_yaw_hold_time_ + post_hold + 1.0);
+        ROS_INFO("[craic_demo] YAW_ALIGN start name=%s target_yaw=%.3f current_yaw=%.3f anchor=(%.2f %.2f %.2f) rate=%.2f timeout=%.1f",
+                 label.c_str(), target_yaw, start_yaw, anchor.x(), anchor.y(), anchor.z(),
+                 rate_limit, effective_timeout);
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] YAW_ALIGN failed name=%s reason=enable_override", label.c_str());
             return false;
         }
 
+        holdOverrideAt(anchor, pre_hold, start_yaw);
         ros::Rate rate(50);
         const ros::Time start = ros::Time::now();
         ros::Time last = start;
         ros::Time stable_since;
+        bool drift_warned = false;
         bool stable = false;
         bool reached = false;
         double cmd_yaw = start_yaw;
@@ -665,7 +680,16 @@ private:
                 cmd_yaw = normalizeYaw(cmd_yaw + (cmd_err > 0.0 ? yaw_step : -yaw_step));
             }
 
-            sendPositionCmd(api_.getOdomPosition(), cmd_yaw);
+            sendPositionCmd(anchor, cmd_yaw);
+            const Eigen::Vector3d odom = api_.getOdomPosition();
+            const Eigen::Vector2d drift_vec(odom.x() - anchor.x(), odom.y() - anchor.y());
+            const double drift_xy = drift_vec.norm();
+            if (!drift_warned && yaw_anchor_drift_warn_ > 0.0 && drift_xy >= yaw_anchor_drift_warn_) {
+                drift_warned = true;
+                ROS_WARN("[craic_demo] YAW_ALIGN drift name=%s drift_xy=%.3f anchor=(%.2f %.2f %.2f) odom=(%.2f %.2f %.2f)",
+                         label.c_str(), drift_xy, anchor.x(), anchor.y(), anchor.z(),
+                         odom.x(), odom.y(), odom.z());
+            }
             const double err = normalizeYaw(target_yaw - api_.getOdomYaw());
             if (std::abs(err) <= override_yaw_threshold_) {
                 if (!stable) {
@@ -680,8 +704,9 @@ private:
             }
             if (!simple_logs_) {
                 ROS_INFO_THROTTLE(mission_log_period_,
-                                  "[craic_demo] YAW_ALIGN name=%s err=%.3f cmd=%.3f target=%.3f current=%.3f",
-                                  label.c_str(), err, cmd_yaw, target_yaw, api_.getOdomYaw());
+                                  "[craic_demo] YAW_ALIGN name=%s err=%.3f cmd=%.3f target=%.3f current=%.3f drift_xy=%.3f anchor=(%.2f %.2f %.2f)",
+                                  label.c_str(), err, cmd_yaw, target_yaw, api_.getOdomYaw(),
+                                  drift_xy, anchor.x(), anchor.y(), anchor.z());
             }
             if ((ros::Time::now() - start).toSec() >= effective_timeout) {
                 ROS_WARN("[craic_demo] YAW_ALIGN timeout name=%s err=%.3f", label.c_str(), err);
@@ -689,10 +714,14 @@ private:
             }
             rate.sleep();
         }
-        holdOverride(0.15, target_yaw);
+        holdOverrideAt(anchor, post_hold, target_yaw);
+        const Eigen::Vector3d final_odom = api_.getOdomPosition();
+        const Eigen::Vector2d final_drift_vec(final_odom.x() - anchor.x(), final_odom.y() - anchor.y());
+        const double final_drift_xy = final_drift_vec.norm();
         const bool disabled = api_.disableOverride();
-        ROS_INFO("[craic_demo] YAW_ALIGN result name=%s reached=%s disabled=%s",
-                 label.c_str(), yesNo(reached), yesNo(disabled));
+        ROS_INFO("[craic_demo] YAW_ALIGN result name=%s reached=%s disabled=%s drift_xy=%.3f anchor=(%.2f %.2f %.2f)",
+                 label.c_str(), yesNo(reached), yesNo(disabled), final_drift_xy,
+                 anchor.x(), anchor.y(), anchor.z());
         return reached && disabled;
     }
 
@@ -1133,6 +1162,16 @@ private:
                std::abs(servo.err_v) <= balloon_servo_v_threshold_;
     }
 
+    bool servoBestAcceptable(const BalloonServo& servo) const {
+        return servo.found &&
+               std::abs(servo.err_u) <= balloon_servo_best_u_threshold_ &&
+               std::abs(servo.err_v) <= balloon_servo_best_v_threshold_;
+    }
+
+    double servoErrorScore(const BalloonServo& servo) const {
+        return std::hypot(servo.err_u, servo.err_v);
+    }
+
     bool servoAlign(double yaw,
                     const Eigen::Vector2d& forward,
                     const Eigen::Vector2d& left,
@@ -1141,6 +1180,9 @@ private:
         const ros::Time start = ros::Time::now();
         ros::Time stable_since;
         bool stable = false;
+        bool have_best = false;
+        BalloonServo best_servo;
+        double best_score = std::numeric_limits<double>::infinity();
         while (ros::ok() && (ros::Time::now() - start).toSec() < balloon_servo_timeout_) {
             ros::spinOnce();
             if (!freshBalloonServo()) {
@@ -1162,6 +1204,13 @@ private:
                                    z_speed,
                                    yaw);
 
+            const double score = servoErrorScore(servo);
+            if (!have_best || score < best_score) {
+                have_best = true;
+                best_servo = servo;
+                best_score = score;
+            }
+
             if (servoCentered(servo)) {
                 if (!stable) {
                     stable = true;
@@ -1177,15 +1226,34 @@ private:
                 stable = false;
             }
 
+            const double elapsed = (ros::Time::now() - start).toSec();
+            if (elapsed >= balloon_servo_best_accept_timeout_ &&
+                have_best &&
+                servoBestAcceptable(best_servo)) {
+                locked = best_servo;
+                ROS_INFO("[craic_demo] BALLOON_SERVO_ALIGN best_sample u=%.1f v=%.1f err=(%.3f %.3f) score=%.3f elapsed=%.2f area_ratio=%.3f bbox=(%.1f %.1f %.1f %.1f)",
+                         best_servo.u, best_servo.v,
+                         best_servo.err_u, best_servo.err_v,
+                         best_score, elapsed, best_servo.area_ratio,
+                         best_servo.bbox_x, best_servo.bbox_y,
+                         best_servo.bbox_w, best_servo.bbox_h);
+                return true;
+            }
+
             if (!simple_logs_) {
                 ROS_INFO_THROTTLE(mission_log_period_,
-                                  "[craic_demo] BALLOON_SERVO_ALIGN err=(%.3f %.3f) speed_lat=%.3f speed_z=%.3f centered=%s area_ratio=%.3f",
+                                  "[craic_demo] BALLOON_SERVO_ALIGN err=(%.3f %.3f) speed_lat=%.3f speed_z=%.3f centered=%s best_score=%.3f area_ratio=%.3f",
                                   servo.err_u, servo.err_v, lateral_speed, z_speed,
-                                  yesNo(servoCentered(servo)), servo.area_ratio);
+                                  yesNo(servoCentered(servo)), best_score, servo.area_ratio);
             }
             rate.sleep();
         }
         holdOverride(0.15, yaw);
+        if (have_best) {
+            ROS_WARN("[craic_demo] BALLOON_SERVO_ALIGN timeout best_err=(%.3f %.3f) best_score=%.3f acceptable=%s",
+                     best_servo.err_u, best_servo.err_v, best_score,
+                     yesNo(servoBestAcceptable(best_servo)));
+        }
         return false;
     }
 
@@ -1724,6 +1792,16 @@ private:
         }
     }
 
+    void holdOverrideAt(const Eigen::Vector3d& anchor, double seconds, double yaw) {
+        ros::Rate rate(50);
+        const ros::Time start = ros::Time::now();
+        while (ros::ok() && (ros::Time::now() - start).toSec() < seconds) {
+            ros::spinOnce();
+            sendPositionCmd(anchor, yaw);
+            rate.sleep();
+        }
+    }
+
     void safeLand() {
         if (land_after_finish_) {
             robustLand(api_.getOdomYaw(), "safe_land", 20.0);
@@ -1849,7 +1927,7 @@ private:
     std::string frame_center_mode_ = "auto_detect";
     double frame_center_reject_distance_ = 0.30;
     double frame_post_x_offset_ = 1.1;
-    double frame_post_y_offset_ = -0.145;
+    double frame_post_y_offset_ = -0.135;
     double frame_pass_guard_x_offset_ = 0.50;
     double frame_pass_guard_timeout_ = 30.0;
     double frame_detect_timeout_ = 5.0;
@@ -1862,7 +1940,7 @@ private:
     double frame_partial_min_wait_ = 2.0;
     double frame_lock_history_duration_ = 2.0;
 
-    Eigen::Vector3d qr_goal_ = Eigen::Vector3d(4.0, 0.25, 1.3);
+    Eigen::Vector3d qr_goal_ = Eigen::Vector3d(4.15, 0.2, 1.3);
     double qr_initial_wait_ = 1.0;
     double qr_search_timeout_ = 10.0;
     double qr_search_raise_z_ = 0.2;
@@ -1888,9 +1966,12 @@ private:
     double balloon_needle_length_ = 0.18;
     double balloon_puncture_extra_ = 0.04;
     double balloon_servo_timeout_ = 8.0;
-    double balloon_servo_u_threshold_ = 0.08;
-    double balloon_servo_v_threshold_ = 0.10;
-    double balloon_servo_hold_time_ = 0.25;
+    double balloon_servo_u_threshold_ = 0.12;
+    double balloon_servo_v_threshold_ = 0.13;
+    double balloon_servo_hold_time_ = 0.12;
+    double balloon_servo_best_accept_timeout_ = 2.8;
+    double balloon_servo_best_u_threshold_ = 0.16;
+    double balloon_servo_best_v_threshold_ = 0.17;
     double balloon_servo_lateral_gain_ = 0.18;
     double balloon_servo_z_gain_ = 0.12;
     double balloon_servo_max_lateral_speed_ = 0.10;
@@ -1917,6 +1998,9 @@ private:
     double override_yaw_threshold_ = 0.10;
     double override_yaw_hold_time_ = 0.25;
     double override_yaw_rate_ = 0.5;
+    double reverse_yaw_pre_hold_ = 0.30;
+    double reverse_yaw_post_hold_ = 0.50;
+    double yaw_anchor_drift_warn_ = 0.15;
     double attack_zone_overrun_x_ = 0.30;
     bool robust_land_enable_ = true;
     double robust_land_soft_z_ = 0.10;

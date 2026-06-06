@@ -24,7 +24,7 @@
     4. 主任务订阅 /craic/frame_center 和 /craic/frame_status，等待稳定门框中心。
     5. 若识别稳定且离 expected_frame 的 xyz 单轴误差都不超过 frame_center_reject_distance，则使用识别值。
     6. 若识别超时、不稳定、状态无效、距离过大，则使用 expected_frame=(3.2,-1.25,1.25)。
-    7. 计算 frame_post_control=(center.x+1.1, center.y-0.145, center.z)。
+    7. 计算 frame_post_control=(center.x+1.1, center.y-0.135, center.z)。
     8. EGO 第一次穿门飞到 frame_post_control，并启用 x 过门保护。
     9. override 原地平滑转到 reverse_yaw，也就是 initial_yaw+180 度。
     10. override 平滑位置控制到 QR 点 (4.0,0.25,1.3)。
@@ -148,7 +148,7 @@
         expected_frame_x/y/z：门框中心预期值，识别超时或识别点偏差过大时使用它。
         frame_center_reject_distance：识别中心到预期中心的 xyz 单轴误差阈值，任一轴超过则拒绝该样本。
         frame_post_x_offset：门后 EGO 控制点相对门框中心的 x 正方向偏移，当前为 center.x + 1.1。
-        frame_post_y_offset：门后 EGO 控制点相对门框中心的 y 偏移，当前为 center.y - 0.145。
+        frame_post_y_offset：门后 EGO 控制点相对门框中心的 y 偏移，当前为 center.y - 0.135。
         frame_pass_guard_x_offset：第一次 EGO 穿门时的放行保护，当前 x 超过 center.x + 0.50 认为已过门。
         frame_pass_guard_timeout：EGO 穿门超过该时间仍未 reach，但已过 pass x，则直接进入下一步任务。
         frame_detect_timeout：主任务等待稳定门框中心的总时间，超时用 expected_frame。
@@ -174,7 +174,7 @@
     <arg name="frame_center_mode" default="auto_detect" />
     <arg name="frame_center_reject_distance" default="0.30" />
     <arg name="frame_post_x_offset" default="1.1" />
-    <arg name="frame_post_y_offset" default="-0.145" />
+    <arg name="frame_post_y_offset" default="-0.135" />
     <arg name="frame_pass_guard_x_offset" default="0.50" />
     <arg name="frame_pass_guard_timeout" default="30.0" />
     <arg name="frame_detect_timeout" default="5.0" />
@@ -202,8 +202,8 @@
         - 搜索超时不会失败降落，会直接进入返程。
         - 收到非空 /usb_camera_vision/aruco_ids 就认为二维码识别成功。
     -->
-    <arg name="qr_goal_x" default="4.0" />
-    <arg name="qr_goal_y" default="0.25" />
+    <arg name="qr_goal_x" default="4.15" />
+    <arg name="qr_goal_y" default="0.2" />
     <arg name="qr_goal_z" default="1.3" />
     <arg name="qr_initial_wait" default="1.0" />
     <arg name="qr_search_timeout" default="10.0" />
@@ -261,6 +261,8 @@
         - override 到 standoff 点后，进入图像 servo 对齐。
         - servo_u 主要对应左右误差，servo_v 主要对应上下误差。
         - 达到 servo_u_threshold、servo_v_threshold 并保持 servo_hold_time 后，执行 fine_forward。
+        - 如果气球晃动导致无法稳定保持，但 best_sample 在 best_u/v_threshold 内，
+          超过 best_accept_timeout 后也会进入 fine_forward，前进中继续视觉修正。
         - fine_forward 后再执行 puncture 前冲。
         - 前冲后用 verify_roi 面积下降比例判断是否扎破。
 
@@ -273,9 +275,12 @@
     <arg name="balloon_needle_length" default="0.18" />
     <arg name="balloon_puncture_extra" default="0.04" />
     <arg name="balloon_servo_timeout" default="8.0" />
-    <arg name="balloon_servo_u_threshold" default="0.08" />
-    <arg name="balloon_servo_v_threshold" default="0.10" />
-    <arg name="balloon_servo_hold_time" default="0.25" />
+    <arg name="balloon_servo_u_threshold" default="0.12" />
+    <arg name="balloon_servo_v_threshold" default="0.13" />
+    <arg name="balloon_servo_hold_time" default="0.12" />
+    <arg name="balloon_servo_best_accept_timeout" default="2.8" />
+    <arg name="balloon_servo_best_u_threshold" default="0.16" />
+    <arg name="balloon_servo_best_v_threshold" default="0.17" />
     <arg name="balloon_servo_lateral_gain" default="0.18" />
     <arg name="balloon_servo_z_gain" default="0.12" />
     <arg name="balloon_servo_max_lateral_speed" default="0.10" />
@@ -305,6 +310,8 @@
         override_pos_threshold：override 到点判定半径。
         override_smooth_speed：override 位置 setpoint 推进速度，不是速度控制，是平滑发布中间位置点。
         override_yaw_*：原地 yaw 对齐阈值、保持时间和角速度限幅。
+        reverse_yaw_pre/post_hold：门后转 180 度前后固定锚点保持时间。
+        yaw_anchor_drift_warn：固定锚点 yaw 对齐时，水平漂移超过该值会打印 warning。
         attack_zone_overrun_x：EGO 回打击区时的 x 保护，到 x 小于该值就接管并继续攻击流程。
 
         overrideMoveTo 的实际发布方式：
@@ -315,7 +322,7 @@
         - 结束后 disableOverride，让后续 EGO 或下一段控制接管。
 
         overrideYawAlign 的实际发布方式：
-        - 当前位置保持不动。
+        - 进入 yaw 阶段时记录固定 anchor，并持续发布 anchor + yaw。
         - yaw 按 override_yaw_rate 限速推进到目标角。
         - yaw 误差小于 override_yaw_threshold 并保持 override_yaw_hold_time 后结束。
     -->
@@ -326,6 +333,9 @@
     <arg name="override_yaw_threshold" default="0.10" />
     <arg name="override_yaw_hold_time" default="0.25" />
     <arg name="override_yaw_rate" default="0.5" />
+    <arg name="reverse_yaw_pre_hold" default="0.30" />
+    <arg name="reverse_yaw_post_hold" default="0.50" />
+    <arg name="yaw_anchor_drift_warn" default="0.15" />
     <arg name="attack_zone_overrun_x" default="0.30" />
 
     <!--
@@ -788,6 +798,9 @@
         <param name="balloon_servo_u_threshold" value="$(arg balloon_servo_u_threshold)" />
         <param name="balloon_servo_v_threshold" value="$(arg balloon_servo_v_threshold)" />
         <param name="balloon_servo_hold_time" value="$(arg balloon_servo_hold_time)" />
+        <param name="balloon_servo_best_accept_timeout" value="$(arg balloon_servo_best_accept_timeout)" />
+        <param name="balloon_servo_best_u_threshold" value="$(arg balloon_servo_best_u_threshold)" />
+        <param name="balloon_servo_best_v_threshold" value="$(arg balloon_servo_best_v_threshold)" />
         <param name="balloon_servo_lateral_gain" value="$(arg balloon_servo_lateral_gain)" />
         <param name="balloon_servo_z_gain" value="$(arg balloon_servo_z_gain)" />
         <param name="balloon_servo_max_lateral_speed" value="$(arg balloon_servo_max_lateral_speed)" />
@@ -817,6 +830,9 @@
         <param name="override_yaw_threshold" value="$(arg override_yaw_threshold)" />
         <param name="override_yaw_hold_time" value="$(arg override_yaw_hold_time)" />
         <param name="override_yaw_rate" value="$(arg override_yaw_rate)" />
+        <param name="reverse_yaw_pre_hold" value="$(arg reverse_yaw_pre_hold)" />
+        <param name="reverse_yaw_post_hold" value="$(arg reverse_yaw_post_hold)" />
+        <param name="yaw_anchor_drift_warn" value="$(arg yaw_anchor_drift_warn)" />
         <param name="attack_zone_overrun_x" value="$(arg attack_zone_overrun_x)" />
         <param name="robust_land_enable" value="$(arg robust_land_enable)" />
         <param name="robust_land_soft_z" value="$(arg robust_land_soft_z)" />

@@ -125,3 +125,21 @@ catkin_install_python(PROGRAMS
   scripts/craic_web_control.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
+
+install(PROGRAMS
+  scripts/craic_autostart.sh
+  scripts/install_craic_autostart_service.sh
+  scripts/enable_craic_autostart.sh
+  scripts/disable_craic_autostart.sh
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(FILES
+  systemd/craic-autostart.service
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/systemd
+)
+
+install(FILES
+  config/craic-autostart.env.example
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
+)

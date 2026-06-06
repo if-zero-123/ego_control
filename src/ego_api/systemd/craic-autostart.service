@@ -1,0 +1,17 @@
+[Unit]
+Description=CRAIC ROS flight stack autostart
+After=NetworkManager.service network-online.target
+Wants=NetworkManager.service network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/default/craic-autostart
+ExecStart=/home/orangepi/catkin_ws/src/ego_control/src/ego_api/scripts/craic_autostart.sh
+Restart=on-failure
+RestartSec=8
+KillSignal=SIGINT
+TimeoutStopSec=35
+
+[Install]
+WantedBy=multi-user.target

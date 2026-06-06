@@ -53,6 +53,7 @@ PARAM_SPECS = {
     "frame_unified_z": (0.05, 3.0),
     "frame_center_reject_distance": (0.0, 2.0),
     "frame_detect_timeout": (0.0, 30.0),
+    "frame_post_x_offset": (0.0, 3.0),
     "frame_post_y_offset": (-2.0, 2.0),
     "frame_pass_guard_x_offset": (0.0, 2.0),
     "frame_pass_guard_timeout": (0.0, 120.0),
@@ -248,6 +249,7 @@ INDEX_HTML = r"""<!doctype html>
       padding-bottom: 7px;
     }
     .row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; min-width: 0; }
+    .row4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; min-width: 0; }
     .field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .field label { color: var(--muted); font-size: 12px; }
     .field input { padding: 5px 6px; min-height: 29px; width: 100%; }
@@ -390,6 +392,7 @@ INDEX_HTML = r"""<!doctype html>
       .settings-grid { grid-template-columns: 1fr; }
       .mode-compact { grid-template-columns: 1fr; }
       .row3 { gap: 6px; }
+      .row4 { gap: 6px; }
       input { padding: 9px 7px; }
       section.scene {
         height: 430px;
@@ -486,7 +489,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="param-row"><div class="param-name">门框中心</div><div class="row3" data-group="expected_frame"></div></div>
             <div class="param-row"><div class="param-name">门框高度</div><div class="row2" data-group="frame_height"></div></div>
             <div class="param-row"><div class="param-name">门框识别</div><div class="row2" data-group="frame_detect"></div></div>
-            <div class="param-row"><div class="param-name">穿门保护</div><div class="row3" data-group="frame_pass_guard"></div></div>
+            <div class="param-row"><div class="param-name">穿门保护</div><div class="row4" data-group="frame_pass_guard"></div></div>
             <div class="param-row"><div class="param-name">回区保护</div><div class="row2" data-group="attack_guard"></div></div>
             <div class="param-row"><div class="param-name">二维码点</div><div class="row3" data-group="qr_goal"></div></div>
             <div class="param-row"><div class="param-name">二维码搜索</div><div class="row3" data-group="qr_search"></div></div>
@@ -540,6 +543,7 @@ const PARAMS = [
   ['frame_unified_z', 'z'],
   ['frame_center_reject_distance', '中心容差'],
   ['frame_detect_timeout', '识别超时'],
+  ['frame_post_x_offset', '穿门X偏移'],
   ['frame_post_y_offset', '穿门Y偏移'],
   ['frame_pass_guard_x_offset', '过门判定X'],
   ['frame_pass_guard_timeout', '穿门超时'],
@@ -596,6 +600,7 @@ function buildForm() {
     makeInput('frame_center_reject_distance','中心容差') +
     makeInput('frame_detect_timeout','识别超时');
   document.querySelector('[data-group="frame_pass_guard"]').innerHTML =
+    makeInput('frame_post_x_offset','X偏移') +
     makeInput('frame_post_y_offset','Y偏移') +
     makeInput('frame_pass_guard_x_offset','过门判定X') +
     makeInput('frame_pass_guard_timeout','穿门超时');
@@ -638,7 +643,7 @@ function updatePreview() {
     `模式: ${modeText}\n` +
     `对中 (${fmt(p.initial_wait_x)},${fmt(p.initial_wait_y)},${fmt(p.initial_wait_z)})  门框 (${fmt(p.expected_frame_x)},${fmt(p.expected_frame_y)},${fmt(p.expected_frame_z)})\n` +
     `门框识别: 中心容差${fmt(p.frame_center_reject_distance)}  识别超时${fmt(p.frame_detect_timeout)}s  高度${heightText}\n` +
-    `穿门保护: Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
+    `穿门保护: X偏移${fmt(p.frame_post_x_offset)}  Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
     `QR搜索 超时${fmt(p.qr_search_timeout)}s 上升${fmt(p.qr_search_raise_z)} 距离${fmt(p.qr_search_offset)}\n` +
     `QR (${fmt(p.qr_goal_x)},${fmt(p.qr_goal_y)},${fmt(p.qr_goal_z)})  打击区 (${fmt(p.attack_zone_x)},${fmt(p.attack_zone_y)},${fmt(p.attack_zone_z)})  高度 ${fmt(p.attack_height)}`;
 }
@@ -650,7 +655,7 @@ function paramsPreviewText(p, emptyText) {
   return `模式: ${mode}\n` +
     `对中 (${fmt(p.initial_wait_x)},${fmt(p.initial_wait_y)},${fmt(p.initial_wait_z)})  门框 (${fmt(p.expected_frame_x)},${fmt(p.expected_frame_y)},${fmt(p.expected_frame_z)})\n` +
     `门框识别: 中心容差${fmt(p.frame_center_reject_distance)}  识别超时${fmt(p.frame_detect_timeout)}s  高度${heightText}\n` +
-    `穿门保护: Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
+    `穿门保护: X偏移${fmt(p.frame_post_x_offset)}  Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
     `QR搜索 超时${fmt(p.qr_search_timeout)}s 上升${fmt(p.qr_search_raise_z)} 距离${fmt(p.qr_search_offset)}\n` +
     `QR (${fmt(p.qr_goal_x)},${fmt(p.qr_goal_y)},${fmt(p.qr_goal_z)})  打击区 (${fmt(p.attack_zone_x)},${fmt(p.attack_zone_y)},${fmt(p.attack_zone_z)})  高度 ${fmt(p.attack_height)}`;
 }
