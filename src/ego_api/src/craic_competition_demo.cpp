@@ -162,6 +162,7 @@ public:
         pnh_.param<double>("mission_log_period", mission_log_period_, 1.0);
         pnh_.param<bool>("simple_logs", simple_logs_, true);
         pnh_.param<bool>("land_after_finish", land_after_finish_, true);
+        pnh_.param<bool>("takeoff_direct_to_initial_wait", takeoff_direct_to_initial_wait_, true);
 
         pnh_.param<double>("initial_wait_x", initial_wait_.x(), 0.0);
         pnh_.param<double>("initial_wait_y", initial_wait_.y(), -0.85);
@@ -236,20 +237,34 @@ public:
         pnh_.param<double>("balloon_backoff_distance", balloon_backoff_distance_, 0.12);
         pnh_.param<double>("balloon_pop_verify_timeout", balloon_pop_verify_timeout_, 1.0);
         pnh_.param<double>("balloon_pop_area_drop_ratio", balloon_pop_area_drop_ratio_, 0.35);
-        pnh_.param<double>("balloon_pop_verify_roi_scale", balloon_pop_verify_roi_scale_, 1.5);
-        pnh_.param<double>("balloon_pop_verify_roi_min_px", balloon_pop_verify_roi_min_px_, 120.0);
+        pnh_.param<double>("balloon_pop_verify_roi_scale", balloon_pop_verify_roi_scale_, 2.0);
+        pnh_.param<double>("balloon_pop_verify_roi_min_px", balloon_pop_verify_roi_min_px_, 160.0);
         pnh_.param<int>("balloon_max_retry", balloon_max_retry_, 1);
         pnh_.param<double>("balloon_return_home_land_z", balloon_return_home_land_z_, 1.0);
+        pnh_.param<double>("balloon_direct_forward_speed", balloon_direct_forward_speed_, 0.22);
+        pnh_.param<double>("balloon_direct_slow_speed", balloon_direct_slow_speed_, 0.10);
+        pnh_.param<double>("balloon_direct_max_distance", balloon_direct_max_distance_, 0.85);
+        pnh_.param<double>("balloon_direct_timeout", balloon_direct_timeout_, 5.0);
+        pnh_.param<double>("balloon_direct_kp_u", balloon_direct_kp_u_, 0.24);
+        pnh_.param<double>("balloon_direct_kd_u", balloon_direct_kd_u_, 0.04);
+        pnh_.param<double>("balloon_direct_kp_v", balloon_direct_kp_v_, 0.16);
+        pnh_.param<double>("balloon_direct_kd_v", balloon_direct_kd_v_, 0.03);
+        pnh_.param<double>("balloon_direct_max_lateral_speed", balloon_direct_max_lateral_speed_, 0.16);
+        pnh_.param<double>("balloon_direct_max_z_speed", balloon_direct_max_z_speed_, 0.12);
+        pnh_.param<double>("balloon_direct_near_blob_speed_scale", balloon_direct_near_blob_speed_scale_, 0.6);
+        pnh_.param<double>("balloon_direct_servo_lost_timeout", balloon_direct_servo_lost_timeout_, 0.35);
 
         pnh_.param<double>("override_move_timeout", override_move_timeout_, 30.0);
         pnh_.param<double>("override_pos_threshold", override_pos_threshold_, 0.10);
         pnh_.param<double>("override_smooth_speed", override_smooth_speed_, 0.35);
+        pnh_.param<double>("aggressive_override_speed", aggressive_override_speed_, 0.85);
         pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
-        pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.10);
-        pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.25);
-        pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 0.5);
-        pnh_.param<double>("reverse_yaw_pre_hold", reverse_yaw_pre_hold_, 0.30);
-        pnh_.param<double>("reverse_yaw_post_hold", reverse_yaw_post_hold_, 0.50);
+        pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.16);
+        pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.08);
+        pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 1.4);
+        pnh_.param<double>("reverse_yaw_pre_hold", reverse_yaw_pre_hold_, 0.05);
+        pnh_.param<double>("reverse_yaw_post_hold", reverse_yaw_post_hold_, 0.10);
+        pnh_.param<double>("override_yaw_post_hold", override_yaw_post_hold_, 0.05);
         pnh_.param<double>("yaw_anchor_drift_warn", yaw_anchor_drift_warn_, 0.15);
         pnh_.param<double>("attack_zone_overrun_x", attack_zone_overrun_x_, 0.30);
         pnh_.param<bool>("robust_land_enable", robust_land_enable_, true);
@@ -307,12 +322,30 @@ public:
             return 1;
         }
 
-        logStage("INITIAL_WAIT_OVERRIDE", "move to known first wait point");
-        if (!overrideMoveTo("initial_wait", initial_wait_, initial_yaw,
-                            override_pos_threshold_, override_move_timeout_)) {
-            ROS_ERROR("[craic_demo] FAIL stage=INITIAL_WAIT_OVERRIDE");
-            safeLand();
-            return 1;
+        if (takeoff_direct_to_initial_wait_) {
+            logStage("INITIAL_WAIT_CHECK", "direct takeoff should already be at first wait point");
+            const Eigen::Vector3d initial_wait_error = api_.getOdomPosition() - initial_wait_;
+            const double initial_wait_dist = initial_wait_error.norm();
+            ROS_INFO("[craic_demo] INITIAL_WAIT_CHECK target=(%.2f %.2f %.2f) dist=%.3f tolerance=0.180",
+                     initial_wait_.x(), initial_wait_.y(), initial_wait_.z(), initial_wait_dist);
+            if (initial_wait_dist > 0.18) {
+                ROS_WARN("[craic_demo] INITIAL_WAIT_CHECK fallback=aggressive_override dist=%.3f", initial_wait_dist);
+                if (!overrideMoveToWithSpeed("initial_wait_direct_fallback", initial_wait_, initial_yaw,
+                                             override_pos_threshold_, override_move_timeout_,
+                                             aggressive_override_speed_)) {
+                    ROS_ERROR("[craic_demo] FAIL stage=INITIAL_WAIT_DIRECT_FALLBACK");
+                    safeLand();
+                    return 1;
+                }
+            }
+        } else {
+            logStage("INITIAL_WAIT_OVERRIDE", "move to known first wait point");
+            if (!overrideMoveTo("initial_wait", initial_wait_, initial_yaw,
+                                override_pos_threshold_, override_move_timeout_)) {
+                ROS_ERROR("[craic_demo] FAIL stage=INITIAL_WAIT_OVERRIDE");
+                safeLand();
+                return 1;
+            }
         }
 
         logStage("FRAME_CENTER", "wait frame center with expected fallback");
@@ -344,8 +377,9 @@ public:
 
         resetQrDetection();
         logStage("QR_GOAL_OVERRIDE", "locked-yaw direct move to QR point");
-        if (!overrideMoveTo("qr_goal", qr_goal_, reverse_yaw,
-                            override_pos_threshold_, override_move_timeout_)) {
+        if (!overrideMoveToWithSpeed("qr_goal", qr_goal_, reverse_yaw,
+                                     override_pos_threshold_, override_move_timeout_,
+                                     aggressive_override_speed_)) {
             ROS_ERROR("[craic_demo] FAIL stage=QR_GOAL_OVERRIDE");
             safeLand();
             return 1;
@@ -356,8 +390,9 @@ public:
         ROS_INFO("[craic_demo] QR_RESULT detected=%s", yesNo(qr_ok));
 
         logStage("RETURN_FRAME_POST_OVERRIDE", "diagonal direct return to saved frame post control");
-        if (!overrideMoveTo("return_frame_post_control", frame_post_control, reverse_yaw,
-                            override_pos_threshold_, override_move_timeout_)) {
+        if (!overrideMoveToWithSpeed("return_frame_post_control", frame_post_control, reverse_yaw,
+                                     override_pos_threshold_, override_move_timeout_,
+                                     aggressive_override_speed_)) {
             ROS_ERROR("[craic_demo] FAIL stage=RETURN_FRAME_POST_OVERRIDE");
             safeLand();
             return 1;
@@ -565,20 +600,29 @@ private:
                         double yaw,
                         double threshold,
                         double timeout) {
+        return overrideMoveToWithSpeed(label, target, yaw, threshold, timeout, override_smooth_speed_);
+    }
+
+    bool overrideMoveToWithSpeed(const std::string& label,
+                                 const Eigen::Vector3d& target,
+                                 double yaw,
+                                 double threshold,
+                                 double timeout,
+                                 double speed) {
         if (!finiteVec(target)) {
             ROS_ERROR("[craic_demo] OVERRIDE_MOVE invalid label=%s reason=non_finite", label.c_str());
             return false;
         }
         ROS_INFO("[craic_demo] OVERRIDE_MOVE start name=%s target=(%.2f %.2f %.2f) yaw=%.3f threshold=%.2f speed=%.2f timeout=%.1f",
                  label.c_str(), target.x(), target.y(), target.z(), yaw, threshold,
-                 override_smooth_speed_, timeout);
+                 speed, timeout);
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] OVERRIDE_MOVE failed name=%s reason=enable_override", label.c_str());
             return false;
         }
         const MoveResult result = moveOverrideLoop(label, target, yaw, threshold,
                                                    ros::Time::now() + ros::Duration(timeout),
-                                                   false);
+                                                   false, speed);
         holdOverride(0.2, yaw);
         const bool disabled = api_.disableOverride();
         const bool reached = result == MoveResult::Reached;
@@ -592,7 +636,8 @@ private:
                                 double yaw,
                                 double threshold,
                                 const ros::Time& deadline,
-                                bool stop_on_qr) {
+                                bool stop_on_qr,
+                                double move_speed = -1.0) {
         ros::Rate rate(50);
         Eigen::Vector3d setpoint = api_.getOdomPosition();
         ros::Time last = ros::Time::now();
@@ -614,7 +659,7 @@ private:
             const ros::Time now = ros::Time::now();
             const double dt = std::max(0.0, (now - last).toSec());
             last = now;
-            const double speed = std::max(0.03, override_smooth_speed_);
+            const double speed = std::max(0.03, move_speed > 0.0 ? move_speed : override_smooth_speed_);
             const double step = speed * dt;
             const Eigen::Vector3d remaining = target - setpoint;
             const double remaining_norm = remaining.norm();
@@ -649,7 +694,8 @@ private:
         const double rate_limit = std::max(0.05, override_yaw_rate_);
         const double expected_turn_time = std::abs(normalizeYaw(target_yaw - start_yaw)) / rate_limit;
         const double pre_hold = reverse_turn ? std::max(0.0, reverse_yaw_pre_hold_) : 0.0;
-        const double post_hold = reverse_turn ? std::max(0.0, reverse_yaw_post_hold_) : 0.15;
+        const double post_hold = reverse_turn ? std::max(0.0, reverse_yaw_post_hold_)
+                                              : std::max(0.0, override_yaw_post_hold_);
         const double effective_timeout = std::max(timeout,
                                                   expected_turn_time + pre_hold +
                                                       override_yaw_hold_time_ + post_hold + 1.0);
@@ -1104,22 +1150,11 @@ private:
                 continue;
             }
 
-            BalloonServo locked_servo;
-            if (!servoAlign(puncture_yaw, forward, left, locked_servo)) {
-                ROS_WARN("[craic_demo] BALLOON_SERVO_ALIGN attempt=%d result=timeout", attempt);
-                continue;
-            }
-
-            if (!servoFineForward(puncture_yaw, forward, left, locked_servo)) {
-                ROS_WARN("[craic_demo] BALLOON_DEPTH_APPROACH attempt=%d result=failed", attempt);
-                continue;
-            }
-
             if (!freshBalloonServo()) {
                 ROS_WARN("[craic_demo] BALLOON_LOCK_ROI attempt=%d result=no_fresh_servo", attempt);
                 continue;
             }
-            locked_servo = balloon_servo_;
+            BalloonServo locked_servo = balloon_servo_;
             VerifyRoi roi = makeVerifyRoi(locked_servo);
             publishVerifyRoi(roi);
             if (waitVerifyRoiBaseline(roi)) {
@@ -1131,14 +1166,13 @@ private:
                      locked_servo.bbox_x, locked_servo.bbox_y, locked_servo.bbox_w, locked_servo.bbox_h,
                      roi.x, roi.y, roi.w, roi.h, roi.baseline_area);
 
-            if (!drivePunctureUntilPopped(puncture_yaw, forward, roi)) {
-                ROS_WARN("[craic_demo] BALLOON_PUNCTURE attempt=%d result=distance_not_reached", attempt);
-            }
+            const bool direct_detected = directPdPuncture(puncture_yaw, forward, left, roi);
 
             driveAlongForward("balloon_backoff", puncture_yaw, forward,
                               -std::abs(balloon_puncture_speed_), balloon_backoff_distance_);
             popped = verifyBalloonPopped(roi);
-            ROS_INFO("[craic_demo] BALLOON_VERIFY attempt=%d popped=%s", attempt, yesNo(popped));
+            ROS_INFO("[craic_demo] BALLOON_VERIFY attempt=%d direct_detected=%s popped=%s",
+                     attempt, yesNo(direct_detected), yesNo(popped));
             if (popped) {
                 break;
             }
@@ -1182,6 +1216,143 @@ private:
 
     double servoErrorScore(const BalloonServo& servo) const {
         return std::hypot(servo.err_u, servo.err_v);
+    }
+
+    bool directPdPuncture(double yaw,
+                          const Eigen::Vector2d& forward,
+                          const Eigen::Vector2d& left,
+                          const VerifyRoi& roi) {
+        const int state_filtered_hold = 4;
+        const int state_near_blob = 5;
+        const Eigen::Vector3d start = api_.getOdomPosition();
+        const ros::Time start_time = ros::Time::now();
+        const ros::Time deadline = start_time + ros::Duration(std::max(0.5, balloon_direct_timeout_));
+        const double area_threshold = std::max(1.0, roi.baseline_area * balloon_pop_area_drop_ratio_);
+        const bool have_start_depth = freshBalloonDepth();
+        const double start_depth = have_start_depth ? balloon_detection_.depth
+                                                    : std::numeric_limits<double>::quiet_NaN();
+        ros::Time last = start_time;
+        ros::Time last_reliable_servo = freshBalloonServo() ? start_time : ros::Time(0);
+        bool have_prev_error = false;
+        double prev_err_u = 0.0;
+        double prev_err_v = 0.0;
+        bool detected = false;
+        std::string reason = "distance";
+        double progress = 0.0;
+        double depth = start_depth;
+        double area = freshVerifyRoiResult() ? verify_roi_result_.area : -1.0;
+
+        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE start forward=%.2f slow=%.2f max_distance=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f",
+                 balloon_direct_forward_speed_, balloon_direct_slow_speed_,
+                 balloon_direct_max_distance_, balloon_direct_timeout_,
+                 area_threshold, start_depth);
+
+        ros::Rate rate(50);
+        while (ros::ok() && ros::Time::now() < deadline) {
+            ros::spinOnce();
+            const ros::Time now = ros::Time::now();
+            const double dt = std::max(1e-3, (now - last).toSec());
+            last = now;
+
+            if (freshVerifyRoiResult()) {
+                area = verify_roi_result_.area;
+                if (area <= area_threshold) {
+                    detected = true;
+                    reason = "area_drop";
+                    break;
+                }
+            }
+
+            if (freshBalloonDepth()) {
+                depth = balloon_detection_.depth;
+                if (have_start_depth && depth >= start_depth + balloon_puncture_depth_jump_) {
+                    detected = true;
+                    reason = "depth_jump";
+                    break;
+                }
+            }
+
+            double forward_speed = std::abs(balloon_direct_forward_speed_);
+            double lateral_speed = 0.0;
+            double z_speed = 0.0;
+            std::string servo_state = "lost";
+
+            if (freshBalloonServo()) {
+                const BalloonServo servo = balloon_servo_;
+                const bool filtered_hold = servo.state == state_filtered_hold;
+                const bool near_blob = servo.state == state_near_blob;
+                if (!filtered_hold) {
+                    last_reliable_servo = now;
+                }
+
+                const double stale_age = last_reliable_servo.isValid()
+                                             ? (now - last_reliable_servo).toSec()
+                                             : std::numeric_limits<double>::infinity();
+                if (filtered_hold && stale_age > balloon_direct_servo_lost_timeout_) {
+                    reason = "servo_lost";
+                    break;
+                }
+
+                const double du = have_prev_error ? (servo.err_u - prev_err_u) / dt : 0.0;
+                const double dv = have_prev_error ? (servo.err_v - prev_err_v) / dt : 0.0;
+                prev_err_u = servo.err_u;
+                prev_err_v = servo.err_v;
+                have_prev_error = true;
+
+                const double scale = near_blob ? clampValue(balloon_direct_near_blob_speed_scale_, 0.1, 1.0) : 1.0;
+                const double max_lateral = std::max(0.0, balloon_direct_max_lateral_speed_ * scale);
+                const double max_z = std::max(0.0, balloon_direct_max_z_speed_ * scale);
+                lateral_speed = clampValue(-balloon_direct_kp_u_ * servo.err_u - balloon_direct_kd_u_ * du,
+                                           -max_lateral, max_lateral);
+                z_speed = clampValue(-balloon_direct_kp_v_ * servo.err_v - balloon_direct_kd_v_ * dv,
+                                     -max_z, max_z);
+                if (std::abs(servo.err_u) > 0.35 || std::abs(servo.err_v) > 0.35 || filtered_hold) {
+                    forward_speed = std::min(forward_speed, std::abs(balloon_direct_slow_speed_));
+                }
+                servo_state = filtered_hold ? "filtered_hold" : (near_blob ? "near_blob" : "normal");
+            } else {
+                const double stale_age = last_reliable_servo.isValid()
+                                             ? (now - last_reliable_servo).toSec()
+                                             : std::numeric_limits<double>::infinity();
+                if (stale_age > balloon_direct_servo_lost_timeout_) {
+                    reason = "servo_lost";
+                    break;
+                }
+                forward_speed = std::min(forward_speed, std::abs(balloon_direct_slow_speed_));
+                have_prev_error = false;
+            }
+
+            sendVelocityCmdWithYaw(forward_speed * forward.x() + lateral_speed * left.x(),
+                                   forward_speed * forward.y() + lateral_speed * left.y(),
+                                   z_speed,
+                                   yaw);
+
+            const Eigen::Vector3d now_pos = api_.getOdomPosition();
+            const Eigen::Vector2d delta(now_pos.x() - start.x(), now_pos.y() - start.y());
+            progress = delta.dot(forward);
+            if (progress >= balloon_direct_max_distance_) {
+                reason = "distance";
+                break;
+            }
+
+            if (!simple_logs_) {
+                ROS_INFO_THROTTLE(mission_log_period_,
+                                  "[craic_demo] BALLOON_DIRECT_PD_PUNCTURE state=%s progress=%.2f/%.2f forward=%.2f lat=%.2f z=%.2f area=%.0f threshold=%.0f depth=%.2f",
+                                  servo_state.c_str(), progress, balloon_direct_max_distance_,
+                                  forward_speed, lateral_speed, z_speed, area, area_threshold, depth);
+            }
+            rate.sleep();
+        }
+
+        if (!detected && ros::Time::now() >= deadline && reason == "distance" &&
+            progress < balloon_direct_max_distance_) {
+            reason = "timeout";
+        }
+        holdOverride(0.05, yaw);
+        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE result detected=%s reason=%s progress=%.2f distance=%.2f area=%.0f threshold=%.0f depth=%.2f start_depth=%.2f",
+                 yesNo(detected), reason.c_str(), progress, balloon_direct_max_distance_,
+                 area, area_threshold, depth, start_depth);
+        return detected;
     }
 
     bool servoAlign(double yaw,
@@ -1933,6 +2104,7 @@ private:
     double mission_log_period_ = 1.0;
     bool simple_logs_ = true;
     bool land_after_finish_ = true;
+    bool takeoff_direct_to_initial_wait_ = true;
 
     Eigen::Vector3d initial_wait_ = Eigen::Vector3d(0.0, -0.85, 1.0);
     Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(3.2, -1.25, 1.25);
@@ -1998,20 +2170,34 @@ private:
     double balloon_backoff_distance_ = 0.12;
     double balloon_pop_verify_timeout_ = 1.0;
     double balloon_pop_area_drop_ratio_ = 0.35;
-    double balloon_pop_verify_roi_scale_ = 1.5;
-    double balloon_pop_verify_roi_min_px_ = 120.0;
+    double balloon_pop_verify_roi_scale_ = 2.0;
+    double balloon_pop_verify_roi_min_px_ = 160.0;
     int balloon_max_retry_ = 1;
     double balloon_return_home_land_z_ = 1.0;
+    double balloon_direct_forward_speed_ = 0.22;
+    double balloon_direct_slow_speed_ = 0.10;
+    double balloon_direct_max_distance_ = 0.85;
+    double balloon_direct_timeout_ = 5.0;
+    double balloon_direct_kp_u_ = 0.24;
+    double balloon_direct_kd_u_ = 0.04;
+    double balloon_direct_kp_v_ = 0.16;
+    double balloon_direct_kd_v_ = 0.03;
+    double balloon_direct_max_lateral_speed_ = 0.16;
+    double balloon_direct_max_z_speed_ = 0.12;
+    double balloon_direct_near_blob_speed_scale_ = 0.6;
+    double balloon_direct_servo_lost_timeout_ = 0.35;
 
     double override_move_timeout_ = 30.0;
     double override_pos_threshold_ = 0.10;
     double override_smooth_speed_ = 0.35;
+    double aggressive_override_speed_ = 0.85;
     double override_yaw_timeout_ = 10.0;
-    double override_yaw_threshold_ = 0.10;
-    double override_yaw_hold_time_ = 0.25;
-    double override_yaw_rate_ = 0.5;
-    double reverse_yaw_pre_hold_ = 0.30;
-    double reverse_yaw_post_hold_ = 0.50;
+    double override_yaw_threshold_ = 0.16;
+    double override_yaw_hold_time_ = 0.08;
+    double override_yaw_rate_ = 1.4;
+    double reverse_yaw_pre_hold_ = 0.05;
+    double reverse_yaw_post_hold_ = 0.10;
+    double override_yaw_post_hold_ = 0.05;
     double yaw_anchor_drift_warn_ = 0.15;
     double attack_zone_overrun_x_ = 0.30;
     bool robust_land_enable_ = true;

@@ -11,7 +11,7 @@
 
     当前控制分层：
     - EGO：第一次穿门框到 frame_post_control，回打击区 attack_zone。
-    - ego_bridge override：起飞后的等待点、QR 点、QR 后返回门后点、转 yaw、下降、气球对齐和扎球。
+    - ego_bridge override：起飞等待点偏差兜底、QR 点、QR 后返回门后点、转 yaw、下降和直接 PD 扎球。
 
     注意：
     这里大部分 arg 都会继续传给下面的节点。改参数前先确认是影响主任务逻辑、
@@ -19,8 +19,8 @@
 
     完整任务时序速查：
     1. ego_bridge 连接成功后记录 initial_yaw。
-    2. takeoff 到 takeoff_height=1.0。
-    3. override 平滑位置控制到 initial_wait=(0.0,-0.85,1.0)。
+    2. ego_bridge takeoff 预热后连续 setpoint 直飞 initial_wait=(0.0,-0.85,1.0)。
+    3. 主任务只校验 initial_wait 偏差，偏差过大才用 aggressive override 兜底补点。
     4. 主任务订阅 /craic/frame_center 和 /craic/frame_status，等待稳定门框中心。
     5. 若识别稳定且离 expected_frame 的 xyz 单轴误差都不超过 frame_center_reject_distance，则使用识别值。
     6. 若识别超时、不稳定、状态无效、距离过大，则使用 expected_frame=(3.2,-1.25,1.25)。
@@ -32,7 +32,7 @@
     12. override 返回之前保存的 frame_post_control。
     13. EGO 回打击区 attack_zone=(0.0,-0.8,1.25)，x 到 0.25 以内后接管继续。
     14. override 先右转 90 度到 attack_yaw，再下降到 attack_height=0.35。
-    15. 气球 world 点粗定位，D435 图像 servo 对齐，低速前冲扎球，ROI 验证是否扎破。
+    15. 气球 world 点粗定位到 0.70m standoff，锁定 ROI 后直接 PD 前冲扎球，ROI 面积下降优先验证是否扎破。
     16. 扎球成功后回 (0,0,1)，切 PX4 AUTO.LAND。
 
     常用启动命令：
@@ -47,15 +47,16 @@
     - 想改飞行流程目标点，优先改 initial_wait、expected_frame、qr_goal、attack_zone 这些主任务参数。
     - 想改 EGO 速度/加速度，到 ego_planner 的 single_run_in_exp.launch 或 advanced_param_exp.xml 看，不在这里直接调。
     - 想改门框识别算法，先看 /craic/frame_status、/craic/frame_center、/craic/frame_markers，再改 frame detector 参数。
-    - 想改 override 平滑程度，改 override_smooth_speed 和 override_yaw_rate。
-    - 想改扎气球动作，优先改 balloon_standoff、servo 阈值、fine_forward、puncture 参数。
+    - 想改 override 平滑程度，改 override_smooth_speed、aggressive_override_speed 和 override_yaw_rate。
+    - 想改扎气球动作，优先改 balloon_standoff、balloon_direct_*、pop_verify 参数。
 -->
 <launch>
     <!--
         基础飞控命名空间和全局飞行高度。
         bridge_ns：ego_bridge 的 ROS 命名空间，主任务通过它调用 takeoff、override、land 等接口。
         flight_z：传给部分检测/规划节点的默认高度，不等于每个任务点的高度。
-        takeoff_height：ego_bridge 起飞高度，当前比赛流程起飞到 1.0m。
+        takeoff_height：ego_bridge 起飞高度；启用 takeoff_direct_to_initial_wait 后，z 由 initial_wait_z 决定。
+        takeoff_direct_to_initial_wait：让 ego_bridge 起飞阶段直接连续飞到 initial_wait，主任务只做偏差兜底。
         land_after_finish：任务结束后是否执行降落；扎球成功后当前流程优先回 (0,0,1) 再切 PX4 LAND。
 
         参数关系：
@@ -67,6 +68,7 @@
     <arg name="flight_z" default="1.0" />
     <arg name="takeoff_height" default="1.0" />
     <arg name="land_after_finish" default="true" />
+    <arg name="takeoff_direct_to_initial_wait" default="true" />
 
     <!--
         节点启动开关。
@@ -131,8 +133,8 @@
 
     <!--
         起飞后第一个等待点。
-        主流程：takeoff 到 1.0m 后，用 ego_bridge override 平滑位置控制飞到这里，
-        然后开始锁定门框中心。这个点不是 EGO 目标。
+        主流程：ego_bridge 起飞阶段预热后连续直飞到这里，然后主任务做一次 odom 偏差校验。
+        若偏差大于 0.18m，才用 aggressive override 兜底补点。这个点不是 EGO 目标。
 
         调参影响：
         - y 太靠近柱子/门框，点云可能粘连，门框检测会出现 post_too_wide 等拒绝原因。
@@ -217,13 +219,14 @@
         attack_height：攻击前右转 90 度后下降到的扎球高度。
         balloon_wait_timeout：低空等待新鲜气球 world 点的最长时间，超时不盲目前冲。
         balloon_standoff：粗定位时停在气球前方的安全距离。
-        balloon_puncture_distance/speed：最终前冲扎球距离和速度。
+        balloon_puncture_distance/speed：旧扎球前冲参数；当前直接 PD 扎球只保留 speed 给后退动作沿用。
 
         当前顺序：
         - QR 后 override 返回 frame_post_control。
         - 再 EGO 回 attack_zone。
         - 到 attack_zone 或触发 attack_zone_overrun_x 保护后，先右转 90 度，再下降到 attack_height。
         - 然后才开始气球识别和扎球。
+        - 扎球阶段先到 balloon_standoff，再锁定 ROI，随后直接 PD 前冲。
 
         扎球安全性：
         - balloon_standoff 越大，离车/气球越远，粗定位更保守。
@@ -251,26 +254,23 @@
 
     <!--
         气球针头、画面对齐和扎球确认参数。
-        needle_length/puncture_extra 用于根据气球深度估计前冲剩余量。
-        servo_* 是使用 /balloon/servo 做图像中心对齐的阈值、增益和速度限幅。
-        fine_forward_* 是对齐后低速贴近阶段。
-        pop_verify_* 是扎球后通过 ROI 面积变化确认是否扎破。
+        needle_length/puncture_extra、servo_*、fine_forward_* 保留给旧流程和回退调试。
+        balloon_direct_* 是 standoff 后直接 PD 前冲参数，使用 /balloon/servo 的 err_u/err_v 修横向和高度。
+        pop_verify_* 是直接前冲中和后退后通过 ROI 面积变化确认是否扎破。
 
         气球攻击流程更细：
         - 先用 /balloon/world_point 计算气球前方 standoff 点。
-        - override 到 standoff 点后，进入图像 servo 对齐。
-        - servo_u 主要对应左右误差，servo_v 主要对应上下误差。
-        - 达到 servo_u_threshold、servo_v_threshold 并保持 servo_hold_time 后，执行 fine_forward。
-        - 如果气球晃动导致无法稳定保持，但 best_sample 在 best_u/v_threshold 内，
-          超过 best_accept_timeout 后也会进入 fine_forward，前进中继续视觉修正。
-        - fine_forward 后再执行 puncture 前冲。
-        - 前冲后用 verify_roi 面积下降比例判断是否扎破。
+        - override 到 standoff 点后，立即读取新鲜 /balloon/servo 并锁定较大 verify ROI。
+        - 直接 PD 前冲：err_u 修横向，err_v 修高度，forward_v 持续前进。
+        - state=5 near blob 时继续 PD，但横向/高度限幅降低；state=4 filtered hold 短时间继续冲刺。
+        - 前冲中优先用 verify_roi 面积下降判断扎破，depth jump 只作辅助。
+        - 触发扎破、达到最大前冲距离或超时后，立即 hold、后退 0.12m，再最终 verify。
 
         速度含义：
         - balloon_servo_max_lateral_speed 限制横向对齐速度。
         - balloon_servo_max_z_speed 限制上下对齐速度。
-        - balloon_fine_forward_speed 是贴近气球阶段速度。
-        - balloon_puncture_speed 是最后扎球前冲速度。
+        - balloon_direct_forward_speed 是直接 PD 扎球前冲速度。
+        - balloon_direct_max_lateral_speed / max_z_speed 限制 PD 横向和高度速度。
     -->
     <arg name="balloon_needle_length" default="0.18" />
     <arg name="balloon_puncture_extra" default="0.04" />
@@ -295,10 +295,22 @@
     <arg name="balloon_backoff_distance" default="0.12" />
     <arg name="balloon_pop_verify_timeout" default="1.0" />
     <arg name="balloon_pop_area_drop_ratio" default="0.35" />
-    <arg name="balloon_pop_verify_roi_scale" default="1.5" />
-    <arg name="balloon_pop_verify_roi_min_px" default="120.0" />
+    <arg name="balloon_pop_verify_roi_scale" default="2.0" />
+    <arg name="balloon_pop_verify_roi_min_px" default="160.0" />
     <arg name="balloon_max_retry" default="1" />
     <arg name="balloon_return_home_land_z" default="1.0" />
+    <arg name="balloon_direct_forward_speed" default="0.22" />
+    <arg name="balloon_direct_slow_speed" default="0.10" />
+    <arg name="balloon_direct_max_distance" default="0.85" />
+    <arg name="balloon_direct_timeout" default="5.0" />
+    <arg name="balloon_direct_kp_u" default="0.24" />
+    <arg name="balloon_direct_kd_u" default="0.04" />
+    <arg name="balloon_direct_kp_v" default="0.16" />
+    <arg name="balloon_direct_kd_v" default="0.03" />
+    <arg name="balloon_direct_max_lateral_speed" default="0.16" />
+    <arg name="balloon_direct_max_z_speed" default="0.12" />
+    <arg name="balloon_direct_near_blob_speed_scale" default="0.6" />
+    <arg name="balloon_direct_servo_lost_timeout" default="0.35" />
     <arg name="balloon_detection_topic" default="/balloon/detection" />
     <arg name="balloon_servo_topic" default="/balloon/servo" />
     <arg name="balloon_verify_roi_topic" default="/balloon/verify_roi" />
@@ -309,7 +321,9 @@
         override_move_timeout：单段 override 位置移动最大等待时间。
         override_pos_threshold：override 到点判定半径。
         override_smooth_speed：override 位置 setpoint 推进速度，不是速度控制，是平滑发布中间位置点。
+        aggressive_override_speed：只给 initial_wait 兜底、QR 去程和 QR 后返回这些明确提速段使用。
         override_yaw_*：原地 yaw 对齐阈值、保持时间和角速度限幅。
+        override_yaw_post_hold：普通 yaw 对齐后的短保持时间。
         reverse_yaw_pre/post_hold：门后转 180 度前后固定锚点保持时间。
         yaw_anchor_drift_warn：固定锚点 yaw 对齐时，水平漂移超过该值会打印 warning。
         attack_zone_overrun_x：EGO 回打击区时的 x 保护，到 x 小于该值就接管并继续攻击流程。
@@ -329,12 +343,14 @@
     <arg name="override_move_timeout" default="30.0" />
     <arg name="override_pos_threshold" default="0.10" />
     <arg name="override_smooth_speed" default="0.35" />
+    <arg name="aggressive_override_speed" default="0.85" />
     <arg name="override_yaw_timeout" default="10.0" />
-    <arg name="override_yaw_threshold" default="0.10" />
-    <arg name="override_yaw_hold_time" default="0.25" />
-    <arg name="override_yaw_rate" default="0.5" />
-    <arg name="reverse_yaw_pre_hold" default="0.30" />
-    <arg name="reverse_yaw_post_hold" default="0.50" />
+    <arg name="override_yaw_threshold" default="0.16" />
+    <arg name="override_yaw_hold_time" default="0.08" />
+    <arg name="override_yaw_rate" default="1.4" />
+    <arg name="reverse_yaw_pre_hold" default="0.05" />
+    <arg name="reverse_yaw_post_hold" default="0.10" />
+    <arg name="override_yaw_post_hold" default="0.05" />
     <arg name="yaw_anchor_drift_warn" default="0.15" />
     <arg name="attack_zone_overrun_x" default="0.30" />
 
@@ -565,6 +581,10 @@
                   ns="ego_bridge" />
         <node pkg="ego_bridge" type="ego_bridge_node" name="ego_bridge" output="screen">
             <param name="takeoff/height" value="$(arg takeoff_height)" />
+            <param name="takeoff/direct_target_enable" value="$(arg takeoff_direct_to_initial_wait)" />
+            <param name="takeoff/direct_target_x" value="$(arg initial_wait_x)" />
+            <param name="takeoff/direct_target_y" value="$(arg initial_wait_y)" />
+            <param name="takeoff/direct_target_z" value="$(arg initial_wait_z)" />
             <param name="log/info" value="$(arg ego_bridge_info_logs)" />
             <remap from="~odom" to="/mavros/local_position/odom" />
             <remap from="~cmd" to="/position_cmd" />
@@ -711,8 +731,8 @@
 
         当前主流程摘要：
         1. 等待 ego_bridge 连接，记录 initial_yaw。
-        2. ego_bridge takeoff 到 takeoff_height。
-        3. override 到 initial_wait。
+        2. ego_bridge takeoff 预热后连续直飞到 initial_wait。
+        3. 校验 initial_wait 偏差，偏差大于 0.18m 才用 aggressive override 兜底。
         4. 读取 /craic/frame_center，5s 内锁定稳定中心，否则用 expected_frame。
         5. 生成 frame_post_control；识别中心加 frame_post_y_offset，默认中心不加 y 偏移。
         6. EGO 飞到 frame_post_control，同时启用 x 过门保护。
@@ -721,7 +741,7 @@
         9. override 返回保存的 frame_post_control。
         10. EGO 回 attack_zone，x 小于 attack_zone_overrun_x 时接管并继续。
         11. override 右转 90 度，下降到 attack_height。
-        12. 等待气球 world 点，粗定位、图像中心对齐、低速前冲扎球并验证。
+        12. 等待气球 world 点，粗定位到 0.70m standoff，锁定 ROI 后直接 PD 前冲扎球并验证。
         13. 扎球成功后回 (0,0,1)，切 PX4 AUTO.LAND。
 
         下面这些 param 基本都是把上面的 arg 原样传给主任务节点。
@@ -745,6 +765,7 @@
         <param name="mission_log_period" value="$(arg mission_log_period)" />
         <param name="simple_logs" value="$(arg simple_logs)" />
         <param name="land_after_finish" value="$(arg land_after_finish)" />
+        <param name="takeoff_direct_to_initial_wait" value="$(arg takeoff_direct_to_initial_wait)" />
         <param name="initial_wait_x" value="$(arg initial_wait_x)" />
         <param name="initial_wait_y" value="$(arg initial_wait_y)" />
         <param name="initial_wait_z" value="$(arg initial_wait_z)" />
@@ -819,6 +840,18 @@
         <param name="balloon_pop_verify_roi_min_px" value="$(arg balloon_pop_verify_roi_min_px)" />
         <param name="balloon_max_retry" value="$(arg balloon_max_retry)" />
         <param name="balloon_return_home_land_z" value="$(arg balloon_return_home_land_z)" />
+        <param name="balloon_direct_forward_speed" value="$(arg balloon_direct_forward_speed)" />
+        <param name="balloon_direct_slow_speed" value="$(arg balloon_direct_slow_speed)" />
+        <param name="balloon_direct_max_distance" value="$(arg balloon_direct_max_distance)" />
+        <param name="balloon_direct_timeout" value="$(arg balloon_direct_timeout)" />
+        <param name="balloon_direct_kp_u" value="$(arg balloon_direct_kp_u)" />
+        <param name="balloon_direct_kd_u" value="$(arg balloon_direct_kd_u)" />
+        <param name="balloon_direct_kp_v" value="$(arg balloon_direct_kp_v)" />
+        <param name="balloon_direct_kd_v" value="$(arg balloon_direct_kd_v)" />
+        <param name="balloon_direct_max_lateral_speed" value="$(arg balloon_direct_max_lateral_speed)" />
+        <param name="balloon_direct_max_z_speed" value="$(arg balloon_direct_max_z_speed)" />
+        <param name="balloon_direct_near_blob_speed_scale" value="$(arg balloon_direct_near_blob_speed_scale)" />
+        <param name="balloon_direct_servo_lost_timeout" value="$(arg balloon_direct_servo_lost_timeout)" />
         <param name="balloon_detection_topic" value="$(arg balloon_detection_topic)" />
         <param name="balloon_servo_topic" value="$(arg balloon_servo_topic)" />
         <param name="balloon_verify_roi_topic" value="$(arg balloon_verify_roi_topic)" />
@@ -826,12 +859,14 @@
         <param name="override_move_timeout" value="$(arg override_move_timeout)" />
         <param name="override_pos_threshold" value="$(arg override_pos_threshold)" />
         <param name="override_smooth_speed" value="$(arg override_smooth_speed)" />
+        <param name="aggressive_override_speed" value="$(arg aggressive_override_speed)" />
         <param name="override_yaw_timeout" value="$(arg override_yaw_timeout)" />
         <param name="override_yaw_threshold" value="$(arg override_yaw_threshold)" />
         <param name="override_yaw_hold_time" value="$(arg override_yaw_hold_time)" />
         <param name="override_yaw_rate" value="$(arg override_yaw_rate)" />
         <param name="reverse_yaw_pre_hold" value="$(arg reverse_yaw_pre_hold)" />
         <param name="reverse_yaw_post_hold" value="$(arg reverse_yaw_post_hold)" />
+        <param name="override_yaw_post_hold" value="$(arg override_yaw_post_hold)" />
         <param name="yaw_anchor_drift_warn" value="$(arg yaw_anchor_drift_warn)" />
         <param name="attack_zone_overrun_x" value="$(arg attack_zone_overrun_x)" />
         <param name="robust_land_enable" value="$(arg robust_land_enable)" />

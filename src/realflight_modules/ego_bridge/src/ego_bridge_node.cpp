@@ -84,6 +84,10 @@ struct Params {
     double reach_threshold;          // 判定到达起飞高度的阈值(m)
     double min_speed;                // 减速阶段的最小速度(m/s)，防止速度为零卡住
     double delay_trigger_time;       // 进入 HOVER 后延迟多久发 traj_start_trigger(秒)
+    bool   direct_target_enable;     // 起飞时是否直接平滑飞向指定三维目标
+    double direct_target_x;           // 起飞直飞目标 x
+    double direct_target_y;           // 起飞直飞目标 y
+    double direct_target_z;           // 起飞直飞目标 z
 
     // ── 降落参数 ──
     double landing_speed;            // 降落速度(m/s)
@@ -124,6 +128,10 @@ struct Params {
         nh.param("takeoff/reach_threshold",     reach_threshold,      0.05);
         nh.param("takeoff/min_speed",           min_speed,            0.05);
         nh.param("takeoff/delay_trigger_time",  delay_trigger_time,   2.0);
+        nh.param("takeoff/direct_target_enable", direct_target_enable, false);
+        nh.param("takeoff/direct_target_x",      direct_target_x,      0.0);
+        nh.param("takeoff/direct_target_y",      direct_target_y,      0.0);
+        nh.param("takeoff/direct_target_z",      direct_target_z,      1.0);
 
         nh.param("landing/speed",               landing_speed,          0.18);
         nh.param("landing/min_detect_time",     min_landing_detect_time, 2.0);
@@ -244,8 +252,11 @@ private:
     // ── TAKEOFF 状态变量：起飞过程跟踪 ──
     Eigen::Vector3d takeoff_start_pos_;  // 起飞时的起始位置
     double          takeoff_target_z_   = 0.0;  // 起飞目标高度
+    Eigen::Vector3d takeoff_direct_target_ = Eigen::Vector3d::Zero(); // 起飞直飞目标
+    Eigen::Vector3d takeoff_setpoint_ = Eigen::Vector3d::Zero();      // 连续推进的起飞中间点
     double          takeoff_start_yaw_  = 0.0;  // 起飞时锁定的航向角
     ros::Time       takeoff_start_time_;         // 起飞计时起点
+    ros::Time       takeoff_last_update_time_;   // 起飞直飞 setpoint 上次推进时间
     bool            warmup_done_        = false; // 电机预热是否完成
     bool            trigger_sent_       = false; // 是否已发送 traj_start_trigger
     ros::Time       hover_enter_time_;           // 进入 HOVER 的时间（用于延迟触发）
@@ -414,16 +425,31 @@ private:
     void enterTakeoff() {
         state_ = State::TAKEOFF;
         takeoff_start_pos_  = odom_pos_;                  // 记录当前位置作为起飞基准
+        takeoff_setpoint_   = takeoff_start_pos_;
         takeoff_start_yaw_  = odom_yaw_;                  // 锁定起飞航向，避免起飞阶段 yaw 跟随漂动
         takeoff_target_z_   = params_.takeoff_height;     // 目标绝对高度
         if (takeoff_target_z_ < odom_pos_.z()) {
             takeoff_target_z_ = odom_pos_.z();            // 保护：如果已经高于目标则保持当前高度
         }
+        takeoff_direct_target_ << params_.direct_target_x,
+                                  params_.direct_target_y,
+                                  params_.direct_target_z;
+        if (takeoff_direct_target_.z() < odom_pos_.z()) {
+            takeoff_direct_target_.z() = odom_pos_.z();
+        }
         takeoff_start_time_ = ros::Time::now();
+        takeoff_last_update_time_ = takeoff_start_time_;
         warmup_done_        = false;
         trigger_sent_       = false;
         if (params_.verbose_info) {
-            ROS_INFO("[ego_bridge] STATE -> TAKEOFF target_z=%.2f", takeoff_target_z_);
+            if (params_.direct_target_enable) {
+                ROS_INFO("[ego_bridge] STATE -> TAKEOFF direct_target=(%.2f %.2f %.2f)",
+                         takeoff_direct_target_.x(),
+                         takeoff_direct_target_.y(),
+                         takeoff_direct_target_.z());
+            } else {
+                ROS_INFO("[ego_bridge] STATE -> TAKEOFF target_z=%.2f", takeoff_target_z_);
+            }
         }
     }
 
@@ -743,7 +769,14 @@ private:
             }
             warmup_done_ = true;
             takeoff_start_time_ = now;  // 重置计时器，开始爬升阶段
+            takeoff_setpoint_ = odom_pos_;
+            takeoff_last_update_time_ = now;
             dt = 0.0;
+        }
+
+        if (params_.direct_target_enable) {
+            runDirectTakeoff(now);
+            return;
         }
 
         // 阶段二：爬升 — 根据里程计反馈计算剩余距离，接近时减速
@@ -770,6 +803,63 @@ private:
                                   takeoff_target_z_);
         Eigen::Vector3d vel(0.0, 0.0, speed);
         pub_setpoint_.publish(posVelSetpoint(target_pos, vel, takeoff_start_yaw_));
+    }
+
+    /// 【TAKEOFF 直飞】预热后按速度限制连续推进三维 setpoint，接近目标时减速。
+    void runDirectTakeoff(const ros::Time& now) {
+        const double cycle_dt = takeoff_last_update_time_.isValid()
+                                    ? std::max(0.0, (now - takeoff_last_update_time_).toSec())
+                                    : 0.0;
+        takeoff_last_update_time_ = now;
+        const Eigen::Vector3d odom_error = takeoff_direct_target_ - odom_pos_;
+        const Eigen::Vector3d setpoint_error = takeoff_direct_target_ - takeoff_setpoint_;
+        const double odom_dist = odom_error.norm();
+        const double setpoint_dist = setpoint_error.norm();
+
+        if (odom_dist <= params_.reach_threshold &&
+            setpoint_dist <= std::max(params_.reach_threshold, 0.02)) {
+            pub_setpoint_.publish(posOnlySetpoint(takeoff_direct_target_, takeoff_start_yaw_));
+            enterHover();
+            return;
+        }
+
+        if (setpoint_dist < 1e-4) {
+            pub_setpoint_.publish(posVelSetpoint(takeoff_direct_target_,
+                                                 Eigen::Vector3d::Zero(),
+                                                 takeoff_start_yaw_));
+            return;
+        }
+
+        double speed = params_.takeoff_speed;
+        if (setpoint_dist < params_.decel_distance && params_.decel_distance > 1e-4) {
+            speed *= setpoint_dist / params_.decel_distance;
+            speed = std::max(speed, params_.min_speed);
+        }
+
+        const Eigen::Vector3d direction = setpoint_error / setpoint_dist;
+        const double step = speed * cycle_dt;
+        if (setpoint_dist <= step || setpoint_dist < 1e-4) {
+            takeoff_setpoint_ = takeoff_direct_target_;
+        } else if (step > 0.0) {
+            takeoff_setpoint_ += direction * step;
+        }
+
+        pub_setpoint_.publish(posVelSetpoint(takeoff_setpoint_,
+                                             direction * speed,
+                                             takeoff_start_yaw_));
+        if (params_.verbose_info) {
+            ROS_INFO_THROTTLE(0.5,
+                              "[ego_bridge] TAKEOFF direct setpoint=(%.2f %.2f %.2f) target=(%.2f %.2f %.2f) odom_dist=%.3f sp_dist=%.3f speed=%.2f",
+                              takeoff_setpoint_.x(),
+                              takeoff_setpoint_.y(),
+                              takeoff_setpoint_.z(),
+                              takeoff_direct_target_.x(),
+                              takeoff_direct_target_.y(),
+                              takeoff_direct_target_.z(),
+                              odom_dist,
+                              setpoint_dist,
+                              speed);
+        }
     }
 
     /// 【HOVER】悬停状态：锁定位置 + 延时触发 EGO + 等待 EGO 命令进 TRACKING
