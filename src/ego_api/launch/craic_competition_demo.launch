@@ -19,7 +19,7 @@
 
     完整任务时序速查：
     1. ego_bridge 连接成功后记录 initial_yaw。
-    2. ego_bridge takeoff 预热后连续 setpoint 直飞 initial_wait=(0.0,-0.85,1.0)。
+    2. ego_bridge takeoff 预热后连续 setpoint 直飞 initial_wait=(0.0,-0.85,1.13)。
     3. takeoff 返回后主任务立即订阅 /craic/frame_center 和 /craic/frame_status，等待稳定门框中心。
     4. 若识别稳定且离 expected_frame 的 xyz 单轴误差都不超过 frame_center_reject_distance，则使用识别值。
     5. 若识别超时、不稳定、状态无效、距离过大，则使用 expected_frame=(3.2,-1.25,1.25)。
@@ -146,7 +146,7 @@
     -->
     <arg name="initial_wait_x" default="0.0" />
     <arg name="initial_wait_y" default="-0.85" />
-    <arg name="initial_wait_z" default="1.0" />
+    <arg name="initial_wait_z" default="1.13" />
 
     <!--
         门框中心锁定和兜底参数，作用在 craic_competition_demo 主任务节点。
