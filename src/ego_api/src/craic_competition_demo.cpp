@@ -162,7 +162,6 @@ public:
         pnh_.param<double>("mission_log_period", mission_log_period_, 1.0);
         pnh_.param<bool>("simple_logs", simple_logs_, true);
         pnh_.param<bool>("land_after_finish", land_after_finish_, true);
-        pnh_.param<bool>("takeoff_direct_to_initial_wait", takeoff_direct_to_initial_wait_, true);
 
         pnh_.param<double>("initial_wait_x", initial_wait_.x(), 0.0);
         pnh_.param<double>("initial_wait_y", initial_wait_.y(), -0.85);
@@ -251,8 +250,13 @@ public:
         pnh_.param<double>("balloon_direct_kd_v", balloon_direct_kd_v_, 0.03);
         pnh_.param<double>("balloon_direct_max_lateral_speed", balloon_direct_max_lateral_speed_, 0.16);
         pnh_.param<double>("balloon_direct_max_z_speed", balloon_direct_max_z_speed_, 0.12);
-        pnh_.param<double>("balloon_direct_near_blob_speed_scale", balloon_direct_near_blob_speed_scale_, 0.6);
+        pnh_.param<double>("balloon_direct_near_blob_speed_scale", balloon_direct_near_blob_speed_scale_, 0.35);
+        pnh_.param<double>("balloon_direct_near_blob_forward_scale", balloon_direct_near_blob_forward_scale_, 0.6);
         pnh_.param<double>("balloon_direct_servo_lost_timeout", balloon_direct_servo_lost_timeout_, 0.35);
+        pnh_.param<double>("balloon_direct_fast_u_threshold", balloon_direct_fast_u_threshold_, 0.12);
+        pnh_.param<double>("balloon_direct_fast_v_threshold", balloon_direct_fast_v_threshold_, 0.13);
+        pnh_.param<double>("balloon_direct_lateral_sign", balloon_direct_lateral_sign_, -1.0);
+        pnh_.param<double>("balloon_direct_z_sign", balloon_direct_z_sign_, -1.0);
 
         pnh_.param<double>("override_move_timeout", override_move_timeout_, 30.0);
         pnh_.param<double>("override_pos_threshold", override_pos_threshold_, 0.10);
@@ -320,32 +324,6 @@ public:
         if (!api_.takeoff(takeoff_timeout_)) {
             ROS_ERROR("[craic_demo] FAIL stage=TAKEOFF");
             return 1;
-        }
-
-        if (takeoff_direct_to_initial_wait_) {
-            logStage("INITIAL_WAIT_CHECK", "direct takeoff should already be at first wait point");
-            const Eigen::Vector3d initial_wait_error = api_.getOdomPosition() - initial_wait_;
-            const double initial_wait_dist = initial_wait_error.norm();
-            ROS_INFO("[craic_demo] INITIAL_WAIT_CHECK target=(%.2f %.2f %.2f) dist=%.3f tolerance=0.180",
-                     initial_wait_.x(), initial_wait_.y(), initial_wait_.z(), initial_wait_dist);
-            if (initial_wait_dist > 0.18) {
-                ROS_WARN("[craic_demo] INITIAL_WAIT_CHECK fallback=aggressive_override dist=%.3f", initial_wait_dist);
-                if (!overrideMoveToWithSpeed("initial_wait_direct_fallback", initial_wait_, initial_yaw,
-                                             override_pos_threshold_, override_move_timeout_,
-                                             aggressive_override_speed_)) {
-                    ROS_ERROR("[craic_demo] FAIL stage=INITIAL_WAIT_DIRECT_FALLBACK");
-                    safeLand();
-                    return 1;
-                }
-            }
-        } else {
-            logStage("INITIAL_WAIT_OVERRIDE", "move to known first wait point");
-            if (!overrideMoveTo("initial_wait", initial_wait_, initial_yaw,
-                                override_pos_threshold_, override_move_timeout_)) {
-                ROS_ERROR("[craic_demo] FAIL stage=INITIAL_WAIT_OVERRIDE");
-                safeLand();
-                return 1;
-            }
         }
 
         logStage("FRAME_CENTER", "wait frame center with expected fallback");
@@ -1302,12 +1280,21 @@ private:
                 const double scale = near_blob ? clampValue(balloon_direct_near_blob_speed_scale_, 0.1, 1.0) : 1.0;
                 const double max_lateral = std::max(0.0, balloon_direct_max_lateral_speed_ * scale);
                 const double max_z = std::max(0.0, balloon_direct_max_z_speed_ * scale);
-                lateral_speed = clampValue(-balloon_direct_kp_u_ * servo.err_u - balloon_direct_kd_u_ * du,
+                const double lateral_sign = balloon_direct_lateral_sign_ >= 0.0 ? 1.0 : -1.0;
+                const double z_sign = balloon_direct_z_sign_ >= 0.0 ? 1.0 : -1.0;
+                lateral_speed = clampValue(lateral_sign * (balloon_direct_kp_u_ * servo.err_u +
+                                                           balloon_direct_kd_u_ * du),
                                            -max_lateral, max_lateral);
-                z_speed = clampValue(-balloon_direct_kp_v_ * servo.err_v - balloon_direct_kd_v_ * dv,
+                z_speed = clampValue(z_sign * (balloon_direct_kp_v_ * servo.err_v +
+                                               balloon_direct_kd_v_ * dv),
                                      -max_z, max_z);
-                if (std::abs(servo.err_u) > 0.35 || std::abs(servo.err_v) > 0.35 || filtered_hold) {
+                if (std::abs(servo.err_u) > balloon_direct_fast_u_threshold_ ||
+                    std::abs(servo.err_v) > balloon_direct_fast_v_threshold_ ||
+                    filtered_hold) {
                     forward_speed = std::min(forward_speed, std::abs(balloon_direct_slow_speed_));
+                }
+                if (near_blob) {
+                    forward_speed *= clampValue(balloon_direct_near_blob_forward_scale_, 0.1, 1.0);
                 }
                 servo_state = filtered_hold ? "filtered_hold" : (near_blob ? "near_blob" : "normal");
             } else {
@@ -1337,9 +1324,11 @@ private:
 
             if (!simple_logs_) {
                 ROS_INFO_THROTTLE(mission_log_period_,
-                                  "[craic_demo] BALLOON_DIRECT_PD_PUNCTURE state=%s progress=%.2f/%.2f forward=%.2f lat=%.2f z=%.2f area=%.0f threshold=%.0f depth=%.2f",
-                                  servo_state.c_str(), progress, balloon_direct_max_distance_,
-                                  forward_speed, lateral_speed, z_speed, area, area_threshold, depth);
+                                  "[craic_demo] BALLOON_DIRECT_PD_PUNCTURE state=%s err=(%.3f %.3f) progress=%.2f/%.2f forward=%.2f lat=%.2f z=%.2f area=%.0f threshold=%.0f depth=%.2f",
+                                  servo_state.c_str(), prev_err_u, prev_err_v,
+                                  progress, balloon_direct_max_distance_,
+                                  forward_speed, lateral_speed, z_speed, area,
+                                  area_threshold, depth);
             }
             rate.sleep();
         }
@@ -2104,8 +2093,6 @@ private:
     double mission_log_period_ = 1.0;
     bool simple_logs_ = true;
     bool land_after_finish_ = true;
-    bool takeoff_direct_to_initial_wait_ = true;
-
     Eigen::Vector3d initial_wait_ = Eigen::Vector3d(0.0, -0.85, 1.0);
     Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(3.2, -1.25, 1.25);
     std::string frame_center_mode_ = "auto_detect";
@@ -2184,8 +2171,13 @@ private:
     double balloon_direct_kd_v_ = 0.03;
     double balloon_direct_max_lateral_speed_ = 0.16;
     double balloon_direct_max_z_speed_ = 0.12;
-    double balloon_direct_near_blob_speed_scale_ = 0.6;
+    double balloon_direct_near_blob_speed_scale_ = 0.35;
+    double balloon_direct_near_blob_forward_scale_ = 0.6;
     double balloon_direct_servo_lost_timeout_ = 0.35;
+    double balloon_direct_fast_u_threshold_ = 0.12;
+    double balloon_direct_fast_v_threshold_ = 0.13;
+    double balloon_direct_lateral_sign_ = -1.0;
+    double balloon_direct_z_sign_ = -1.0;
 
     double override_move_timeout_ = 30.0;
     double override_pos_threshold_ = 0.10;

@@ -20,20 +20,19 @@
     完整任务时序速查：
     1. ego_bridge 连接成功后记录 initial_yaw。
     2. ego_bridge takeoff 预热后连续 setpoint 直飞 initial_wait=(0.0,-0.85,1.0)。
-    3. 主任务只校验 initial_wait 偏差，偏差过大才用 aggressive override 兜底补点。
-    4. 主任务订阅 /craic/frame_center 和 /craic/frame_status，等待稳定门框中心。
-    5. 若识别稳定且离 expected_frame 的 xyz 单轴误差都不超过 frame_center_reject_distance，则使用识别值。
-    6. 若识别超时、不稳定、状态无效、距离过大，则使用 expected_frame=(3.2,-1.25,1.25)。
-    7. 计算 frame_post_control：识别中心用 (center.x+1.1, center.y-0.135, center.z)，默认中心用 (center.x+1.1, center.y, center.z)。
-    8. EGO 第一次穿门飞到 frame_post_control，并启用 x 过门保护。
-    9. override 原地平滑转到 reverse_yaw，也就是 initial_yaw+180 度。
-    10. override 平滑位置控制到 QR 点 (4.0,0.25,1.3)。
-    11. 识别二维码；若没识别到，执行升高和前后左右小搜索，最多 10s。
-    12. override 返回之前保存的 frame_post_control。
-    13. EGO 回打击区 attack_zone=(0.0,-0.8,1.25)，x 到 0.25 以内后接管继续。
-    14. override 先右转 90 度到 attack_yaw，再下降到 attack_height=0.35。
-    15. 气球 world 点粗定位到 0.70m standoff，锁定 ROI 后直接 PD 前冲扎球，ROI 面积下降优先验证是否扎破。
-    16. 扎球成功后回 (0,0,1)，切 PX4 AUTO.LAND。
+    3. takeoff 返回后主任务立即订阅 /craic/frame_center 和 /craic/frame_status，等待稳定门框中心。
+    4. 若识别稳定且离 expected_frame 的 xyz 单轴误差都不超过 frame_center_reject_distance，则使用识别值。
+    5. 若识别超时、不稳定、状态无效、距离过大，则使用 expected_frame=(3.2,-1.25,1.25)。
+    6. 计算 frame_post_control：识别中心用 (center.x+1.1, center.y-0.135, center.z)，默认中心用 (center.x+1.1, center.y, center.z)。
+    7. EGO 第一次穿门飞到 frame_post_control，并启用 x 过门保护。
+    8. override 原地平滑转到 reverse_yaw，也就是 initial_yaw+180 度。
+    9. override 平滑位置控制到 QR 点 (4.0,0.25,1.3)。
+    10. 识别二维码；若没识别到，执行升高和前后左右小搜索，最多 10s。
+    11. override 返回之前保存的 frame_post_control。
+    12. EGO 回打击区 attack_zone=(0.0,-0.8,1.25)，x 到 0.25 以内后接管继续。
+    13. override 先右转 90 度到 attack_yaw，再下降到 attack_height=0.35。
+    14. 气球 world 点粗定位到 0.70m standoff，锁定 ROI 后直接 PD 前冲扎球，ROI 面积下降优先验证是否扎破。
+    15. 扎球成功后回 (0,0,1)，切 PX4 AUTO.LAND。
 
     常用启动命令：
     - 正常比赛：
@@ -56,7 +55,7 @@
         bridge_ns：ego_bridge 的 ROS 命名空间，主任务通过它调用 takeoff、override、land 等接口。
         flight_z：传给部分检测/规划节点的默认高度，不等于每个任务点的高度。
         takeoff_height：ego_bridge 起飞高度；启用 takeoff_direct_to_initial_wait 后，z 由 initial_wait_z 决定。
-        takeoff_direct_to_initial_wait：让 ego_bridge 起飞阶段直接连续飞到 initial_wait，主任务只做偏差兜底。
+        takeoff_direct_to_initial_wait：让 ego_bridge 起飞阶段直接连续飞到 initial_wait。
         land_after_finish：任务结束后是否执行降落；扎球成功后当前流程优先回 (0,0,1) 再切 PX4 LAND。
 
         参数关系：
@@ -133,8 +132,8 @@
 
     <!--
         起飞后第一个等待点。
-        主流程：ego_bridge 起飞阶段预热后连续直飞到这里，然后主任务做一次 odom 偏差校验。
-        若偏差大于 0.18m，才用 aggressive override 兜底补点。这个点不是 EGO 目标。
+        主流程：ego_bridge 起飞阶段预热后连续直飞到这里，takeoff 返回后主任务直接进入门框识别。
+        这个点不是 EGO 目标。
 
         调参影响：
         - y 太靠近柱子/门框，点云可能粘连，门框检测会出现 post_too_wide 等拒绝原因。
@@ -263,8 +262,10 @@
         - override 到 standoff 点后，立即读取新鲜 /balloon/servo 并锁定较大 verify ROI。
         - 直接 PD 前冲：err_u 修横向，err_v 修高度，forward_v 持续前进。
         - state=5 near blob 时继续 PD，但横向/高度限幅降低；state=4 filtered hold 短时间继续冲刺。
+        - err_u/err_v 大于 fast_u/v_threshold 时先慢速前冲，避免还没对准就快速冲过。
         - 前冲中优先用 verify_roi 面积下降判断扎破，depth jump 只作辅助。
         - 触发扎破、达到最大前冲距离或超时后，立即 hold、后退 0.12m，再最终 verify。
+        - lateral_sign/z_sign 用于现场确认 PD 方向，如果修正方向反了可临时改成 1.0。
 
         速度含义：
         - balloon_servo_max_lateral_speed 限制横向对齐速度。
@@ -309,8 +310,13 @@
     <arg name="balloon_direct_kd_v" default="0.03" />
     <arg name="balloon_direct_max_lateral_speed" default="0.16" />
     <arg name="balloon_direct_max_z_speed" default="0.12" />
-    <arg name="balloon_direct_near_blob_speed_scale" default="0.6" />
+    <arg name="balloon_direct_near_blob_speed_scale" default="0.35" />
+    <arg name="balloon_direct_near_blob_forward_scale" default="0.6" />
     <arg name="balloon_direct_servo_lost_timeout" default="0.35" />
+    <arg name="balloon_direct_fast_u_threshold" default="0.12" />
+    <arg name="balloon_direct_fast_v_threshold" default="0.13" />
+    <arg name="balloon_direct_lateral_sign" default="-1.0" />
+    <arg name="balloon_direct_z_sign" default="-1.0" />
     <arg name="balloon_detection_topic" default="/balloon/detection" />
     <arg name="balloon_servo_topic" default="/balloon/servo" />
     <arg name="balloon_verify_roi_topic" default="/balloon/verify_roi" />
@@ -321,7 +327,7 @@
         override_move_timeout：单段 override 位置移动最大等待时间。
         override_pos_threshold：override 到点判定半径。
         override_smooth_speed：override 位置 setpoint 推进速度，不是速度控制，是平滑发布中间位置点。
-        aggressive_override_speed：只给 initial_wait 兜底、QR 去程和 QR 后返回这些明确提速段使用。
+        aggressive_override_speed：只给 QR 去程和 QR 后返回这些明确提速段使用。
         override_yaw_*：原地 yaw 对齐阈值、保持时间和角速度限幅。
         override_yaw_post_hold：普通 yaw 对齐后的短保持时间。
         reverse_yaw_pre/post_hold：门后转 180 度前后固定锚点保持时间。
@@ -732,17 +738,16 @@
         当前主流程摘要：
         1. 等待 ego_bridge 连接，记录 initial_yaw。
         2. ego_bridge takeoff 预热后连续直飞到 initial_wait。
-        3. 校验 initial_wait 偏差，偏差大于 0.18m 才用 aggressive override 兜底。
-        4. 读取 /craic/frame_center，5s 内锁定稳定中心，否则用 expected_frame。
-        5. 生成 frame_post_control；识别中心加 frame_post_y_offset，默认中心不加 y 偏移。
-        6. EGO 飞到 frame_post_control，同时启用 x 过门保护。
-        7. override 平滑转到 reverse_yaw。
-        8. override 到 QR 点，识别二维码或执行 10s 小范围搜索。
-        9. override 返回保存的 frame_post_control。
-        10. EGO 回 attack_zone，x 小于 attack_zone_overrun_x 时接管并继续。
-        11. override 右转 90 度，下降到 attack_height。
-        12. 等待气球 world 点，粗定位到 0.70m standoff，锁定 ROI 后直接 PD 前冲扎球并验证。
-        13. 扎球成功后回 (0,0,1)，切 PX4 AUTO.LAND。
+        3. 读取 /craic/frame_center，5s 内锁定稳定中心，否则用 expected_frame。
+        4. 生成 frame_post_control；识别中心加 frame_post_y_offset，默认中心不加 y 偏移。
+        5. EGO 飞到 frame_post_control，同时启用 x 过门保护。
+        6. override 平滑转到 reverse_yaw。
+        7. override 到 QR 点，识别二维码或执行 10s 小范围搜索。
+        8. override 返回保存的 frame_post_control。
+        9. EGO 回 attack_zone，x 小于 attack_zone_overrun_x 时接管并继续。
+        10. override 右转 90 度，下降到 attack_height。
+        11. 等待气球 world 点，粗定位到 0.70m standoff，锁定 ROI 后直接 PD 前冲扎球并验证。
+        12. 扎球成功后回 (0,0,1)，切 PX4 AUTO.LAND。
 
         下面这些 param 基本都是把上面的 arg 原样传给主任务节点。
 
@@ -765,7 +770,6 @@
         <param name="mission_log_period" value="$(arg mission_log_period)" />
         <param name="simple_logs" value="$(arg simple_logs)" />
         <param name="land_after_finish" value="$(arg land_after_finish)" />
-        <param name="takeoff_direct_to_initial_wait" value="$(arg takeoff_direct_to_initial_wait)" />
         <param name="initial_wait_x" value="$(arg initial_wait_x)" />
         <param name="initial_wait_y" value="$(arg initial_wait_y)" />
         <param name="initial_wait_z" value="$(arg initial_wait_z)" />
@@ -851,7 +855,12 @@
         <param name="balloon_direct_max_lateral_speed" value="$(arg balloon_direct_max_lateral_speed)" />
         <param name="balloon_direct_max_z_speed" value="$(arg balloon_direct_max_z_speed)" />
         <param name="balloon_direct_near_blob_speed_scale" value="$(arg balloon_direct_near_blob_speed_scale)" />
+        <param name="balloon_direct_near_blob_forward_scale" value="$(arg balloon_direct_near_blob_forward_scale)" />
         <param name="balloon_direct_servo_lost_timeout" value="$(arg balloon_direct_servo_lost_timeout)" />
+        <param name="balloon_direct_fast_u_threshold" value="$(arg balloon_direct_fast_u_threshold)" />
+        <param name="balloon_direct_fast_v_threshold" value="$(arg balloon_direct_fast_v_threshold)" />
+        <param name="balloon_direct_lateral_sign" value="$(arg balloon_direct_lateral_sign)" />
+        <param name="balloon_direct_z_sign" value="$(arg balloon_direct_z_sign)" />
         <param name="balloon_detection_topic" value="$(arg balloon_detection_topic)" />
         <param name="balloon_servo_topic" value="$(arg balloon_servo_topic)" />
         <param name="balloon_verify_roi_topic" value="$(arg balloon_verify_roi_topic)" />
