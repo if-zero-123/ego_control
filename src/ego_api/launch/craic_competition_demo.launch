@@ -271,6 +271,7 @@
         速度含义：
         - balloon_servo_max_lateral_speed 限制横向对齐速度。
         - balloon_servo_max_z_speed 限制上下对齐速度。
+        - balloon_approach_override_speed 是飞到 standoff 的位置 setpoint 推进速度。
         - balloon_direct_forward_speed 是直接 PD 扎球前冲速度。
         - balloon_direct_max_lateral_speed / max_z_speed 限制 PD 横向和高度速度。
     -->
@@ -301,8 +302,9 @@
     <arg name="balloon_pop_verify_roi_min_px" default="160.0" />
     <arg name="balloon_max_retry" default="1" />
     <arg name="balloon_return_home_land_z" default="1.0" />
-    <arg name="balloon_direct_forward_speed" default="0.22" />
-    <arg name="balloon_direct_slow_speed" default="0.10" />
+    <arg name="balloon_approach_override_speed" default="0.90" />
+    <arg name="balloon_direct_forward_speed" default="0.30" />
+    <arg name="balloon_direct_slow_speed" default="0.14" />
     <arg name="balloon_direct_max_distance" default="1.05" />
     <arg name="balloon_direct_min_puncture_distance" default="0.55" />
     <arg name="balloon_direct_timeout" default="8.0" />
@@ -352,15 +354,15 @@
     <arg name="override_move_timeout" default="30.0" />
     <arg name="override_pos_threshold" default="0.10" />
     <arg name="override_smooth_speed" default="0.35" />
-    <arg name="aggressive_override_speed" default="0.85" />
-    <arg name="attack_descent_override_speed" default="0.70" />
+    <arg name="aggressive_override_speed" default="1.15" />
+    <arg name="attack_descent_override_speed" default="1.00" />
     <arg name="override_yaw_timeout" default="10.0" />
-    <arg name="override_yaw_threshold" default="0.16" />
-    <arg name="override_yaw_hold_time" default="0.08" />
-    <arg name="override_yaw_rate" default="1.4" />
-    <arg name="reverse_yaw_pre_hold" default="0.05" />
-    <arg name="reverse_yaw_post_hold" default="0.10" />
-    <arg name="override_yaw_post_hold" default="0.05" />
+    <arg name="override_yaw_threshold" default="0.20" />
+    <arg name="override_yaw_hold_time" default="0.04" />
+    <arg name="override_yaw_rate" default="2.2" />
+    <arg name="reverse_yaw_pre_hold" default="0.02" />
+    <arg name="reverse_yaw_post_hold" default="0.04" />
+    <arg name="override_yaw_post_hold" default="0.02" />
     <arg name="yaw_anchor_drift_warn" default="0.15" />
     <arg name="attack_zone_overrun_x" default="0.30" />
 
@@ -848,6 +850,7 @@
         <param name="balloon_pop_verify_roi_min_px" value="$(arg balloon_pop_verify_roi_min_px)" />
         <param name="balloon_max_retry" value="$(arg balloon_max_retry)" />
         <param name="balloon_return_home_land_z" value="$(arg balloon_return_home_land_z)" />
+        <param name="balloon_approach_override_speed" value="$(arg balloon_approach_override_speed)" />
         <param name="balloon_direct_forward_speed" value="$(arg balloon_direct_forward_speed)" />
         <param name="balloon_direct_slow_speed" value="$(arg balloon_direct_slow_speed)" />
         <param name="balloon_direct_max_distance" value="$(arg balloon_direct_max_distance)" />

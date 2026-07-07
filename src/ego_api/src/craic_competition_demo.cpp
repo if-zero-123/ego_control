@@ -240,8 +240,9 @@ public:
         pnh_.param<double>("balloon_pop_verify_roi_min_px", balloon_pop_verify_roi_min_px_, 160.0);
         pnh_.param<int>("balloon_max_retry", balloon_max_retry_, 1);
         pnh_.param<double>("balloon_return_home_land_z", balloon_return_home_land_z_, 1.0);
-        pnh_.param<double>("balloon_direct_forward_speed", balloon_direct_forward_speed_, 0.22);
-        pnh_.param<double>("balloon_direct_slow_speed", balloon_direct_slow_speed_, 0.10);
+        pnh_.param<double>("balloon_approach_override_speed", balloon_approach_override_speed_, 0.90);
+        pnh_.param<double>("balloon_direct_forward_speed", balloon_direct_forward_speed_, 0.30);
+        pnh_.param<double>("balloon_direct_slow_speed", balloon_direct_slow_speed_, 0.14);
         pnh_.param<double>("balloon_direct_max_distance", balloon_direct_max_distance_, 1.05);
         pnh_.param<double>("balloon_direct_min_puncture_distance", balloon_direct_min_puncture_distance_, 0.55);
         pnh_.param<double>("balloon_direct_timeout", balloon_direct_timeout_, 8.0);
@@ -262,15 +263,15 @@ public:
         pnh_.param<double>("override_move_timeout", override_move_timeout_, 30.0);
         pnh_.param<double>("override_pos_threshold", override_pos_threshold_, 0.10);
         pnh_.param<double>("override_smooth_speed", override_smooth_speed_, 0.35);
-        pnh_.param<double>("aggressive_override_speed", aggressive_override_speed_, 0.85);
-        pnh_.param<double>("attack_descent_override_speed", attack_descent_override_speed_, 0.70);
+        pnh_.param<double>("aggressive_override_speed", aggressive_override_speed_, 1.15);
+        pnh_.param<double>("attack_descent_override_speed", attack_descent_override_speed_, 1.00);
         pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
-        pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.16);
-        pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.08);
-        pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 1.4);
-        pnh_.param<double>("reverse_yaw_pre_hold", reverse_yaw_pre_hold_, 0.05);
-        pnh_.param<double>("reverse_yaw_post_hold", reverse_yaw_post_hold_, 0.10);
-        pnh_.param<double>("override_yaw_post_hold", override_yaw_post_hold_, 0.05);
+        pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.20);
+        pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.04);
+        pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 2.2);
+        pnh_.param<double>("reverse_yaw_pre_hold", reverse_yaw_pre_hold_, 0.02);
+        pnh_.param<double>("reverse_yaw_post_hold", reverse_yaw_post_hold_, 0.04);
+        pnh_.param<double>("override_yaw_post_hold", override_yaw_post_hold_, 0.02);
         pnh_.param<double>("yaw_anchor_drift_warn", yaw_anchor_drift_warn_, 0.15);
         pnh_.param<double>("attack_zone_overrun_x", attack_zone_overrun_x_, 0.30);
         pnh_.param<bool>("robust_land_enable", robust_land_enable_, true);
@@ -1125,7 +1126,8 @@ private:
             MoveResult approach_result = moveOverrideLoop("balloon_safe_standoff", approach, puncture_yaw,
                                                           override_pos_threshold_,
                                                           ros::Time::now() + ros::Duration(balloon_approach_timeout_),
-                                                          false);
+                                                          false,
+                                                          balloon_approach_override_speed_);
             if (approach_result != MoveResult::Reached) {
                 ROS_WARN("[craic_demo] BALLOON_APPROACH attempt=%d result=not_reached", attempt);
                 continue;
@@ -2170,8 +2172,9 @@ private:
     double balloon_pop_verify_roi_min_px_ = 160.0;
     int balloon_max_retry_ = 1;
     double balloon_return_home_land_z_ = 1.0;
-    double balloon_direct_forward_speed_ = 0.22;
-    double balloon_direct_slow_speed_ = 0.10;
+    double balloon_approach_override_speed_ = 0.90;
+    double balloon_direct_forward_speed_ = 0.30;
+    double balloon_direct_slow_speed_ = 0.14;
     double balloon_direct_max_distance_ = 1.05;
     double balloon_direct_min_puncture_distance_ = 0.55;
     double balloon_direct_timeout_ = 8.0;
@@ -2192,15 +2195,15 @@ private:
     double override_move_timeout_ = 30.0;
     double override_pos_threshold_ = 0.10;
     double override_smooth_speed_ = 0.35;
-    double aggressive_override_speed_ = 0.85;
-    double attack_descent_override_speed_ = 0.70;
+    double aggressive_override_speed_ = 1.15;
+    double attack_descent_override_speed_ = 1.00;
     double override_yaw_timeout_ = 10.0;
-    double override_yaw_threshold_ = 0.16;
-    double override_yaw_hold_time_ = 0.08;
-    double override_yaw_rate_ = 1.4;
-    double reverse_yaw_pre_hold_ = 0.05;
-    double reverse_yaw_post_hold_ = 0.10;
-    double override_yaw_post_hold_ = 0.05;
+    double override_yaw_threshold_ = 0.20;
+    double override_yaw_hold_time_ = 0.04;
+    double override_yaw_rate_ = 2.2;
+    double reverse_yaw_pre_hold_ = 0.02;
+    double reverse_yaw_post_hold_ = 0.04;
+    double override_yaw_post_hold_ = 0.02;
     double yaw_anchor_drift_warn_ = 0.15;
     double attack_zone_overrun_x_ = 0.30;
     bool robust_land_enable_ = true;
