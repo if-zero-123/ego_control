@@ -263,6 +263,7 @@
         - 直接 PD 前冲：err_u 修横向，err_v 修高度，forward_v 持续前进。
         - state=5 near blob 时继续 PD，但横向/高度限幅降低；state=4 filtered hold 短时间继续冲刺。
         - err_u/err_v 大于 fast_u/v_threshold 时先慢速前冲，避免还没对准就快速冲过。
+        - min_puncture_distance 之前不接受 area_drop/depth_jump 扎破判断，避免前进距离不够就停。
         - 前冲中优先用 verify_roi 面积下降判断扎破，depth jump 只作辅助。
         - 触发扎破、达到最大前冲距离或超时后，立即 hold、后退 0.12m，再最终 verify。
         - lateral_sign/z_sign 用于现场确认 PD 方向，如果修正方向反了可临时改成 1.0。
@@ -302,8 +303,9 @@
     <arg name="balloon_return_home_land_z" default="1.0" />
     <arg name="balloon_direct_forward_speed" default="0.22" />
     <arg name="balloon_direct_slow_speed" default="0.10" />
-    <arg name="balloon_direct_max_distance" default="0.85" />
-    <arg name="balloon_direct_timeout" default="5.0" />
+    <arg name="balloon_direct_max_distance" default="1.05" />
+    <arg name="balloon_direct_min_puncture_distance" default="0.55" />
+    <arg name="balloon_direct_timeout" default="8.0" />
     <arg name="balloon_direct_kp_u" default="0.24" />
     <arg name="balloon_direct_kd_u" default="0.04" />
     <arg name="balloon_direct_kp_v" default="0.16" />
@@ -328,6 +330,7 @@
         override_pos_threshold：override 到点判定半径。
         override_smooth_speed：override 位置 setpoint 推进速度，不是速度控制，是平滑发布中间位置点。
         aggressive_override_speed：只给 QR 去程和 QR 后返回这些明确提速段使用。
+        attack_descent_override_speed：回到打击区后下降到 attack_height 的单独提速参数。
         override_yaw_*：原地 yaw 对齐阈值、保持时间和角速度限幅。
         override_yaw_post_hold：普通 yaw 对齐后的短保持时间。
         reverse_yaw_pre/post_hold：门后转 180 度前后固定锚点保持时间。
@@ -350,6 +353,7 @@
     <arg name="override_pos_threshold" default="0.10" />
     <arg name="override_smooth_speed" default="0.35" />
     <arg name="aggressive_override_speed" default="0.85" />
+    <arg name="attack_descent_override_speed" default="0.70" />
     <arg name="override_yaw_timeout" default="10.0" />
     <arg name="override_yaw_threshold" default="0.16" />
     <arg name="override_yaw_hold_time" default="0.08" />
@@ -847,6 +851,7 @@
         <param name="balloon_direct_forward_speed" value="$(arg balloon_direct_forward_speed)" />
         <param name="balloon_direct_slow_speed" value="$(arg balloon_direct_slow_speed)" />
         <param name="balloon_direct_max_distance" value="$(arg balloon_direct_max_distance)" />
+        <param name="balloon_direct_min_puncture_distance" value="$(arg balloon_direct_min_puncture_distance)" />
         <param name="balloon_direct_timeout" value="$(arg balloon_direct_timeout)" />
         <param name="balloon_direct_kp_u" value="$(arg balloon_direct_kp_u)" />
         <param name="balloon_direct_kd_u" value="$(arg balloon_direct_kd_u)" />
@@ -869,6 +874,7 @@
         <param name="override_pos_threshold" value="$(arg override_pos_threshold)" />
         <param name="override_smooth_speed" value="$(arg override_smooth_speed)" />
         <param name="aggressive_override_speed" value="$(arg aggressive_override_speed)" />
+        <param name="attack_descent_override_speed" value="$(arg attack_descent_override_speed)" />
         <param name="override_yaw_timeout" value="$(arg override_yaw_timeout)" />
         <param name="override_yaw_threshold" value="$(arg override_yaw_threshold)" />
         <param name="override_yaw_hold_time" value="$(arg override_yaw_hold_time)" />

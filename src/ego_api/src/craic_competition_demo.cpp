@@ -242,8 +242,9 @@ public:
         pnh_.param<double>("balloon_return_home_land_z", balloon_return_home_land_z_, 1.0);
         pnh_.param<double>("balloon_direct_forward_speed", balloon_direct_forward_speed_, 0.22);
         pnh_.param<double>("balloon_direct_slow_speed", balloon_direct_slow_speed_, 0.10);
-        pnh_.param<double>("balloon_direct_max_distance", balloon_direct_max_distance_, 0.85);
-        pnh_.param<double>("balloon_direct_timeout", balloon_direct_timeout_, 5.0);
+        pnh_.param<double>("balloon_direct_max_distance", balloon_direct_max_distance_, 1.05);
+        pnh_.param<double>("balloon_direct_min_puncture_distance", balloon_direct_min_puncture_distance_, 0.55);
+        pnh_.param<double>("balloon_direct_timeout", balloon_direct_timeout_, 8.0);
         pnh_.param<double>("balloon_direct_kp_u", balloon_direct_kp_u_, 0.24);
         pnh_.param<double>("balloon_direct_kd_u", balloon_direct_kd_u_, 0.04);
         pnh_.param<double>("balloon_direct_kp_v", balloon_direct_kp_v_, 0.16);
@@ -262,6 +263,7 @@ public:
         pnh_.param<double>("override_pos_threshold", override_pos_threshold_, 0.10);
         pnh_.param<double>("override_smooth_speed", override_smooth_speed_, 0.35);
         pnh_.param<double>("aggressive_override_speed", aggressive_override_speed_, 0.85);
+        pnh_.param<double>("attack_descent_override_speed", attack_descent_override_speed_, 0.70);
         pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
         pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.16);
         pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.08);
@@ -393,8 +395,9 @@ public:
         logStage("LOWER_ATTACK_HEIGHT_OVERRIDE", "descend to attack height");
         Eigen::Vector3d low = api_.getOdomPosition();
         low.z() = attack_height_;
-        if (!overrideMoveTo("attack_height", low, attack_yaw,
-                            override_pos_threshold_, override_move_timeout_)) {
+        if (!overrideMoveToWithSpeed("attack_height", low, attack_yaw,
+                                     override_pos_threshold_, override_move_timeout_,
+                                     attack_descent_override_speed_)) {
             ROS_ERROR("[craic_demo] FAIL stage=LOWER_ATTACK_HEIGHT_OVERRIDE");
             safeLand();
             return 1;
@@ -1205,6 +1208,9 @@ private:
         const Eigen::Vector3d start = api_.getOdomPosition();
         const ros::Time start_time = ros::Time::now();
         const ros::Time deadline = start_time + ros::Duration(std::max(0.5, balloon_direct_timeout_));
+        const double min_puncture_progress = clampValue(balloon_direct_min_puncture_distance_,
+                                                        0.0,
+                                                        std::max(0.0, balloon_direct_max_distance_));
         const double area_threshold = std::max(1.0, roi.baseline_area * balloon_pop_area_drop_ratio_);
         const bool have_start_depth = freshBalloonDepth();
         const double start_depth = have_start_depth ? balloon_detection_.depth
@@ -1220,8 +1226,9 @@ private:
         double depth = start_depth;
         double area = freshVerifyRoiResult() ? verify_roi_result_.area : -1.0;
 
-        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE start forward=%.2f slow=%.2f max_distance=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f",
+        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE start forward=%.2f slow=%.2f min_distance=%.2f max_distance=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f",
                  balloon_direct_forward_speed_, balloon_direct_slow_speed_,
+                 min_puncture_progress,
                  balloon_direct_max_distance_, balloon_direct_timeout_,
                  area_threshold, start_depth);
 
@@ -1234,7 +1241,7 @@ private:
 
             if (freshVerifyRoiResult()) {
                 area = verify_roi_result_.area;
-                if (area <= area_threshold) {
+                if (progress >= min_puncture_progress && area <= area_threshold) {
                     detected = true;
                     reason = "area_drop";
                     break;
@@ -1243,7 +1250,9 @@ private:
 
             if (freshBalloonDepth()) {
                 depth = balloon_detection_.depth;
-                if (have_start_depth && depth >= start_depth + balloon_puncture_depth_jump_) {
+                if (progress >= min_puncture_progress &&
+                    have_start_depth &&
+                    depth >= start_depth + balloon_puncture_depth_jump_) {
                     detected = true;
                     reason = "depth_jump";
                     break;
@@ -1324,9 +1333,9 @@ private:
 
             if (!simple_logs_) {
                 ROS_INFO_THROTTLE(mission_log_period_,
-                                  "[craic_demo] BALLOON_DIRECT_PD_PUNCTURE state=%s err=(%.3f %.3f) progress=%.2f/%.2f forward=%.2f lat=%.2f z=%.2f area=%.0f threshold=%.0f depth=%.2f",
+                                  "[craic_demo] BALLOON_DIRECT_PD_PUNCTURE state=%s err=(%.3f %.3f) progress=%.2f min=%.2f max=%.2f forward=%.2f lat=%.2f z=%.2f area=%.0f threshold=%.0f depth=%.2f",
                                   servo_state.c_str(), prev_err_u, prev_err_v,
-                                  progress, balloon_direct_max_distance_,
+                                  progress, min_puncture_progress, balloon_direct_max_distance_,
                                   forward_speed, lateral_speed, z_speed, area,
                                   area_threshold, depth);
             }
@@ -1338,8 +1347,8 @@ private:
             reason = "timeout";
         }
         holdOverride(0.05, yaw);
-        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE result detected=%s reason=%s progress=%.2f distance=%.2f area=%.0f threshold=%.0f depth=%.2f start_depth=%.2f",
-                 yesNo(detected), reason.c_str(), progress, balloon_direct_max_distance_,
+        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE result detected=%s reason=%s progress=%.2f min=%.2f distance=%.2f area=%.0f threshold=%.0f depth=%.2f start_depth=%.2f",
+                 yesNo(detected), reason.c_str(), progress, min_puncture_progress, balloon_direct_max_distance_,
                  area, area_threshold, depth, start_depth);
         return detected;
     }
@@ -2163,8 +2172,9 @@ private:
     double balloon_return_home_land_z_ = 1.0;
     double balloon_direct_forward_speed_ = 0.22;
     double balloon_direct_slow_speed_ = 0.10;
-    double balloon_direct_max_distance_ = 0.85;
-    double balloon_direct_timeout_ = 5.0;
+    double balloon_direct_max_distance_ = 1.05;
+    double balloon_direct_min_puncture_distance_ = 0.55;
+    double balloon_direct_timeout_ = 8.0;
     double balloon_direct_kp_u_ = 0.24;
     double balloon_direct_kd_u_ = 0.04;
     double balloon_direct_kp_v_ = 0.16;
@@ -2183,6 +2193,7 @@ private:
     double override_pos_threshold_ = 0.10;
     double override_smooth_speed_ = 0.35;
     double aggressive_override_speed_ = 0.85;
+    double attack_descent_override_speed_ = 0.70;
     double override_yaw_timeout_ = 10.0;
     double override_yaw_threshold_ = 0.16;
     double override_yaw_hold_time_ = 0.08;
