@@ -23,8 +23,8 @@
     3. takeoff 返回后主任务立即订阅 /craic/frame_center 和 /craic/frame_status，等待稳定门框中心。
     4. 若识别稳定且离 expected_frame 的 xyz 单轴误差都不超过 frame_center_reject_distance，则使用识别值。
     5. 若识别超时、不稳定、状态无效、距离过大，则使用 expected_frame=(3.2,-1.25,1.25)。
-    6. 计算 frame_post_control：识别中心用 (center.x+1.1, center.y-0.135, center.z)，默认中心用 (center.x+1.1, center.y, center.z)。
-    7. EGO 第一次穿门飞到 frame_post_control，并启用 x 过门保护。
+    6. 计算 frame_post_control：识别中心用 (center.x+1.5, center.y-0.135, center.z)，默认中心用 (center.x+1.5, center.y, center.z)。
+    7. EGO 第一次穿门飞到 frame_post_control，x 超过门框中心 1.5m 立即进入下一步。
     8. override 原地平滑转到 reverse_yaw，也就是 initial_yaw+180 度。
     9. override 平滑位置控制到 QR 点 (4.0,0.25,1.3)。
     10. 识别二维码；若没识别到，执行升高和前后左右小搜索，最多 10s。
@@ -148,10 +148,10 @@
         门框中心锁定和兜底参数，作用在 craic_competition_demo 主任务节点。
         expected_frame_x/y/z：门框中心预期值，识别超时或识别点偏差过大时使用它。
         frame_center_reject_distance：识别中心到预期中心的 xyz 单轴误差阈值，任一轴超过则拒绝该样本。
-        frame_post_x_offset：门后 EGO 控制点相对门框中心的 x 正方向偏移，当前为 center.x + 1.1。
+        frame_post_x_offset：门后 EGO 控制点相对门框中心的 x 正方向偏移，当前为 center.x + 1.5。
         frame_post_y_offset：门后 EGO 控制点相对识别门框中心的 y 偏移，当前为 center.y - 0.135；如果使用 expected_frame 默认中心，则不加该 y 偏移。
-        frame_pass_guard_x_offset：第一次 EGO 穿门时的放行保护，当前 x 超过 center.x + 0.50 认为已过门。
-        frame_pass_guard_timeout：EGO 穿门超过该时间仍未 reach，但已过 pass x，则直接进入下一步任务。
+        frame_pass_guard_x_offset：第一次 EGO 穿门时的放行保护，当前 x 超过 center.x + 1.50 立即进入下一步任务。
+        frame_pass_guard_timeout：保留为兼容参数；当前 x 放行保护不再等待该时间。
         frame_detect_timeout：主任务等待稳定门框中心的总时间，超时用 expected_frame。
         frame_valid_max_age：门框中心和状态消息最大新鲜度，超过认为旧数据。
 
@@ -174,9 +174,9 @@
     <arg name="expected_frame_z" default="1.25" />
     <arg name="frame_center_mode" default="auto_detect" />
     <arg name="frame_center_reject_distance" default="0.30" />
-    <arg name="frame_post_x_offset" default="1.1" />
+    <arg name="frame_post_x_offset" default="1.50" />
     <arg name="frame_post_y_offset" default="-0.135" />
-    <arg name="frame_pass_guard_x_offset" default="0.50" />
+    <arg name="frame_pass_guard_x_offset" default="1.50" />
     <arg name="frame_pass_guard_timeout" default="30.0" />
     <arg name="frame_detect_timeout" default="5.0" />
     <arg name="frame_valid_max_age" default="0.8" />
@@ -302,20 +302,20 @@
     <arg name="balloon_pop_verify_roi_min_px" default="160.0" />
     <arg name="balloon_max_retry" default="1" />
     <arg name="balloon_return_home_land_z" default="1.0" />
-    <arg name="balloon_approach_override_speed" default="0.90" />
-    <arg name="balloon_direct_forward_speed" default="0.30" />
-    <arg name="balloon_direct_slow_speed" default="0.14" />
-    <arg name="balloon_direct_max_distance" default="1.05" />
-    <arg name="balloon_direct_min_puncture_distance" default="0.55" />
+    <arg name="balloon_approach_override_speed" default="1.20" />
+    <arg name="balloon_direct_forward_speed" default="0.40" />
+    <arg name="balloon_direct_slow_speed" default="0.20" />
+    <arg name="balloon_direct_max_distance" default="1.20" />
+    <arg name="balloon_direct_min_puncture_distance" default="0.65" />
     <arg name="balloon_direct_timeout" default="8.0" />
     <arg name="balloon_direct_kp_u" default="0.24" />
     <arg name="balloon_direct_kd_u" default="0.04" />
     <arg name="balloon_direct_kp_v" default="0.16" />
     <arg name="balloon_direct_kd_v" default="0.03" />
-    <arg name="balloon_direct_max_lateral_speed" default="0.16" />
-    <arg name="balloon_direct_max_z_speed" default="0.12" />
+    <arg name="balloon_direct_max_lateral_speed" default="0.18" />
+    <arg name="balloon_direct_max_z_speed" default="0.14" />
     <arg name="balloon_direct_near_blob_speed_scale" default="0.35" />
-    <arg name="balloon_direct_near_blob_forward_scale" default="0.6" />
+    <arg name="balloon_direct_near_blob_forward_scale" default="0.75" />
     <arg name="balloon_direct_servo_lost_timeout" default="0.35" />
     <arg name="balloon_direct_fast_u_threshold" default="0.12" />
     <arg name="balloon_direct_fast_v_threshold" default="0.13" />
@@ -331,13 +331,15 @@
         override_move_timeout：单段 override 位置移动最大等待时间。
         override_pos_threshold：override 到点判定半径。
         override_smooth_speed：override 位置 setpoint 推进速度，不是速度控制，是平滑发布中间位置点。
+        override_move_post_hold：override 位置移动到点后的短保持时间，当前压短以减少段间空等。
         aggressive_override_speed：只给 QR 去程和 QR 后返回这些明确提速段使用。
         attack_descent_override_speed：回到打击区后下降到 attack_height 的单独提速参数。
         override_yaw_*：原地 yaw 对齐阈值、保持时间和角速度限幅。
         override_yaw_post_hold：普通 yaw 对齐后的短保持时间。
-        reverse_yaw_pre/post_hold：门后转 180 度前后固定锚点保持时间。
+        reverse_yaw_pre/post_hold：门后转 180 度前后固定锚点保持时间；当前默认 0，用下一段移动继续收敛 yaw。
         yaw_anchor_drift_warn：固定锚点 yaw 对齐时，水平漂移超过该值会打印 warning。
         attack_zone_overrun_x：EGO 回打击区时的 x 保护，到 x 小于该值就接管并继续攻击流程。
+        attack_zone_overrun_hold：EGO 回打击区触发 x 保护后的短保持时间，默认只留很短接管缓冲。
 
         overrideMoveTo 的实际发布方式：
         - 主任务每次先 enableOverride。
@@ -354,17 +356,19 @@
     <arg name="override_move_timeout" default="30.0" />
     <arg name="override_pos_threshold" default="0.10" />
     <arg name="override_smooth_speed" default="0.35" />
-    <arg name="aggressive_override_speed" default="1.15" />
-    <arg name="attack_descent_override_speed" default="1.00" />
+    <arg name="override_move_post_hold" default="0.08" />
+    <arg name="aggressive_override_speed" default="1.50" />
+    <arg name="attack_descent_override_speed" default="1.50" />
     <arg name="override_yaw_timeout" default="10.0" />
-    <arg name="override_yaw_threshold" default="0.20" />
-    <arg name="override_yaw_hold_time" default="0.04" />
-    <arg name="override_yaw_rate" default="2.2" />
-    <arg name="reverse_yaw_pre_hold" default="0.02" />
-    <arg name="reverse_yaw_post_hold" default="0.04" />
-    <arg name="override_yaw_post_hold" default="0.02" />
+    <arg name="override_yaw_threshold" default="0.30" />
+    <arg name="override_yaw_hold_time" default="0.0" />
+    <arg name="override_yaw_rate" default="2.8" />
+    <arg name="reverse_yaw_pre_hold" default="0.0" />
+    <arg name="reverse_yaw_post_hold" default="0.0" />
+    <arg name="override_yaw_post_hold" default="0.0" />
     <arg name="yaw_anchor_drift_warn" default="0.15" />
     <arg name="attack_zone_overrun_x" default="0.30" />
+    <arg name="attack_zone_overrun_hold" default="0.12" />
 
     <!--
         任务结束降落参数。
@@ -746,7 +750,7 @@
         2. ego_bridge takeoff 预热后连续直飞到 initial_wait。
         3. 读取 /craic/frame_center，5s 内锁定稳定中心，否则用 expected_frame。
         4. 生成 frame_post_control；识别中心加 frame_post_y_offset，默认中心不加 y 偏移。
-        5. EGO 飞到 frame_post_control，同时启用 x 过门保护。
+        5. EGO 飞到 frame_post_control，x 超过门框中心 1.5m 立即放行。
         6. override 平滑转到 reverse_yaw。
         7. override 到 QR 点，识别二维码或执行 10s 小范围搜索。
         8. override 返回保存的 frame_post_control。
@@ -876,6 +880,7 @@
         <param name="override_move_timeout" value="$(arg override_move_timeout)" />
         <param name="override_pos_threshold" value="$(arg override_pos_threshold)" />
         <param name="override_smooth_speed" value="$(arg override_smooth_speed)" />
+        <param name="override_move_post_hold" value="$(arg override_move_post_hold)" />
         <param name="aggressive_override_speed" value="$(arg aggressive_override_speed)" />
         <param name="attack_descent_override_speed" value="$(arg attack_descent_override_speed)" />
         <param name="override_yaw_timeout" value="$(arg override_yaw_timeout)" />
@@ -887,6 +892,7 @@
         <param name="override_yaw_post_hold" value="$(arg override_yaw_post_hold)" />
         <param name="yaw_anchor_drift_warn" value="$(arg yaw_anchor_drift_warn)" />
         <param name="attack_zone_overrun_x" value="$(arg attack_zone_overrun_x)" />
+        <param name="attack_zone_overrun_hold" value="$(arg attack_zone_overrun_hold)" />
         <param name="robust_land_enable" value="$(arg robust_land_enable)" />
         <param name="robust_land_soft_z" value="$(arg robust_land_soft_z)" />
         <param name="robust_land_soft_speed" value="$(arg robust_land_soft_speed)" />
