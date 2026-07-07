@@ -60,6 +60,11 @@ takeoff:
   # - remaining <= 阈值 即进入 HOVER
   reach_threshold: 0.06
 
+  # 起飞直飞三维目标到达判定阈值 (m)
+  # - <=0 表示沿用 reach_threshold
+  # - CRAIC 比赛 launch 会覆盖为 0.15，避免对中点附近因 6cm 阈值过严而徘徊
+  direct_target_reach_threshold: -1.0
+
   # 起飞最小上升速度 (m/s)
   # - 防止减速阶段速度过小导致爬升停滞
   min_speed: 0.1

@@ -56,6 +56,7 @@
         flight_z：传给部分检测/规划节点的默认高度，不等于每个任务点的高度。
         takeoff_height：ego_bridge 起飞高度；启用 takeoff_direct_to_initial_wait 后，z 由 initial_wait_z 决定。
         takeoff_direct_to_initial_wait：让 ego_bridge 起飞阶段直接连续飞到 initial_wait。
+        takeoff_direct_reach_threshold：直飞 initial_wait 的到点阈值，避免真实机体在 6cm 严格阈值附近徘徊。
         land_after_finish：任务结束后是否执行降落；扎球成功后当前流程优先回 (0,0,1) 再切 PX4 LAND。
 
         参数关系：
@@ -68,6 +69,7 @@
     <arg name="takeoff_height" default="1.0" />
     <arg name="land_after_finish" default="true" />
     <arg name="takeoff_direct_to_initial_wait" default="true" />
+    <arg name="takeoff_direct_reach_threshold" default="0.15" />
 
     <!--
         节点启动开关。
@@ -601,6 +603,7 @@
             <param name="takeoff/direct_target_x" value="$(arg initial_wait_x)" />
             <param name="takeoff/direct_target_y" value="$(arg initial_wait_y)" />
             <param name="takeoff/direct_target_z" value="$(arg initial_wait_z)" />
+            <param name="takeoff/direct_target_reach_threshold" value="$(arg takeoff_direct_reach_threshold)" />
             <param name="log/info" value="$(arg ego_bridge_info_logs)" />
             <remap from="~odom" to="/mavros/local_position/odom" />
             <remap from="~cmd" to="/position_cmd" />

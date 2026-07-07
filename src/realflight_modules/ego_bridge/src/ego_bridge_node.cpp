@@ -88,6 +88,7 @@ struct Params {
     double direct_target_x;           // 起飞直飞目标 x
     double direct_target_y;           // 起飞直飞目标 y
     double direct_target_z;           // 起飞直飞目标 z
+    double direct_target_reach_threshold; // 直飞目标到点阈值，<=0 时使用 reach_threshold
 
     // ── 降落参数 ──
     double landing_speed;            // 降落速度(m/s)
@@ -132,6 +133,9 @@ struct Params {
         nh.param("takeoff/direct_target_x",      direct_target_x,      0.0);
         nh.param("takeoff/direct_target_y",      direct_target_y,      0.0);
         nh.param("takeoff/direct_target_z",      direct_target_z,      1.0);
+        nh.param("takeoff/direct_target_reach_threshold",
+                 direct_target_reach_threshold,
+                 -1.0);
 
         nh.param("landing/speed",               landing_speed,          0.18);
         nh.param("landing/min_detect_time",     min_landing_detect_time, 2.0);
@@ -815,9 +819,13 @@ private:
         const Eigen::Vector3d setpoint_error = takeoff_direct_target_ - takeoff_setpoint_;
         const double odom_dist = odom_error.norm();
         const double setpoint_dist = setpoint_error.norm();
+        const double direct_reach_threshold =
+            params_.direct_target_reach_threshold > 0.0
+                ? params_.direct_target_reach_threshold
+                : params_.reach_threshold;
 
-        if (odom_dist <= params_.reach_threshold &&
-            setpoint_dist <= std::max(params_.reach_threshold, 0.02)) {
+        if (odom_dist <= direct_reach_threshold &&
+            setpoint_dist <= std::max(direct_reach_threshold, 0.02)) {
             pub_setpoint_.publish(posOnlySetpoint(takeoff_direct_target_, takeoff_start_yaw_));
             enterHover();
             return;
