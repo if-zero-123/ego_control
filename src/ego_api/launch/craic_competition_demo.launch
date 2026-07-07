@@ -70,7 +70,7 @@
     <arg name="takeoff_height" default="1.0" />
     <arg name="land_after_finish" default="true" />
     <arg name="takeoff_direct_to_initial_wait" default="true" />
-    <arg name="takeoff_direct_speed" default="0.55" />
+    <arg name="takeoff_direct_speed" default="0.65" />
     <arg name="takeoff_direct_reach_threshold" default="0.15" />
 
     <!--
@@ -306,9 +306,9 @@
     <arg name="balloon_pop_verify_roi_min_px" default="160.0" />
     <arg name="balloon_max_retry" default="1" />
     <arg name="balloon_return_home_land_z" default="1.0" />
-    <arg name="balloon_approach_override_speed" default="1.20" />
-    <arg name="balloon_direct_forward_speed" default="0.40" />
-    <arg name="balloon_direct_slow_speed" default="0.20" />
+    <arg name="balloon_approach_override_speed" default="1.35" />
+    <arg name="balloon_direct_forward_speed" default="0.45" />
+    <arg name="balloon_direct_slow_speed" default="0.24" />
     <arg name="balloon_direct_max_distance" default="1.20" />
     <arg name="balloon_direct_min_puncture_distance" default="0.65" />
     <arg name="balloon_direct_timeout" default="8.0" />
@@ -336,8 +336,9 @@
         override_pos_threshold：override 到点判定半径。
         override_smooth_speed：override 位置 setpoint 推进速度，不是速度控制，是平滑发布中间位置点。
         override_move_post_hold：override 位置移动到点后的短保持时间，当前压短以减少段间空等。
-        aggressive_override_speed：只给 QR 去程和 QR 后返回这些明确提速段使用。
+        aggressive_override_speed：只给 QR 去程等明确提速段使用。
         attack_descent_override_speed：回到打击区后下降到 attack_height 的单独提速参数。
+        return_frame_post_*：QR 后回门后点使用，先快速回近，再低速精确确认到点，确保后续 EGO 回打击区从门后开始。
         override_yaw_*：原地 yaw 对齐阈值、保持时间和角速度限幅。
         reverse_yaw_threshold：门后 180 度旋转的单独释放阈值，提前交给下一段 QR 移动继续收敛 yaw。
         override_yaw_post_hold：普通 yaw 对齐后的短保持时间。
@@ -362,13 +363,19 @@
     <arg name="override_pos_threshold" default="0.10" />
     <arg name="override_smooth_speed" default="0.35" />
     <arg name="override_move_post_hold" default="0.08" />
-    <arg name="aggressive_override_speed" default="1.50" />
-    <arg name="attack_descent_override_speed" default="1.50" />
+    <arg name="aggressive_override_speed" default="1.70" />
+    <arg name="attack_descent_override_speed" default="1.70" />
+    <arg name="return_frame_post_speed" default="1.70" />
+    <arg name="return_frame_post_fast_threshold" default="0.18" />
+    <arg name="return_frame_post_settle_speed" default="0.70" />
+    <arg name="return_frame_post_precision_threshold" default="0.08" />
+    <arg name="return_frame_post_confirm_hold" default="0.25" />
+    <arg name="return_frame_post_confirm_timeout" default="3.0" />
     <arg name="override_yaw_timeout" default="10.0" />
     <arg name="override_yaw_threshold" default="0.30" />
-    <arg name="reverse_yaw_threshold" default="0.45" />
+    <arg name="reverse_yaw_threshold" default="0.50" />
     <arg name="override_yaw_hold_time" default="0.0" />
-    <arg name="override_yaw_rate" default="3.0" />
+    <arg name="override_yaw_rate" default="3.4" />
     <arg name="reverse_yaw_pre_hold" default="0.0" />
     <arg name="reverse_yaw_post_hold" default="0.0" />
     <arg name="override_yaw_post_hold" default="0.0" />
@@ -891,6 +898,12 @@
         <param name="override_move_post_hold" value="$(arg override_move_post_hold)" />
         <param name="aggressive_override_speed" value="$(arg aggressive_override_speed)" />
         <param name="attack_descent_override_speed" value="$(arg attack_descent_override_speed)" />
+        <param name="return_frame_post_speed" value="$(arg return_frame_post_speed)" />
+        <param name="return_frame_post_fast_threshold" value="$(arg return_frame_post_fast_threshold)" />
+        <param name="return_frame_post_settle_speed" value="$(arg return_frame_post_settle_speed)" />
+        <param name="return_frame_post_precision_threshold" value="$(arg return_frame_post_precision_threshold)" />
+        <param name="return_frame_post_confirm_hold" value="$(arg return_frame_post_confirm_hold)" />
+        <param name="return_frame_post_confirm_timeout" value="$(arg return_frame_post_confirm_timeout)" />
         <param name="override_yaw_timeout" value="$(arg override_yaw_timeout)" />
         <param name="override_yaw_threshold" value="$(arg override_yaw_threshold)" />
         <param name="reverse_yaw_threshold" value="$(arg reverse_yaw_threshold)" />
