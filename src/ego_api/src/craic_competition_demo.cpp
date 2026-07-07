@@ -504,9 +504,10 @@ private:
 
             const Eigen::Vector3d pos = api_.getOdomPosition();
             const double elapsed = (ros::Time::now() - start).toSec();
-            if (elapsed >= frame_pass_guard_timeout_ && pos.x() > pass_x) {
-                ROS_WARN("[craic_demo] EGO_GOAL_FRAME_GUARD passed_without_reach name=%s odom=(%.2f %.2f %.2f) pass_x=%.2f elapsed=%.1f action=continue_next_task",
-                         label.c_str(), pos.x(), pos.y(), pos.z(), pass_x, elapsed);
+            if (elapsed >= frame_pass_guard_timeout_ || pos.x() > pass_x) {
+                const char* reason = pos.x() > pass_x ? "pass_x" : "timeout";
+                ROS_WARN("[craic_demo] EGO_GOAL_FRAME_GUARD passed_without_reach name=%s reason=%s odom=(%.2f %.2f %.2f) pass_x=%.2f elapsed=%.1f action=continue_next_task",
+                         label.c_str(), reason, pos.x(), pos.y(), pos.z(), pass_x, elapsed);
                 return true;
             }
 

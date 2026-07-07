@@ -24,7 +24,7 @@
     4. 若识别稳定且离 expected_frame 的 xyz 单轴误差都不超过 frame_center_reject_distance，则使用识别值。
     5. 若识别超时、不稳定、状态无效、距离过大，则使用 expected_frame=(3.2,-1.25,1.25)。
     6. 计算 frame_post_control：识别中心用 (center.x+1.5, center.y-0.135, center.z)，默认中心用 (center.x+1.5, center.y, center.z)。
-    7. EGO 第一次穿门飞到 frame_post_control，若 reach 未触发，则超时后且 x 超过门框中心 1.5m 才进入下一步。
+    7. EGO 第一次穿门飞到 frame_post_control，若 reach 未触发，则超时或 x 超过门框中心 1.5m 任意一个满足就进入下一步。
     8. override 原地平滑转到 reverse_yaw，也就是 initial_yaw+180 度。
     9. override 平滑位置控制到 QR 点 (4.0,0.25,1.3)。
     10. 识别二维码；若没识别到，执行升高和前后左右小搜索，最多 10s。
@@ -150,8 +150,8 @@
         frame_center_reject_distance：识别中心到预期中心的 xyz 单轴误差阈值，任一轴超过则拒绝该样本。
         frame_post_x_offset：门后 EGO 控制点相对门框中心的 x 正方向偏移，当前为 center.x + 1.5。
         frame_post_y_offset：门后 EGO 控制点相对识别门框中心的 y 偏移，当前为 center.y - 0.135；如果使用 expected_frame 默认中心，则不加该 y 偏移。
-        frame_pass_guard_x_offset：第一次 EGO 穿门时的放行保护，当前 x 超过 center.x + 1.50 才允许超时兜底。
-        frame_pass_guard_timeout：EGO 穿门超过该时间仍未 reach，且已过 pass x，则直接进入下一步任务。
+        frame_pass_guard_x_offset：第一次 EGO 穿门时的过线放行保护，当前 x 超过 center.x + 1.50 则直接进入下一步任务。
+        frame_pass_guard_timeout：EGO 穿门超过该时间仍未 reach，也直接进入下一步任务。
         frame_detect_timeout：主任务等待稳定门框中心的总时间，超时用 expected_frame。
         frame_valid_max_age：门框中心和状态消息最大新鲜度，超过认为旧数据。
 
@@ -750,7 +750,7 @@
         2. ego_bridge takeoff 预热后连续直飞到 initial_wait。
         3. 读取 /craic/frame_center，5s 内锁定稳定中心，否则用 expected_frame。
         4. 生成 frame_post_control；识别中心加 frame_post_y_offset，默认中心不加 y 偏移。
-        5. EGO 飞到 frame_post_control，若 reach 未触发，则超时后且 x 超过门框中心 1.5m 才放行。
+        5. EGO 飞到 frame_post_control，若 reach 未触发，则超时或 x 超过门框中心 1.5m 任意一个满足就放行。
         6. override 平滑转到 reverse_yaw。
         7. override 到 QR 点，识别二维码或执行 10s 小范围搜索。
         8. override 返回保存的 frame_post_control。
