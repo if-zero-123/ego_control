@@ -268,8 +268,9 @@ public:
         pnh_.param<double>("attack_descent_override_speed", attack_descent_override_speed_, 1.50);
         pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
         pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.30);
+        pnh_.param<double>("reverse_yaw_threshold", reverse_yaw_threshold_, 0.45);
         pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.0);
-        pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 2.8);
+        pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 3.0);
         pnh_.param<double>("reverse_yaw_pre_hold", reverse_yaw_pre_hold_, 0.0);
         pnh_.param<double>("reverse_yaw_post_hold", reverse_yaw_post_hold_, 0.0);
         pnh_.param<double>("override_yaw_post_hold", override_yaw_post_hold_, 0.0);
@@ -681,12 +682,14 @@ private:
         const double pre_hold = reverse_turn ? std::max(0.0, reverse_yaw_pre_hold_) : 0.0;
         const double post_hold = reverse_turn ? std::max(0.0, reverse_yaw_post_hold_)
                                               : std::max(0.0, override_yaw_post_hold_);
+        const double yaw_threshold = reverse_turn ? std::max(0.01, reverse_yaw_threshold_)
+                                                  : std::max(0.01, override_yaw_threshold_);
         const double effective_timeout = std::max(timeout,
                                                   expected_turn_time + pre_hold +
                                                       override_yaw_hold_time_ + post_hold + 1.0);
-        ROS_INFO("[craic_demo] YAW_ALIGN start name=%s target_yaw=%.3f current_yaw=%.3f anchor=(%.2f %.2f %.2f) rate=%.2f timeout=%.1f",
+        ROS_INFO("[craic_demo] YAW_ALIGN start name=%s target_yaw=%.3f current_yaw=%.3f anchor=(%.2f %.2f %.2f) rate=%.2f threshold=%.2f timeout=%.1f",
                  label.c_str(), target_yaw, start_yaw, anchor.x(), anchor.y(), anchor.z(),
-                 rate_limit, effective_timeout);
+                 rate_limit, yaw_threshold, effective_timeout);
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] YAW_ALIGN failed name=%s reason=enable_override", label.c_str());
             return false;
@@ -726,8 +729,11 @@ private:
                          odom.x(), odom.y(), odom.z());
             }
             const double err = normalizeYaw(target_yaw - api_.getOdomYaw());
-            if (std::abs(err) <= override_yaw_threshold_) {
-                if (!stable) {
+            if (std::abs(err) <= yaw_threshold) {
+                if (override_yaw_hold_time_ <= 0.0) {
+                    reached = true;
+                    break;
+                } else if (!stable) {
                     stable = true;
                     stable_since = ros::Time::now();
                 } else if ((ros::Time::now() - stable_since).toSec() >= override_yaw_hold_time_) {
@@ -2203,8 +2209,9 @@ private:
     double attack_descent_override_speed_ = 1.50;
     double override_yaw_timeout_ = 10.0;
     double override_yaw_threshold_ = 0.30;
+    double reverse_yaw_threshold_ = 0.45;
     double override_yaw_hold_time_ = 0.0;
-    double override_yaw_rate_ = 2.8;
+    double override_yaw_rate_ = 3.0;
     double reverse_yaw_pre_hold_ = 0.0;
     double reverse_yaw_post_hold_ = 0.0;
     double override_yaw_post_hold_ = 0.0;
