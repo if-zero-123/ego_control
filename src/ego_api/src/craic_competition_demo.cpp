@@ -483,9 +483,9 @@ private:
                                double yaw,
                                double frame_center_x) {
         const double pass_x = frame_center_x + frame_pass_guard_x_offset_;
-        ROS_INFO("[craic_demo] EGO_GOAL_FRAME_GUARD name=%s world=(%.2f %.2f %.2f) yaw=%.3f pass_x>%.2f immediate=true goal_timeout=%.1f",
+        ROS_INFO("[craic_demo] EGO_GOAL_FRAME_GUARD name=%s world=(%.2f %.2f %.2f) yaw=%.3f pass_x>%.2f guard_timeout=%.1f goal_timeout=%.1f",
                  label.c_str(), target.x(), target.y(), target.z(), yaw,
-                 pass_x, goal_timeout_);
+                 pass_x, frame_pass_guard_timeout_, goal_timeout_);
         api_.publishGoalOnly(target.x(), target.y(), target.z(), yaw);
 
         ros::Rate rate(20);
@@ -504,8 +504,8 @@ private:
 
             const Eigen::Vector3d pos = api_.getOdomPosition();
             const double elapsed = (ros::Time::now() - start).toSec();
-            if (pos.x() > pass_x) {
-                ROS_WARN("[craic_demo] EGO_GOAL_FRAME_GUARD pass_x_reached name=%s odom=(%.2f %.2f %.2f) pass_x=%.2f elapsed=%.1f action=continue_next_task",
+            if (elapsed >= frame_pass_guard_timeout_ && pos.x() > pass_x) {
+                ROS_WARN("[craic_demo] EGO_GOAL_FRAME_GUARD passed_without_reach name=%s odom=(%.2f %.2f %.2f) pass_x=%.2f elapsed=%.1f action=continue_next_task",
                          label.c_str(), pos.x(), pos.y(), pos.z(), pass_x, elapsed);
                 return true;
             }
