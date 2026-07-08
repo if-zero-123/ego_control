@@ -154,7 +154,7 @@
         frame_center_reject_distance：识别中心到预期中心的 xyz 单轴误差阈值，任一轴超过则拒绝该样本。
         frame_post_x_offset：门后 EGO 控制点相对门框中心的 x 正方向偏移，当前为 center.x + 1.5。
         frame_post_y_offset：门后 EGO 控制点相对识别门框中心的 y 偏移，当前为 center.y - 0.135；如果使用 expected_frame 默认中心，则不加该 y 偏移。
-        frame_pass_guard_x_offset：第一次 EGO 穿门时的过线放行保护，当前 x 超过 center.x + 1.50 则直接进入下一步任务。
+        frame_pass_guard_x_offset：第一次 EGO 穿门时的过线放行保护，当前 x 超过 center.x + 1.25 则直接进入下一步任务。
         frame_pass_guard_timeout：EGO 穿门超过该时间仍未 reach，也直接进入下一步任务。
         frame_detect_timeout：主任务等待稳定门框中心的总时间，超时用 expected_frame。
         frame_valid_max_age：门框中心和状态消息最大新鲜度，超过认为旧数据。
@@ -180,7 +180,7 @@
     <arg name="frame_center_reject_distance" default="0.30" />
     <arg name="frame_post_x_offset" default="1.50" />
     <arg name="frame_post_y_offset" default="-0.135" />
-    <arg name="frame_pass_guard_x_offset" default="1.50" />
+    <arg name="frame_pass_guard_x_offset" default="1.25" />
     <arg name="frame_pass_guard_timeout" default="30.0" />
     <arg name="frame_detect_timeout" default="5.0" />
     <arg name="frame_valid_max_age" default="0.8" />

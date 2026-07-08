@@ -174,7 +174,7 @@ public:
         pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.30);
         pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.50);
         pnh_.param<double>("frame_post_y_offset", frame_post_y_offset_, -0.135);
-        pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 1.50);
+        pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 1.25);
         pnh_.param<double>("frame_pass_guard_timeout", frame_pass_guard_timeout_, 30.0);
         pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 5.0);
         pnh_.param<double>("frame_valid_max_age", frame_valid_max_age_, 0.8);
@@ -2213,7 +2213,7 @@ private:
     double frame_center_reject_distance_ = 0.30;
     double frame_post_x_offset_ = 1.50;
     double frame_post_y_offset_ = -0.135;
-    double frame_pass_guard_x_offset_ = 1.50;
+    double frame_pass_guard_x_offset_ = 1.25;
     double frame_pass_guard_timeout_ = 30.0;
     double frame_detect_timeout_ = 5.0;
     double frame_valid_max_age_ = 0.8;
