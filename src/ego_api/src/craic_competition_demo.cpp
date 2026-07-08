@@ -250,11 +250,13 @@ public:
         pnh_.param<double>("balloon_direct_kd_u", balloon_direct_kd_u_, 0.04);
         pnh_.param<double>("balloon_direct_kp_v", balloon_direct_kp_v_, 0.16);
         pnh_.param<double>("balloon_direct_kd_v", balloon_direct_kd_v_, 0.03);
-        pnh_.param<double>("balloon_direct_max_lateral_speed", balloon_direct_max_lateral_speed_, 0.18);
-        pnh_.param<double>("balloon_direct_max_z_speed", balloon_direct_max_z_speed_, 0.14);
+        pnh_.param<double>("balloon_direct_max_lateral_speed", balloon_direct_max_lateral_speed_, 0.16);
+        pnh_.param<double>("balloon_direct_max_z_speed", balloon_direct_max_z_speed_, 0.12);
         pnh_.param<double>("balloon_direct_near_blob_speed_scale", balloon_direct_near_blob_speed_scale_, 0.35);
         pnh_.param<double>("balloon_direct_near_blob_forward_scale", balloon_direct_near_blob_forward_scale_, 0.75);
         pnh_.param<double>("balloon_direct_servo_lost_timeout", balloon_direct_servo_lost_timeout_, 0.35);
+        pnh_.param<double>("balloon_direct_error_filter_alpha", balloon_direct_error_filter_alpha_, 0.35);
+        pnh_.param<double>("balloon_direct_error_deadband", balloon_direct_error_deadband_, 0.025);
         pnh_.param<double>("balloon_direct_fast_u_threshold", balloon_direct_fast_u_threshold_, 0.12);
         pnh_.param<double>("balloon_direct_fast_v_threshold", balloon_direct_fast_v_threshold_, 0.13);
         pnh_.param<double>("balloon_direct_lateral_sign", balloon_direct_lateral_sign_, -1.0);
@@ -1323,6 +1325,9 @@ private:
         ros::Time last = start_time;
         ros::Time last_reliable_servo = freshBalloonServo() ? start_time : ros::Time(0);
         bool have_prev_error = false;
+        bool have_filtered_error = false;
+        double filtered_err_u = 0.0;
+        double filtered_err_v = 0.0;
         double prev_err_u = 0.0;
         double prev_err_v = 0.0;
         bool detected = false;
@@ -1331,11 +1336,12 @@ private:
         double depth = start_depth;
         double area = freshVerifyRoiResult() ? verify_roi_result_.area : -1.0;
 
-        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE start forward=%.2f slow=%.2f min_distance=%.2f max_distance=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f",
+        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE start forward=%.2f slow=%.2f min_distance=%.2f max_distance=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f filter_alpha=%.2f deadband=%.3f",
                  balloon_direct_forward_speed_, balloon_direct_slow_speed_,
                  min_puncture_progress,
                  balloon_direct_max_distance_, balloon_direct_timeout_,
-                 area_threshold, start_depth);
+                 area_threshold, start_depth,
+                 balloon_direct_error_filter_alpha_, balloon_direct_error_deadband_);
 
         ros::Rate rate(50);
         while (ros::ok() && ros::Time::now() < deadline) {
@@ -1385,10 +1391,30 @@ private:
                     break;
                 }
 
-                const double du = have_prev_error ? (servo.err_u - prev_err_u) / dt : 0.0;
-                const double dv = have_prev_error ? (servo.err_v - prev_err_v) / dt : 0.0;
-                prev_err_u = servo.err_u;
-                prev_err_v = servo.err_v;
+                const double deadband = std::max(0.0, balloon_direct_error_deadband_);
+                auto deadbandError = [deadband](double err) {
+                    const double abs_err = std::abs(err);
+                    if (abs_err <= deadband) {
+                        return 0.0;
+                    }
+                    return std::copysign(abs_err - deadband, err);
+                };
+                const double raw_err_u = deadbandError(servo.err_u);
+                const double raw_err_v = deadbandError(servo.err_v);
+                const double alpha = clampValue(balloon_direct_error_filter_alpha_, 0.05, 1.0);
+                if (!have_filtered_error) {
+                    filtered_err_u = raw_err_u;
+                    filtered_err_v = raw_err_v;
+                    have_filtered_error = true;
+                } else {
+                    filtered_err_u += alpha * (raw_err_u - filtered_err_u);
+                    filtered_err_v += alpha * (raw_err_v - filtered_err_v);
+                }
+
+                const double du = have_prev_error ? (filtered_err_u - prev_err_u) / dt : 0.0;
+                const double dv = have_prev_error ? (filtered_err_v - prev_err_v) / dt : 0.0;
+                prev_err_u = filtered_err_u;
+                prev_err_v = filtered_err_v;
                 have_prev_error = true;
 
                 const double scale = near_blob ? clampValue(balloon_direct_near_blob_speed_scale_, 0.1, 1.0) : 1.0;
@@ -1396,14 +1422,14 @@ private:
                 const double max_z = std::max(0.0, balloon_direct_max_z_speed_ * scale);
                 const double lateral_sign = balloon_direct_lateral_sign_ >= 0.0 ? 1.0 : -1.0;
                 const double z_sign = balloon_direct_z_sign_ >= 0.0 ? 1.0 : -1.0;
-                lateral_speed = clampValue(lateral_sign * (balloon_direct_kp_u_ * servo.err_u +
+                lateral_speed = clampValue(lateral_sign * (balloon_direct_kp_u_ * filtered_err_u +
                                                            balloon_direct_kd_u_ * du),
                                            -max_lateral, max_lateral);
-                z_speed = clampValue(z_sign * (balloon_direct_kp_v_ * servo.err_v +
+                z_speed = clampValue(z_sign * (balloon_direct_kp_v_ * filtered_err_v +
                                                balloon_direct_kd_v_ * dv),
                                      -max_z, max_z);
-                if (std::abs(servo.err_u) > balloon_direct_fast_u_threshold_ ||
-                    std::abs(servo.err_v) > balloon_direct_fast_v_threshold_ ||
+                if (std::abs(filtered_err_u) > balloon_direct_fast_u_threshold_ ||
+                    std::abs(filtered_err_v) > balloon_direct_fast_v_threshold_ ||
                     filtered_hold) {
                     forward_speed = std::min(forward_speed, std::abs(balloon_direct_slow_speed_));
                 }
@@ -1421,6 +1447,7 @@ private:
                 }
                 forward_speed = std::min(forward_speed, std::abs(balloon_direct_slow_speed_));
                 have_prev_error = false;
+                have_filtered_error = false;
             }
 
             sendVelocityCmdWithYaw(forward_speed * forward.x() + lateral_speed * left.x(),
@@ -2285,11 +2312,13 @@ private:
     double balloon_direct_kd_u_ = 0.04;
     double balloon_direct_kp_v_ = 0.16;
     double balloon_direct_kd_v_ = 0.03;
-    double balloon_direct_max_lateral_speed_ = 0.18;
-    double balloon_direct_max_z_speed_ = 0.14;
+    double balloon_direct_max_lateral_speed_ = 0.16;
+    double balloon_direct_max_z_speed_ = 0.12;
     double balloon_direct_near_blob_speed_scale_ = 0.35;
     double balloon_direct_near_blob_forward_scale_ = 0.75;
     double balloon_direct_servo_lost_timeout_ = 0.35;
+    double balloon_direct_error_filter_alpha_ = 0.35;
+    double balloon_direct_error_deadband_ = 0.025;
     double balloon_direct_fast_u_threshold_ = 0.12;
     double balloon_direct_fast_v_threshold_ = 0.13;
     double balloon_direct_lateral_sign_ = -1.0;

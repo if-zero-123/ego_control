@@ -266,6 +266,7 @@
         - override 到 standoff 点后，立即读取新鲜 /balloon/servo 并锁定较大 verify ROI。
         - 直接 PD 前冲：err_u 修横向，err_v 修高度，forward_v 持续前进。
         - state=5 near blob 时继续 PD，但横向/高度限幅降低；state=4 filtered hold 短时间继续冲刺。
+        - error_filter_alpha/error_deadband 用于压住画面 bbox 中心轻微跳动导致的 PD 晃动。
         - err_u/err_v 大于 fast_u/v_threshold 时先慢速前冲，避免还没对准就快速冲过。
         - min_puncture_distance 之前不接受 area_drop/depth_jump 扎破判断，避免前进距离不够就停。
         - 前冲中优先用 verify_roi 面积下降判断扎破，depth jump 只作辅助。
@@ -316,11 +317,13 @@
     <arg name="balloon_direct_kd_u" default="0.04" />
     <arg name="balloon_direct_kp_v" default="0.16" />
     <arg name="balloon_direct_kd_v" default="0.03" />
-    <arg name="balloon_direct_max_lateral_speed" default="0.18" />
-    <arg name="balloon_direct_max_z_speed" default="0.14" />
+    <arg name="balloon_direct_max_lateral_speed" default="0.16" />
+    <arg name="balloon_direct_max_z_speed" default="0.12" />
     <arg name="balloon_direct_near_blob_speed_scale" default="0.35" />
     <arg name="balloon_direct_near_blob_forward_scale" default="0.75" />
     <arg name="balloon_direct_servo_lost_timeout" default="0.35" />
+    <arg name="balloon_direct_error_filter_alpha" default="0.35" />
+    <arg name="balloon_direct_error_deadband" default="0.025" />
     <arg name="balloon_direct_fast_u_threshold" default="0.12" />
     <arg name="balloon_direct_fast_v_threshold" default="0.13" />
     <arg name="balloon_direct_lateral_sign" default="-1.0" />
@@ -884,6 +887,8 @@
         <param name="balloon_direct_near_blob_speed_scale" value="$(arg balloon_direct_near_blob_speed_scale)" />
         <param name="balloon_direct_near_blob_forward_scale" value="$(arg balloon_direct_near_blob_forward_scale)" />
         <param name="balloon_direct_servo_lost_timeout" value="$(arg balloon_direct_servo_lost_timeout)" />
+        <param name="balloon_direct_error_filter_alpha" value="$(arg balloon_direct_error_filter_alpha)" />
+        <param name="balloon_direct_error_deadband" value="$(arg balloon_direct_error_deadband)" />
         <param name="balloon_direct_fast_u_threshold" value="$(arg balloon_direct_fast_u_threshold)" />
         <param name="balloon_direct_fast_v_threshold" value="$(arg balloon_direct_fast_v_threshold)" />
         <param name="balloon_direct_lateral_sign" value="$(arg balloon_direct_lateral_sign)" />
