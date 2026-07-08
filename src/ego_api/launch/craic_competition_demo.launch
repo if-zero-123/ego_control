@@ -364,7 +364,7 @@
     <arg name="override_smooth_speed" default="0.35" />
     <arg name="override_move_post_hold" default="0.08" />
     <arg name="aggressive_override_speed" default="1.70" />
-    <arg name="attack_descent_override_speed" default="1.70" />
+    <arg name="attack_descent_override_speed" default="2.20" />
     <arg name="return_frame_post_speed" default="1.70" />
     <arg name="return_frame_post_fast_threshold" default="0.18" />
     <arg name="return_frame_post_settle_speed" default="0.70" />
@@ -372,10 +372,10 @@
     <arg name="return_frame_post_confirm_hold" default="0.25" />
     <arg name="return_frame_post_confirm_timeout" default="3.0" />
     <arg name="override_yaw_timeout" default="10.0" />
-    <arg name="override_yaw_threshold" default="0.30" />
-    <arg name="reverse_yaw_threshold" default="0.50" />
+    <arg name="override_yaw_threshold" default="0.40" />
+    <arg name="reverse_yaw_threshold" default="0.65" />
     <arg name="override_yaw_hold_time" default="0.0" />
-    <arg name="override_yaw_rate" default="3.4" />
+    <arg name="override_yaw_rate" default="4.50" />
     <arg name="reverse_yaw_pre_hold" default="0.0" />
     <arg name="reverse_yaw_post_hold" default="0.0" />
     <arg name="override_yaw_post_hold" default="0.0" />

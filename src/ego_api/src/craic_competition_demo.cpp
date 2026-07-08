@@ -265,7 +265,7 @@ public:
         pnh_.param<double>("override_smooth_speed", override_smooth_speed_, 0.35);
         pnh_.param<double>("override_move_post_hold", override_move_post_hold_, 0.08);
         pnh_.param<double>("aggressive_override_speed", aggressive_override_speed_, 1.70);
-        pnh_.param<double>("attack_descent_override_speed", attack_descent_override_speed_, 1.70);
+        pnh_.param<double>("attack_descent_override_speed", attack_descent_override_speed_, 2.20);
         pnh_.param<double>("return_frame_post_speed", return_frame_post_speed_, 1.70);
         pnh_.param<double>("return_frame_post_fast_threshold", return_frame_post_fast_threshold_, 0.18);
         pnh_.param<double>("return_frame_post_settle_speed", return_frame_post_settle_speed_, 0.70);
@@ -273,10 +273,10 @@ public:
         pnh_.param<double>("return_frame_post_confirm_hold", return_frame_post_confirm_hold_, 0.25);
         pnh_.param<double>("return_frame_post_confirm_timeout", return_frame_post_confirm_timeout_, 3.0);
         pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
-        pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.30);
-        pnh_.param<double>("reverse_yaw_threshold", reverse_yaw_threshold_, 0.50);
+        pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.40);
+        pnh_.param<double>("reverse_yaw_threshold", reverse_yaw_threshold_, 0.65);
         pnh_.param<double>("override_yaw_hold_time", override_yaw_hold_time_, 0.0);
-        pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 3.4);
+        pnh_.param<double>("override_yaw_rate", override_yaw_rate_, 4.50);
         pnh_.param<double>("reverse_yaw_pre_hold", reverse_yaw_pre_hold_, 0.0);
         pnh_.param<double>("reverse_yaw_post_hold", reverse_yaw_post_hold_, 0.0);
         pnh_.param<double>("override_yaw_post_hold", override_yaw_post_hold_, 0.0);
@@ -2300,7 +2300,7 @@ private:
     double override_smooth_speed_ = 0.35;
     double override_move_post_hold_ = 0.08;
     double aggressive_override_speed_ = 1.70;
-    double attack_descent_override_speed_ = 1.70;
+    double attack_descent_override_speed_ = 2.20;
     double return_frame_post_speed_ = 1.70;
     double return_frame_post_fast_threshold_ = 0.18;
     double return_frame_post_settle_speed_ = 0.70;
@@ -2308,10 +2308,10 @@ private:
     double return_frame_post_confirm_hold_ = 0.25;
     double return_frame_post_confirm_timeout_ = 3.0;
     double override_yaw_timeout_ = 10.0;
-    double override_yaw_threshold_ = 0.30;
-    double reverse_yaw_threshold_ = 0.50;
+    double override_yaw_threshold_ = 0.40;
+    double reverse_yaw_threshold_ = 0.65;
     double override_yaw_hold_time_ = 0.0;
-    double override_yaw_rate_ = 3.4;
+    double override_yaw_rate_ = 4.50;
     double reverse_yaw_pre_hold_ = 0.0;
     double reverse_yaw_post_hold_ = 0.0;
     double override_yaw_post_hold_ = 0.0;
