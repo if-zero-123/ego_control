@@ -243,8 +243,9 @@ public:
         pnh_.param<double>("balloon_approach_override_speed", balloon_approach_override_speed_, 1.35);
         pnh_.param<double>("balloon_direct_forward_speed", balloon_direct_forward_speed_, 0.45);
         pnh_.param<double>("balloon_direct_slow_speed", balloon_direct_slow_speed_, 0.24);
-        pnh_.param<double>("balloon_direct_max_distance", balloon_direct_max_distance_, 1.20);
-        pnh_.param<double>("balloon_direct_min_puncture_distance", balloon_direct_min_puncture_distance_, 0.65);
+        pnh_.param<double>("balloon_direct_max_distance", balloon_direct_max_distance_, 1.35);
+        pnh_.param<double>("balloon_direct_min_puncture_distance", balloon_direct_min_puncture_distance_, 0.75);
+        pnh_.param<double>("balloon_direct_puncture_commit_distance", balloon_direct_puncture_commit_distance_, 0.10);
         pnh_.param<double>("balloon_direct_timeout", balloon_direct_timeout_, 8.0);
         pnh_.param<double>("balloon_direct_kp_u", balloon_direct_kp_u_, 0.24);
         pnh_.param<double>("balloon_direct_kd_u", balloon_direct_kd_u_, 0.04);
@@ -1315,9 +1316,13 @@ private:
         const Eigen::Vector3d start = api_.getOdomPosition();
         const ros::Time start_time = ros::Time::now();
         const ros::Time deadline = start_time + ros::Duration(std::max(0.5, balloon_direct_timeout_));
+        const double max_puncture_progress = std::max(0.0, balloon_direct_max_distance_);
         const double min_puncture_progress = clampValue(balloon_direct_min_puncture_distance_,
                                                         0.0,
-                                                        std::max(0.0, balloon_direct_max_distance_));
+                                                        max_puncture_progress);
+        const double commit_distance = clampValue(balloon_direct_puncture_commit_distance_,
+                                                  0.0,
+                                                  max_puncture_progress);
         const double area_threshold = std::max(1.0, roi.baseline_area * balloon_pop_area_drop_ratio_);
         const bool have_start_depth = freshBalloonDepth();
         const double start_depth = have_start_depth ? balloon_detection_.depth
@@ -1331,17 +1336,40 @@ private:
         double prev_err_u = 0.0;
         double prev_err_v = 0.0;
         bool detected = false;
+        bool puncture_candidate = false;
         std::string reason = "distance";
+        std::string candidate_reason;
+        double candidate_stop_progress = 0.0;
         double progress = 0.0;
         double depth = start_depth;
         double area = freshVerifyRoiResult() ? verify_roi_result_.area : -1.0;
 
-        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE start forward=%.2f slow=%.2f min_distance=%.2f max_distance=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f filter_alpha=%.2f deadband=%.3f",
+        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE start forward=%.2f slow=%.2f min_distance=%.2f commit=%.2f max_distance=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f filter_alpha=%.2f deadband=%.3f",
                  balloon_direct_forward_speed_, balloon_direct_slow_speed_,
-                 min_puncture_progress,
-                 balloon_direct_max_distance_, balloon_direct_timeout_,
+                 min_puncture_progress, commit_distance,
+                 max_puncture_progress, balloon_direct_timeout_,
                  area_threshold, start_depth,
                  balloon_direct_error_filter_alpha_, balloon_direct_error_deadband_);
+
+        auto startPunctureCandidate = [&](const std::string& candidate) {
+            if (!puncture_candidate) {
+                puncture_candidate = true;
+                candidate_reason = candidate;
+                candidate_stop_progress = std::min(max_puncture_progress,
+                                                   progress + commit_distance);
+                ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE candidate reason=%s progress=%.2f commit_stop=%.2f",
+                         candidate_reason.c_str(), progress, candidate_stop_progress);
+            }
+        };
+
+        auto finishPunctureCandidate = [&]() {
+            if (puncture_candidate && progress >= candidate_stop_progress) {
+                detected = true;
+                reason = candidate_reason + "_commit";
+                return true;
+            }
+            return false;
+        };
 
         ros::Rate rate(50);
         while (ros::ok() && ros::Time::now() < deadline) {
@@ -1350,12 +1378,17 @@ private:
             const double dt = std::max(1e-3, (now - last).toSec());
             last = now;
 
+            if (finishPunctureCandidate()) {
+                break;
+            }
+
             if (freshVerifyRoiResult()) {
                 area = verify_roi_result_.area;
                 if (progress >= min_puncture_progress && area <= area_threshold) {
-                    detected = true;
-                    reason = "area_drop";
-                    break;
+                    startPunctureCandidate("area_drop");
+                    if (finishPunctureCandidate()) {
+                        break;
+                    }
                 }
             }
 
@@ -1364,9 +1397,10 @@ private:
                 if (progress >= min_puncture_progress &&
                     have_start_depth &&
                     depth >= start_depth + balloon_puncture_depth_jump_) {
-                    detected = true;
-                    reason = "depth_jump";
-                    break;
+                    startPunctureCandidate("depth_jump");
+                    if (finishPunctureCandidate()) {
+                        break;
+                    }
                 }
             }
 
@@ -1458,7 +1492,10 @@ private:
             const Eigen::Vector3d now_pos = api_.getOdomPosition();
             const Eigen::Vector2d delta(now_pos.x() - start.x(), now_pos.y() - start.y());
             progress = delta.dot(forward);
-            if (progress >= balloon_direct_max_distance_) {
+            if (finishPunctureCandidate()) {
+                break;
+            }
+            if (progress >= max_puncture_progress) {
                 reason = "distance";
                 break;
             }
@@ -1467,7 +1504,7 @@ private:
                 ROS_INFO_THROTTLE(mission_log_period_,
                                   "[craic_demo] BALLOON_DIRECT_PD_PUNCTURE state=%s err=(%.3f %.3f) progress=%.2f min=%.2f max=%.2f forward=%.2f lat=%.2f z=%.2f area=%.0f threshold=%.0f depth=%.2f",
                                   servo_state.c_str(), prev_err_u, prev_err_v,
-                                  progress, min_puncture_progress, balloon_direct_max_distance_,
+                                  progress, min_puncture_progress, max_puncture_progress,
                                   forward_speed, lateral_speed, z_speed, area,
                                   area_threshold, depth);
             }
@@ -1475,12 +1512,12 @@ private:
         }
 
         if (!detected && ros::Time::now() >= deadline && reason == "distance" &&
-            progress < balloon_direct_max_distance_) {
+            progress < max_puncture_progress) {
             reason = "timeout";
         }
         holdOverride(0.05, yaw);
         ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE result detected=%s reason=%s progress=%.2f min=%.2f distance=%.2f area=%.0f threshold=%.0f depth=%.2f start_depth=%.2f",
-                 yesNo(detected), reason.c_str(), progress, min_puncture_progress, balloon_direct_max_distance_,
+                 yesNo(detected), reason.c_str(), progress, min_puncture_progress, max_puncture_progress,
                  area, area_threshold, depth, start_depth);
         return detected;
     }
@@ -2305,8 +2342,9 @@ private:
     double balloon_approach_override_speed_ = 1.35;
     double balloon_direct_forward_speed_ = 0.45;
     double balloon_direct_slow_speed_ = 0.24;
-    double balloon_direct_max_distance_ = 1.20;
-    double balloon_direct_min_puncture_distance_ = 0.65;
+    double balloon_direct_max_distance_ = 1.35;
+    double balloon_direct_min_puncture_distance_ = 0.75;
+    double balloon_direct_puncture_commit_distance_ = 0.10;
     double balloon_direct_timeout_ = 8.0;
     double balloon_direct_kp_u_ = 0.24;
     double balloon_direct_kd_u_ = 0.04;

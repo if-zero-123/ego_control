@@ -269,6 +269,7 @@
         - error_filter_alpha/error_deadband 用于压住画面 bbox 中心轻微跳动导致的 PD 晃动。
         - err_u/err_v 大于 fast_u/v_threshold 时先慢速前冲，避免还没对准就快速冲过。
         - min_puncture_distance 之前不接受 area_drop/depth_jump 扎破判断，避免前进距离不够就停。
+        - puncture_commit_distance 是疑似扎破后的保底继续前冲距离，防止 ROI 提前掉面积但针还没扎到。
         - 前冲中优先用 verify_roi 面积下降判断扎破，depth jump 只作辅助。
         - 触发扎破、达到最大前冲距离或超时后，立即 hold、后退 0.12m，再最终 verify。
         - lateral_sign/z_sign 用于现场确认 PD 方向，如果修正方向反了可临时改成 1.0。
@@ -310,8 +311,9 @@
     <arg name="balloon_approach_override_speed" default="1.35" />
     <arg name="balloon_direct_forward_speed" default="0.45" />
     <arg name="balloon_direct_slow_speed" default="0.24" />
-    <arg name="balloon_direct_max_distance" default="1.20" />
-    <arg name="balloon_direct_min_puncture_distance" default="0.65" />
+    <arg name="balloon_direct_max_distance" default="1.35" />
+    <arg name="balloon_direct_min_puncture_distance" default="0.75" />
+    <arg name="balloon_direct_puncture_commit_distance" default="0.10" />
     <arg name="balloon_direct_timeout" default="8.0" />
     <arg name="balloon_direct_kp_u" default="0.24" />
     <arg name="balloon_direct_kd_u" default="0.04" />
@@ -877,6 +879,7 @@
         <param name="balloon_direct_slow_speed" value="$(arg balloon_direct_slow_speed)" />
         <param name="balloon_direct_max_distance" value="$(arg balloon_direct_max_distance)" />
         <param name="balloon_direct_min_puncture_distance" value="$(arg balloon_direct_min_puncture_distance)" />
+        <param name="balloon_direct_puncture_commit_distance" value="$(arg balloon_direct_puncture_commit_distance)" />
         <param name="balloon_direct_timeout" value="$(arg balloon_direct_timeout)" />
         <param name="balloon_direct_kp_u" value="$(arg balloon_direct_kp_u)" />
         <param name="balloon_direct_kd_u" value="$(arg balloon_direct_kd_u)" />
