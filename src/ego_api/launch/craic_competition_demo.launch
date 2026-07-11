@@ -532,6 +532,8 @@
         D435 节点输出 /balloon/point 相机坐标、/balloon/world_point 世界坐标和 /balloon/servo 画面对齐误差。
         camera_body_x/y/z 是 D435 安装在机体系下的偏置，若相机不在机体中心需要校准这里。
         needle_u/v 可指定针尖在图像中的像素坐标，默认 -1 表示使用检测节点默认策略。
+        balloon_needle_right_offset_m 为米制横向补偿；正值会把伺服目标点往图像右侧移动，
+        通常用于修正针总是扎在气球右侧的情况。
 
         坐标含义：
         - /balloon/point 是相机坐标下的气球点。
@@ -564,6 +566,7 @@
     <arg name="balloon_near_red_ratio_min" default="0.30" />
     <arg name="balloon_needle_u" default="-1.0" />
     <arg name="balloon_needle_v" default="-1.0" />
+    <arg name="balloon_needle_right_offset_m" default="0.055" />
     <arg name="balloon_needle_down_offset_m" default="0.05" />
 
     <!--
@@ -769,6 +772,7 @@
         <arg name="near_red_ratio_min" value="$(arg balloon_near_red_ratio_min)" />
         <arg name="needle_u" value="$(arg balloon_needle_u)" />
         <arg name="needle_v" value="$(arg balloon_needle_v)" />
+        <arg name="needle_right_offset_m" value="$(arg balloon_needle_right_offset_m)" />
         <arg name="needle_down_offset_m" value="$(arg balloon_needle_down_offset_m)" />
     </include>
 
