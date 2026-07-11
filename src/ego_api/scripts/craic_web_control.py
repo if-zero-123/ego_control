@@ -1188,6 +1188,7 @@ class CraicWebControl:
         self.pin_code = str(pnh("~pin_code", "1234"))
         self.mission_package = pnh("~mission_package", "ego_api")
         self.mission_launch = pnh("~mission_launch", "craic_competition_demo.launch")
+        self.mission_start_d435_balloon = str(pnh("~mission_start_d435_balloon", "")).strip()
         self.workspace_dir = pnh("~workspace_dir", "/home/orangepi/catkin_ws")
         self.enable_poweroff = bool(pnh("~enable_poweroff", False))
         self.poweroff_command = pnh("~poweroff_command", "systemctl poweroff")
@@ -1546,6 +1547,12 @@ class CraicWebControl:
         cmd = ["roslaunch", self.mission_package, self.mission_launch]
         for name in sorted(clean.keys()):
             cmd.append("%s:=%s" % (name, clean[name]))
+        if self.mission_start_d435_balloon:
+            start_d435 = self._parse_bool(self.mission_start_d435_balloon, "mission_start_d435_balloon")
+            start_d435_text = "true" if start_d435 else "false"
+            cmd.append("start_d435_balloon:=%s" % start_d435_text)
+            effective["start_d435_balloon"] = start_d435_text
+            clean["start_d435_balloon"] = start_d435_text
         env = os.environ.copy()
         env.setdefault("PYTHONUNBUFFERED", "1")
         display_cmd = " ".join(shlex.quote(v) for v in cmd)

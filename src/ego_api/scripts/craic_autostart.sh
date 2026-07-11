@@ -35,6 +35,12 @@ MAVROS_PACKAGE="${MAVROS_PACKAGE:-mavros}"
 MAVROS_LAUNCH="${MAVROS_LAUNCH:-px4.launch}"
 LIDAR_TO_MAVROS_PACKAGE="${LIDAR_TO_MAVROS_PACKAGE:-lidar_to_mavros}"
 LIDAR_TO_MAVROS_LAUNCH="${LIDAR_TO_MAVROS_LAUNCH:-fastlio_to_px4_mid360_direct.launch}"
+D435_BALLOON_ENABLE="${D435_BALLOON_ENABLE:-true}"
+D435_BALLOON_REQUIRED="${D435_BALLOON_REQUIRED:-false}"
+D435_BALLOON_PACKAGE="${D435_BALLOON_PACKAGE:-usb_camera_vision}"
+D435_BALLOON_LAUNCH="${D435_BALLOON_LAUNCH:-d435_balloon_detector.launch}"
+D435_BALLOON_GAP_SEC="${D435_BALLOON_GAP_SEC:-3}"
+D435_BALLOON_LAUNCH_ARGS="${D435_BALLOON_LAUNCH_ARGS:-needle_down_offset_m:=0.05}"
 WEB_PACKAGE="${WEB_PACKAGE:-ego_api}"
 WEB_LAUNCH="${WEB_LAUNCH:-craic_web_control.launch}"
 
@@ -59,6 +65,7 @@ exec > >(awk '{ print strftime("[%F %T]"), $0; fflush(); }' | tee -a "$LOG_DIR/a
 
 PIDS=()
 NAMES=()
+REQUIRED=()
 AP_BACKEND=""
 AP_STARTED=false
 STOP_REQUESTED=false
@@ -106,6 +113,7 @@ run_ros_bg() {
   fi
   PIDS+=("$!")
   NAMES+=("$name")
+  REQUIRED+=("true")
   sleep 0.5
 }
 
@@ -131,6 +139,7 @@ cleanup() {
   for ((i=${#PIDS[@]}-1; i>=0; i--)); do
     local pid="${PIDS[$i]}"
     local name="${NAMES[$i]}"
+    [[ -n "$pid" ]] || continue
     if kill -0 "$pid" >/dev/null 2>&1; then
       log "SIGINT $name pid=$pid"
       kill -INT "-$pid" >/dev/null 2>&1 || kill -INT "$pid" >/dev/null 2>&1 || true
@@ -140,6 +149,7 @@ cleanup() {
   for ((i=${#PIDS[@]}-1; i>=0; i--)); do
     local pid="${PIDS[$i]}"
     local name="${NAMES[$i]}"
+    [[ -n "$pid" ]] || continue
     if kill -0 "$pid" >/dev/null 2>&1; then
       log "SIGTERM $name pid=$pid"
       kill -TERM "-$pid" >/dev/null 2>&1 || kill -TERM "$pid" >/dev/null 2>&1 || true
@@ -149,6 +159,7 @@ cleanup() {
   for ((i=${#PIDS[@]}-1; i>=0; i--)); do
     local pid="${PIDS[$i]}"
     local name="${NAMES[$i]}"
+    [[ -n "$pid" ]] || continue
     if kill -0 "$pid" >/dev/null 2>&1; then
       log "SIGKILL $name pid=$pid"
       kill -KILL "-$pid" >/dev/null 2>&1 || kill -KILL "$pid" >/dev/null 2>&1 || true
@@ -330,6 +341,25 @@ start_launch() {
   fi
 }
 
+start_launch_optional() {
+  local name="$1"
+  if start_launch "$@"; then
+    local last_idx=$((${#REQUIRED[@]} - 1))
+    REQUIRED[$last_idx]="false"
+    return 0
+  fi
+  if [[ ${#PIDS[@]} -gt 0 ]]; then
+    local last_idx=$((${#PIDS[@]} - 1))
+    if [[ "${NAMES[$last_idx]:-}" == "$name" ]]; then
+      unset "PIDS[$last_idx]"
+      unset "NAMES[$last_idx]"
+      unset "REQUIRED[$last_idx]"
+    fi
+  fi
+  log "$name did not stay running; continue because it is optional"
+  return 1
+}
+
 resolve_launch() {
   local pkg="$1"
   local launch_file="$2"
@@ -381,8 +411,23 @@ check_config() {
 livox_mid360 $LIVOX_PACKAGE $LIVOX_LAUNCH
 mavros_px4 $MAVROS_PACKAGE $MAVROS_LAUNCH
 fastlio_to_px4 $LIDAR_TO_MAVROS_PACKAGE $LIDAR_TO_MAVROS_LAUNCH
-craic_web_control $WEB_PACKAGE $WEB_LAUNCH
 EOF
+  if [[ "$D435_BALLOON_ENABLE" == "true" ]]; then
+    if resolved="$(resolve_launch "$D435_BALLOON_PACKAGE" "$D435_BALLOON_LAUNCH")"; then
+      log "launch d435_balloon: $D435_BALLOON_PACKAGE $D435_BALLOON_LAUNCH -> $resolved"
+    else
+      log "launch d435_balloon: $D435_BALLOON_PACKAGE $D435_BALLOON_LAUNCH -> $resolved"
+      failed=1
+    fi
+  else
+    log "launch d435_balloon: disabled"
+  fi
+  if resolved="$(resolve_launch "$WEB_PACKAGE" "$WEB_LAUNCH")"; then
+    log "launch craic_web_control: $WEB_PACKAGE $WEB_LAUNCH -> $resolved"
+  else
+    log "launch craic_web_control: $WEB_PACKAGE $WEB_LAUNCH -> $resolved"
+    failed=1
+  fi
   return "$failed"
 }
 
@@ -458,14 +503,36 @@ main() {
   start_launch mavros_px4 "$MAVROS_PACKAGE" "$MAVROS_LAUNCH" "$PX4_FIRST_GAP_SEC"
   start_launch livox_mid360 "$LIVOX_PACKAGE" "$LIVOX_LAUNCH" "$LAUNCH_GAP_SEC"
   start_launch fastlio_to_px4 "$LIDAR_TO_MAVROS_PACKAGE" "$LIDAR_TO_MAVROS_LAUNCH" "$LAUNCH_GAP_SEC"
-  start_launch craic_web_control "$WEB_PACKAGE" "$WEB_LAUNCH" "$LAUNCH_GAP_SEC" "host:=$web_host" "port:=$selected_port"
+  local mission_start_d435_balloon="true"
+  if [[ "$D435_BALLOON_ENABLE" == "true" ]]; then
+    local d435_args=()
+    if [[ -n "$D435_BALLOON_LAUNCH_ARGS" ]]; then
+      read -r -a d435_args <<< "$D435_BALLOON_LAUNCH_ARGS"
+    fi
+    if [[ "$D435_BALLOON_REQUIRED" == "true" ]]; then
+      start_launch d435_balloon "$D435_BALLOON_PACKAGE" "$D435_BALLOON_LAUNCH" "$D435_BALLOON_GAP_SEC" "${d435_args[@]}"
+      mission_start_d435_balloon="false"
+    else
+      if start_launch_optional d435_balloon "$D435_BALLOON_PACKAGE" "$D435_BALLOON_LAUNCH" "$D435_BALLOON_GAP_SEC" "${d435_args[@]}"; then
+        mission_start_d435_balloon="false"
+      fi
+    fi
+  fi
+  start_launch craic_web_control "$WEB_PACKAGE" "$WEB_LAUNCH" "$LAUNCH_GAP_SEC" \
+    "host:=$web_host" "port:=$selected_port" "mission_start_d435_balloon:=$mission_start_d435_balloon"
 
   log "all launches started"
   while true; do
     for ((i=0; i<${#PIDS[@]}; i++)); do
-      if ! kill -0 "${PIDS[$i]}" >/dev/null 2>&1; then
-        log "${NAMES[$i]} exited; service will stop and systemd can restart it"
-        exit 4
+      local pid="${PIDS[$i]:-}"
+      [[ -n "$pid" ]] || continue
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        if [[ "${REQUIRED[$i]}" == "true" ]]; then
+          log "${NAMES[$i]} exited; service will stop and systemd can restart it"
+          exit 4
+        fi
+        log "${NAMES[$i]} exited; continue because it is optional"
+        PIDS[$i]=""
       fi
     done
     sleep 5

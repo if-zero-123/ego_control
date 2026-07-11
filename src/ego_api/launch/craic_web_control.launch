@@ -21,6 +21,11 @@
 
     <arg name="mission_package" default="ego_api" />
     <arg name="mission_launch" default="craic_competition_demo.launch" />
+    <!--
+        留空表示保持比赛 launch 自己的默认值。
+        自启动脚本提前启动 D435 气球检测时，会传 false，避免网页启动比赛任务时重复启动 RealSense。
+    -->
+    <arg name="mission_start_d435_balloon" default="" />
 
     <arg name="raw_cloud_topic" default="/cloud_registered" />
     <arg name="occupancy_topic" default="/drone_0_ego_planner_node/grid_map/occupancy" />
@@ -49,6 +54,7 @@
         <param name="reboot_command" value="$(arg reboot_command)" />
         <param name="mission_package" value="$(arg mission_package)" />
         <param name="mission_launch" value="$(arg mission_launch)" />
+        <param name="mission_start_d435_balloon" value="$(arg mission_start_d435_balloon)" />
         <param name="raw_cloud_topic" value="$(arg raw_cloud_topic)" />
         <param name="occupancy_topic" value="$(arg occupancy_topic)" />
         <param name="occupancy_inflate_topic" value="$(arg occupancy_inflate_topic)" />
