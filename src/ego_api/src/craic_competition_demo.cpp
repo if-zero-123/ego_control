@@ -249,20 +249,25 @@ public:
         pnh_.param<double>("balloon_direct_puncture_commit_distance", balloon_direct_puncture_commit_distance_, 0.10);
         pnh_.param<double>("balloon_direct_timeout", balloon_direct_timeout_, 8.0);
         pnh_.param<double>("balloon_direct_kp_u", balloon_direct_kp_u_, 0.24);
-        pnh_.param<double>("balloon_direct_kd_u", balloon_direct_kd_u_, 0.04);
+        pnh_.param<double>("balloon_direct_kd_u", balloon_direct_kd_u_, 0.025);
         pnh_.param<double>("balloon_direct_kp_v", balloon_direct_kp_v_, 0.16);
-        pnh_.param<double>("balloon_direct_kd_v", balloon_direct_kd_v_, 0.03);
-        pnh_.param<double>("balloon_direct_max_lateral_speed", balloon_direct_max_lateral_speed_, 0.16);
-        pnh_.param<double>("balloon_direct_max_z_speed", balloon_direct_max_z_speed_, 0.12);
+        pnh_.param<double>("balloon_direct_kd_v", balloon_direct_kd_v_, 0.02);
+        pnh_.param<double>("balloon_direct_max_lateral_speed", balloon_direct_max_lateral_speed_, 0.12);
+        pnh_.param<double>("balloon_direct_max_z_speed", balloon_direct_max_z_speed_, 0.09);
         pnh_.param<double>("balloon_direct_near_blob_speed_scale", balloon_direct_near_blob_speed_scale_, 0.35);
         pnh_.param<double>("balloon_direct_near_blob_forward_scale", balloon_direct_near_blob_forward_scale_, 0.75);
         pnh_.param<double>("balloon_direct_servo_lost_timeout", balloon_direct_servo_lost_timeout_, 0.35);
-        pnh_.param<double>("balloon_direct_error_filter_alpha", balloon_direct_error_filter_alpha_, 0.35);
+        pnh_.param<double>("balloon_direct_error_filter_alpha", balloon_direct_error_filter_alpha_, 0.25);
         pnh_.param<double>("balloon_direct_error_deadband", balloon_direct_error_deadband_, 0.025);
         pnh_.param<double>("balloon_direct_fast_u_threshold", balloon_direct_fast_u_threshold_, 0.12);
         pnh_.param<double>("balloon_direct_fast_v_threshold", balloon_direct_fast_v_threshold_, 0.13);
         pnh_.param<double>("balloon_direct_lateral_sign", balloon_direct_lateral_sign_, -1.0);
         pnh_.param<double>("balloon_direct_z_sign", balloon_direct_z_sign_, -1.0);
+        pnh_.param<double>("balloon_direct_lateral_decay_start", balloon_direct_lateral_decay_start_, 0.35);
+        pnh_.param<double>("balloon_direct_lateral_freeze_distance", balloon_direct_lateral_freeze_distance_, 0.65);
+        pnh_.param<double>("balloon_direct_terminal_lateral_scale", balloon_direct_terminal_lateral_scale_, 0.15);
+        pnh_.param<double>("balloon_direct_terminal_z_scale", balloon_direct_terminal_z_scale_, 0.20);
+        pnh_.param<bool>("balloon_direct_freeze_on_near_blob", balloon_direct_freeze_on_near_blob_, true);
 
         pnh_.param<double>("override_move_timeout", override_move_timeout_, 30.0);
         pnh_.param<double>("override_pos_threshold", override_pos_threshold_, 0.10);
@@ -1519,13 +1524,24 @@ private:
         double progress = 0.0;
         double depth = start_depth;
         double area = freshVerifyRoiResult() ? verify_roi_result_.area : -1.0;
+        const double lateral_decay_start = clampValue(balloon_direct_lateral_decay_start_,
+                                                      0.0,
+                                                      max_puncture_progress);
+        const double lateral_freeze_distance = clampValue(balloon_direct_lateral_freeze_distance_,
+                                                          lateral_decay_start,
+                                                          max_puncture_progress);
+        const double terminal_lateral_scale = clampValue(balloon_direct_terminal_lateral_scale_, 0.0, 1.0);
+        const double terminal_z_scale = clampValue(balloon_direct_terminal_z_scale_, 0.0, 1.0);
 
-        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE start forward=%.2f slow=%.2f min_distance=%.2f commit=%.2f max_distance=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f filter_alpha=%.2f deadband=%.3f",
+        ROS_INFO("[craic_demo] BALLOON_DIRECT_PD_PUNCTURE start forward=%.2f slow=%.2f min_distance=%.2f commit=%.2f max_distance=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f filter_alpha=%.2f deadband=%.3f decay_start=%.2f freeze=%.2f terminal_scale=(%.2f %.2f) freeze_near=%s",
                  balloon_direct_forward_speed_, balloon_direct_slow_speed_,
                  min_puncture_progress, commit_distance,
                  max_puncture_progress, balloon_direct_timeout_,
                  area_threshold, start_depth,
-                 balloon_direct_error_filter_alpha_, balloon_direct_error_deadband_);
+                 balloon_direct_error_filter_alpha_, balloon_direct_error_deadband_,
+                 lateral_decay_start, lateral_freeze_distance,
+                 terminal_lateral_scale, terminal_z_scale,
+                 yesNo(balloon_direct_freeze_on_near_blob_));
 
         auto startPunctureCandidate = [&](const std::string& candidate) {
             if (!puncture_candidate) {
@@ -1583,7 +1599,10 @@ private:
             double forward_speed = std::abs(balloon_direct_forward_speed_);
             double lateral_speed = 0.0;
             double z_speed = 0.0;
+            double lateral_align_scale = 1.0;
+            double z_align_scale = 1.0;
             std::string servo_state = "lost";
+            bool terminal_locked = false;
 
             if (freshBalloonServo()) {
                 const BalloonServo servo = balloon_servo_;
@@ -1632,12 +1651,29 @@ private:
                 const double max_z = std::max(0.0, balloon_direct_max_z_speed_ * scale);
                 const double lateral_sign = balloon_direct_lateral_sign_ >= 0.0 ? 1.0 : -1.0;
                 const double z_sign = balloon_direct_z_sign_ >= 0.0 ? 1.0 : -1.0;
+                if (lateral_freeze_distance > lateral_decay_start && progress >= lateral_decay_start) {
+                    const double ratio = clampValue((progress - lateral_decay_start) /
+                                                        (lateral_freeze_distance - lateral_decay_start),
+                                                    0.0,
+                                                    1.0);
+                    lateral_align_scale = 1.0 - ratio * (1.0 - terminal_lateral_scale);
+                    z_align_scale = 1.0 - ratio * (1.0 - terminal_z_scale);
+                }
+                if (progress >= lateral_freeze_distance ||
+                    (near_blob && balloon_direct_freeze_on_near_blob_)) {
+                    lateral_align_scale = 0.0;
+                    z_align_scale = 0.0;
+                    terminal_locked = true;
+                    have_prev_error = false;
+                }
                 lateral_speed = clampValue(lateral_sign * (balloon_direct_kp_u_ * filtered_err_u +
                                                            balloon_direct_kd_u_ * du),
                                            -max_lateral, max_lateral);
                 z_speed = clampValue(z_sign * (balloon_direct_kp_v_ * filtered_err_v +
                                                balloon_direct_kd_v_ * dv),
                                      -max_z, max_z);
+                lateral_speed *= lateral_align_scale;
+                z_speed *= z_align_scale;
                 if (std::abs(filtered_err_u) > balloon_direct_fast_u_threshold_ ||
                     std::abs(filtered_err_v) > balloon_direct_fast_v_threshold_ ||
                     filtered_hold) {
@@ -1678,10 +1714,12 @@ private:
 
             if (!simple_logs_) {
                 ROS_INFO_THROTTLE(mission_log_period_,
-                                  "[craic_demo] BALLOON_DIRECT_PD_PUNCTURE state=%s err=(%.3f %.3f) progress=%.2f min=%.2f max=%.2f forward=%.2f lat=%.2f z=%.2f area=%.0f threshold=%.0f depth=%.2f",
+                                  "[craic_demo] BALLOON_DIRECT_PD_PUNCTURE state=%s err=(%.3f %.3f) progress=%.2f min=%.2f max=%.2f forward=%.2f lat=%.2f z=%.2f align=(%.2f %.2f) terminal=%s area=%.0f threshold=%.0f depth=%.2f",
                                   servo_state.c_str(), prev_err_u, prev_err_v,
                                   progress, min_puncture_progress, max_puncture_progress,
-                                  forward_speed, lateral_speed, z_speed, area,
+                                  forward_speed, lateral_speed, z_speed,
+                                  lateral_align_scale, z_align_scale,
+                                  yesNo(terminal_locked), area,
                                   area_threshold, depth);
             }
             rate.sleep();
@@ -2526,20 +2564,25 @@ private:
     double balloon_direct_puncture_commit_distance_ = 0.10;
     double balloon_direct_timeout_ = 8.0;
     double balloon_direct_kp_u_ = 0.24;
-    double balloon_direct_kd_u_ = 0.04;
+    double balloon_direct_kd_u_ = 0.025;
     double balloon_direct_kp_v_ = 0.16;
-    double balloon_direct_kd_v_ = 0.03;
-    double balloon_direct_max_lateral_speed_ = 0.16;
-    double balloon_direct_max_z_speed_ = 0.12;
+    double balloon_direct_kd_v_ = 0.02;
+    double balloon_direct_max_lateral_speed_ = 0.12;
+    double balloon_direct_max_z_speed_ = 0.09;
     double balloon_direct_near_blob_speed_scale_ = 0.35;
     double balloon_direct_near_blob_forward_scale_ = 0.75;
     double balloon_direct_servo_lost_timeout_ = 0.35;
-    double balloon_direct_error_filter_alpha_ = 0.35;
+    double balloon_direct_error_filter_alpha_ = 0.25;
     double balloon_direct_error_deadband_ = 0.025;
     double balloon_direct_fast_u_threshold_ = 0.12;
     double balloon_direct_fast_v_threshold_ = 0.13;
     double balloon_direct_lateral_sign_ = -1.0;
     double balloon_direct_z_sign_ = -1.0;
+    double balloon_direct_lateral_decay_start_ = 0.35;
+    double balloon_direct_lateral_freeze_distance_ = 0.65;
+    double balloon_direct_terminal_lateral_scale_ = 0.15;
+    double balloon_direct_terminal_z_scale_ = 0.20;
+    bool balloon_direct_freeze_on_near_blob_ = true;
 
     double override_move_timeout_ = 30.0;
     double override_pos_threshold_ = 0.10;
