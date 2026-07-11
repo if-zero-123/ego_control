@@ -339,10 +339,10 @@
     <arg name="balloon_direct_lateral_sign" default="-1.0" />
     <arg name="balloon_direct_z_sign" default="-1.0" />
     <arg name="balloon_direct_lateral_decay_start" default="0.35" />
-    <arg name="balloon_direct_lateral_freeze_distance" default="0.65" />
-    <arg name="balloon_direct_terminal_lateral_scale" default="0.15" />
+    <arg name="balloon_direct_lateral_freeze_distance" default="1.05" />
+    <arg name="balloon_direct_terminal_lateral_scale" default="0.35" />
     <arg name="balloon_direct_terminal_z_scale" default="0.20" />
-    <arg name="balloon_direct_freeze_on_near_blob" default="true" />
+    <arg name="balloon_direct_freeze_on_near_blob" default="false" />
     <arg name="balloon_detection_topic" default="/balloon/detection" />
     <arg name="balloon_servo_topic" default="/balloon/servo" />
     <arg name="balloon_verify_roi_topic" default="/balloon/verify_roi" />
