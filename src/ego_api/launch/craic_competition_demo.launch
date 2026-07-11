@@ -374,7 +374,7 @@
     <arg name="return_frame_post_fast_threshold" default="0.18" />
     <arg name="return_frame_post_settle_speed" default="0.70" />
     <arg name="return_frame_post_precision_threshold" default="0.08" />
-    <arg name="return_frame_post_confirm_hold" default="0.25" />
+    <arg name="return_frame_post_confirm_hold" default="0.0" />
     <arg name="return_frame_post_confirm_timeout" default="3.0" />
     <arg name="override_yaw_timeout" default="10.0" />
     <arg name="override_yaw_threshold" default="0.40" />
