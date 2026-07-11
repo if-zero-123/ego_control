@@ -174,6 +174,10 @@ public:
         pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.30);
         pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.50);
         pnh_.param<double>("frame_post_y_offset", frame_post_y_offset_, -0.135);
+        pnh_.param<std::string>("frame_post_mode", frame_post_mode_, "auto");
+        pnh_.param<double>("manual_frame_post_x", manual_frame_post_.x(), 4.70);
+        pnh_.param<double>("manual_frame_post_y", manual_frame_post_.y(), -1.25);
+        pnh_.param<double>("manual_frame_post_z", manual_frame_post_.z(), 1.25);
         pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 1.25);
         pnh_.param<double>("frame_pass_guard_timeout", frame_pass_guard_timeout_, 30.0);
         pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 5.0);
@@ -357,14 +361,34 @@ public:
         logStage("FRAME_CENTER", "wait frame center with expected fallback");
         const FrameCenterSelection frame_selection = waitFrameCenterWithFallback();
         const Eigen::Vector3d& frame_center = frame_selection.center;
-        const double frame_post_y_offset = frame_selection.detected ? frame_post_y_offset_ : 0.0;
-        const Eigen::Vector3d frame_post_control(frame_center.x() + frame_post_x_offset_,
+        bool use_manual_frame_post = false;
+        if (frame_post_mode_ == "manual") {
+            use_manual_frame_post = true;
+        } else if (frame_post_mode_ != "auto") {
+            ROS_WARN("[craic_demo] FRAME_POST_CONTROL invalid frame_post_mode=%s, fallback to auto",
+                     frame_post_mode_.c_str());
+        }
+
+        double frame_post_y_offset = 0.0;
+        Eigen::Vector3d frame_post_control = manual_frame_post_;
+        if (!use_manual_frame_post) {
+            frame_post_y_offset = frame_selection.detected ? frame_post_y_offset_ : 0.0;
+            frame_post_control = Eigen::Vector3d(frame_center.x() + frame_post_x_offset_,
                                                  frame_center.y() + frame_post_y_offset,
                                                  frame_center.z());
-        ROS_INFO("[craic_demo] FRAME_POST_CONTROL center_source=%s center=(%.2f %.2f %.2f) y_offset=%.3f target=(%.2f %.2f %.2f)",
+        }
+        if (!finiteVec(frame_post_control)) {
+            ROS_ERROR("[craic_demo] FAIL stage=FRAME_POST_CONTROL reason=non_finite target=(%.2f %.2f %.2f)",
+                      frame_post_control.x(), frame_post_control.y(), frame_post_control.z());
+            safeLand();
+            return 1;
+        }
+        ROS_INFO("[craic_demo] FRAME_POST_CONTROL mode=%s center_source=%s center=(%.2f %.2f %.2f) y_offset=%.3f manual=(%.2f %.2f %.2f) target=(%.2f %.2f %.2f)",
+                 use_manual_frame_post ? "manual" : "auto",
                  frame_selection.detected ? "detected" : "expected",
                  frame_center.x(), frame_center.y(), frame_center.z(),
                  frame_post_y_offset,
+                 manual_frame_post_.x(), manual_frame_post_.y(), manual_frame_post_.z(),
                  frame_post_control.x(), frame_post_control.y(), frame_post_control.z());
 
         logStage("FRAME_POST_EGO", "ego goal to frame post control with pass guard");
@@ -2492,6 +2516,8 @@ private:
     double frame_center_reject_distance_ = 0.30;
     double frame_post_x_offset_ = 1.50;
     double frame_post_y_offset_ = -0.135;
+    std::string frame_post_mode_ = "auto";
+    Eigen::Vector3d manual_frame_post_ = Eigen::Vector3d(4.70, -1.25, 1.25);
     double frame_pass_guard_x_offset_ = 1.25;
     double frame_pass_guard_timeout_ = 30.0;
     double frame_detect_timeout_ = 5.0;

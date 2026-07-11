@@ -55,6 +55,9 @@ PARAM_SPECS = {
     "frame_detect_timeout": (0.0, 30.0),
     "frame_post_x_offset": (0.0, 3.0),
     "frame_post_y_offset": (-2.0, 2.0),
+    "manual_frame_post_x": (-2.0, 8.0),
+    "manual_frame_post_y": (-5.0, 5.0),
+    "manual_frame_post_z": (0.05, 3.0),
     "frame_pass_guard_x_offset": (0.0, 2.0),
     "frame_pass_guard_timeout": (0.0, 120.0),
     "attack_zone_overrun_x": (-2.0, 2.0),
@@ -63,9 +66,10 @@ PARAM_SPECS = {
     "qr_search_offset": (0.0, 2.0),
 }
 MODE_VALUES = ("auto_detect", "expected_direct")
+FRAME_POST_MODE_VALUES = ("auto", "manual")
 BOOL_PARAM_NAMES = ("frame_use_unified_z",)
 WEB_ONLY_PARAM_NAMES = ("qr_demo_result_id",)
-CONTROL_PARAM_NAMES = list(PARAM_SPECS.keys()) + ["frame_center_mode"] + list(BOOL_PARAM_NAMES)
+CONTROL_PARAM_NAMES = list(PARAM_SPECS.keys()) + ["frame_center_mode", "frame_post_mode"] + list(BOOL_PARAM_NAMES)
 QR_IMAGE_MAX_SIDE = 960
 QR_IMAGE_JPEG_QUALITY = 85
 QR_SUCCESS_LOCK_DELAY_SEC = 0.35
@@ -484,9 +488,14 @@ INDEX_HTML = r"""<!doctype html>
             <label><input type="radio" name="frame_center_mode" value="auto_detect" checked>先识别，超时后用预期值</label>
             <label><input type="radio" name="frame_center_mode" value="expected_direct">本次直接使用预期值</label>
           </div>
+          <div class="mode-compact">
+            <label><input type="radio" name="frame_post_mode" value="auto" checked>自动计算门后点</label>
+            <label><input type="radio" name="frame_post_mode" value="manual">手动门后点</label>
+          </div>
           <div class="param-table">
             <div class="param-row"><div class="param-name">起飞对中</div><div class="row3" data-group="initial_wait"></div></div>
             <div class="param-row"><div class="param-name">门框中心</div><div class="row3" data-group="expected_frame"></div></div>
+            <div class="param-row"><div class="param-name">手动门后点</div><div class="row3" data-group="manual_frame_post"></div></div>
             <div class="param-row"><div class="param-name">门框高度</div><div class="row2" data-group="frame_height"></div></div>
             <div class="param-row"><div class="param-name">门框识别</div><div class="row2" data-group="frame_detect"></div></div>
             <div class="param-row"><div class="param-name">穿门保护</div><div class="row4" data-group="frame_pass_guard"></div></div>
@@ -537,6 +546,7 @@ INDEX_HTML = r"""<!doctype html>
 const PARAMS = [
   ['initial_wait_x', 'x'], ['initial_wait_y', 'y'], ['initial_wait_z', 'z'],
   ['expected_frame_x', 'x'], ['expected_frame_y', 'y'], ['expected_frame_z', 'z'],
+  ['manual_frame_post_x', 'x'], ['manual_frame_post_y', 'y'], ['manual_frame_post_z', 'z'],
   ['qr_goal_x', 'x'], ['qr_goal_y', 'y'], ['qr_goal_z', 'z'],
   ['attack_zone_x', 'x'], ['attack_zone_y', 'y'], ['attack_zone_z', 'z'],
   ['attack_height', 'z'],
@@ -594,6 +604,8 @@ function buildForm() {
     makeInput('initial_wait_x','X') + makeInput('initial_wait_y','Y') + makeInput('initial_wait_z','Z');
   document.querySelector('[data-group="expected_frame"]').innerHTML =
     makeInput('expected_frame_x','X') + makeInput('expected_frame_y','Y') + makeInput('expected_frame_z','Z');
+  document.querySelector('[data-group="manual_frame_post"]').innerHTML =
+    makeInput('manual_frame_post_x','X') + makeInput('manual_frame_post_y','Y') + makeInput('manual_frame_post_z','Z');
   document.querySelector('[data-group="frame_height"]').innerHTML =
     makeCheck('frame_use_unified_z','统一') + makeInput('frame_unified_z','Z');
   document.querySelector('[data-group="frame_detect"]').innerHTML =
@@ -614,7 +626,7 @@ function buildForm() {
     makeInput('attack_zone_x','X') + makeInput('attack_zone_y','Y') + makeInput('attack_zone_z','Z');
   document.querySelector('[data-group="attack_height"]').innerHTML =
     makeInput('attack_height','Z 高度');
-  document.querySelectorAll('.param, input[name="frame_center_mode"], #qr_demo_result_id').forEach(el => {
+  document.querySelectorAll('.param, input[name="frame_center_mode"], input[name="frame_post_mode"], #qr_demo_result_id').forEach(el => {
     el.addEventListener('input', updatePreview);
     el.addEventListener('change', updatePreview);
   });
@@ -624,6 +636,7 @@ function formValues() {
   PARAMS.forEach(([name]) => params[name] = Number(document.getElementById(name).value));
   params.frame_use_unified_z = document.getElementById('frame_use_unified_z').checked;
   params.frame_center_mode = document.querySelector('input[name="frame_center_mode"]:checked').value;
+  params.frame_post_mode = document.querySelector('input[name="frame_post_mode"]:checked').value;
   return params;
 }
 function taskPointsFromForm() {
@@ -631,6 +644,7 @@ function taskPointsFromForm() {
   return {
     initial_wait: [p.initial_wait_x, p.initial_wait_y, p.initial_wait_z],
     expected_frame: [p.expected_frame_x, p.expected_frame_y, p.expected_frame_z],
+    manual_frame_post: [p.manual_frame_post_x, p.manual_frame_post_y, p.manual_frame_post_z],
     qr_goal: [p.qr_goal_x, p.qr_goal_y, p.qr_goal_z],
     attack_zone: [p.attack_zone_x, p.attack_zone_y, p.attack_zone_z]
   };
@@ -638,10 +652,12 @@ function taskPointsFromForm() {
 function updatePreview() {
   const p = formValues();
   const modeText = p.frame_center_mode === 'expected_direct' ? '直接预期' : '先识别';
+  const postModeText = p.frame_post_mode === 'manual' ? '手动' : '自动';
   const heightText = p.frame_use_unified_z ? `统一 ${fmt(p.frame_unified_z)}` : '自动';
   document.getElementById('paramPreview').textContent =
-    `模式: ${modeText}\n` +
+    `模式: ${modeText}  门后点: ${postModeText}\n` +
     `对中 (${fmt(p.initial_wait_x)},${fmt(p.initial_wait_y)},${fmt(p.initial_wait_z)})  门框 (${fmt(p.expected_frame_x)},${fmt(p.expected_frame_y)},${fmt(p.expected_frame_z)})\n` +
+    `手动门后点 (${fmt(p.manual_frame_post_x)},${fmt(p.manual_frame_post_y)},${fmt(p.manual_frame_post_z)})\n` +
     `门框识别: 中心容差${fmt(p.frame_center_reject_distance)}  识别超时${fmt(p.frame_detect_timeout)}s  高度${heightText}\n` +
     `穿门保护: X偏移${fmt(p.frame_post_x_offset)}  Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
     `QR搜索 超时${fmt(p.qr_search_timeout)}s 上升${fmt(p.qr_search_raise_z)} 距离${fmt(p.qr_search_offset)}\n` +
@@ -650,10 +666,12 @@ function updatePreview() {
 function paramsPreviewText(p, emptyText) {
   if (!p || !Object.keys(p).length) return emptyText !== undefined ? emptyText : '--';
   const mode = p.frame_center_mode === 'expected_direct' ? '直接预期' : (p.frame_center_mode === 'auto_detect' ? '先识别' : '--');
+  const postMode = p.frame_post_mode === 'manual' ? '手动' : (p.frame_post_mode === 'auto' ? '自动' : '--');
   const unified = boolValue(p.frame_use_unified_z);
   const heightText = unified ? `统一 ${fmt(p.frame_unified_z)}` : '自动';
-  return `模式: ${mode}\n` +
+  return `模式: ${mode}  门后点: ${postMode}\n` +
     `对中 (${fmt(p.initial_wait_x)},${fmt(p.initial_wait_y)},${fmt(p.initial_wait_z)})  门框 (${fmt(p.expected_frame_x)},${fmt(p.expected_frame_y)},${fmt(p.expected_frame_z)})\n` +
+    `手动门后点 (${fmt(p.manual_frame_post_x)},${fmt(p.manual_frame_post_y)},${fmt(p.manual_frame_post_z)})\n` +
     `门框识别: 中心容差${fmt(p.frame_center_reject_distance)}  识别超时${fmt(p.frame_detect_timeout)}s  高度${heightText}\n` +
     `穿门保护: X偏移${fmt(p.frame_post_x_offset)}  Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
     `QR搜索 超时${fmt(p.qr_search_timeout)}s 上升${fmt(p.qr_search_raise_z)} 距离${fmt(p.qr_search_offset)}\n` +
@@ -675,6 +693,9 @@ async function loadDefaults() {
   const mode = defaults.frame_center_mode || 'auto_detect';
   const radio = document.querySelector(`input[name="frame_center_mode"][value="${mode}"]`);
   if (radio) radio.checked = true;
+  const postMode = defaults.frame_post_mode || 'auto';
+  const postRadio = document.querySelector(`input[name="frame_post_mode"][value="${postMode}"]`);
+  if (postRadio) postRadio.checked = true;
   updatePreview();
 }
 async function login() {
@@ -1250,6 +1271,7 @@ class CraicWebControl:
             defaults.setdefault(name, "false")
         defaults.setdefault("qr_demo_result_id", "0")
         defaults.setdefault("frame_center_mode", "auto_detect")
+        defaults.setdefault("frame_post_mode", "auto")
         defaults = self._resolve_default_refs(defaults)
         return defaults
 
@@ -1484,6 +1506,12 @@ class CraicWebControl:
         effective["frame_center_mode"] = mode
         if mode != self.defaults.get("frame_center_mode", "auto_detect"):
             clean["frame_center_mode"] = mode
+        frame_post_mode = params.get("frame_post_mode", self.defaults.get("frame_post_mode", "auto"))
+        if frame_post_mode not in FRAME_POST_MODE_VALUES:
+            raise ValueError("invalid frame_post_mode")
+        effective["frame_post_mode"] = frame_post_mode
+        if frame_post_mode != self.defaults.get("frame_post_mode", "auto"):
+            clean["frame_post_mode"] = frame_post_mode
         for name in BOOL_PARAM_NAMES:
             value = self._parse_bool(params.get(name, self.defaults.get(name, "false")), name)
             default_value = self._parse_bool(self.defaults.get(name, "false"), name)
@@ -1672,7 +1700,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             if self.path == "/" or self.path.startswith("/?"):
                 self._send_html()
             elif self.path == "/api/defaults":
-                self._send_json({"defaults": self.app.defaults, "modes": list(MODE_VALUES)})
+                self._send_json({
+                    "defaults": self.app.defaults,
+                    "modes": list(MODE_VALUES),
+                    "frame_post_modes": list(FRAME_POST_MODE_VALUES),
+                })
             elif self.path == "/api/status":
                 self._send_json(self.app.status())
             elif self.path == "/api/qr_success_image":
