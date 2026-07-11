@@ -189,7 +189,7 @@ public:
         pnh_.param<double>("qr_goal_x", qr_goal_.x(), 4.15);
         pnh_.param<double>("qr_goal_y", qr_goal_.y(), 0.2);
         pnh_.param<double>("qr_goal_z", qr_goal_.z(), 1.3);
-        pnh_.param<double>("qr_initial_wait", qr_initial_wait_, 1.0);
+        pnh_.param<double>("qr_initial_wait", qr_initial_wait_, 0.0);
         pnh_.param<double>("qr_search_timeout", qr_search_timeout_, 10.0);
         pnh_.param<double>("qr_search_raise_z", qr_search_raise_z_, 0.2);
         pnh_.param<double>("qr_search_offset", qr_search_offset_, 0.3);
@@ -1067,7 +1067,12 @@ private:
     }
 
     bool waitQrOrSearch(const Eigen::Vector3d& qr_goal, double yaw) {
-        if (waitForQr(qr_initial_wait_)) {
+        ros::spinOnce();
+        if (qrDetected()) {
+            ROS_INFO("[craic_demo] QR detected_immediate ids_count=%zu", qr_ids_.size());
+            return true;
+        }
+        if (qr_initial_wait_ > 1e-3 && waitForQr(qr_initial_wait_)) {
             return true;
         }
 
@@ -1087,7 +1092,6 @@ private:
         MoveResult result = moveOverrideLoop("qr_search_raise", raised, yaw,
                                              override_pos_threshold_, deadline, true);
         if (result == MoveResult::QrDetected) {
-            holdOverride(0.15, yaw);
             api_.disableOverride();
             return true;
         }
@@ -1116,7 +1120,6 @@ private:
             result = moveOverrideLoop(item.first, item.second, yaw,
                                       override_pos_threshold_, deadline, true);
             if (result == MoveResult::QrDetected || qrDetected()) {
-                holdOverride(0.15, yaw);
                 api_.disableOverride();
                 return true;
             }
@@ -2290,7 +2293,7 @@ private:
     double frame_lock_history_duration_ = 2.0;
 
     Eigen::Vector3d qr_goal_ = Eigen::Vector3d(4.15, 0.2, 1.3);
-    double qr_initial_wait_ = 1.0;
+    double qr_initial_wait_ = 0.0;
     double qr_search_timeout_ = 10.0;
     double qr_search_raise_z_ = 0.2;
     double qr_search_offset_ = 0.3;
