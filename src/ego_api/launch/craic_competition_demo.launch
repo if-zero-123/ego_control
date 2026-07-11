@@ -566,7 +566,7 @@
     <arg name="balloon_near_red_ratio_min" default="0.30" />
     <arg name="balloon_needle_u" default="-1.0" />
     <arg name="balloon_needle_v" default="-1.0" />
-    <arg name="balloon_needle_right_offset_m" default="0.055" />
+    <arg name="balloon_needle_right_offset_m" default="0.065" />
     <arg name="balloon_needle_down_offset_m" default="0.05" />
 
     <!--
