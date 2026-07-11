@@ -319,7 +319,7 @@
     <arg name="balloon_direct_forward_speed" default="0.45" />
     <arg name="balloon_direct_slow_speed" default="0.24" />
     <arg name="balloon_direct_max_distance" default="1.20" />
-    <arg name="balloon_direct_min_puncture_distance" default="0.65" />
+    <arg name="balloon_direct_min_puncture_distance" default="0.56" />
     <arg name="balloon_direct_timeout" default="8.0" />
     <arg name="balloon_direct_kp_u" default="0.24" />
     <arg name="balloon_direct_kd_u" default="0.04" />

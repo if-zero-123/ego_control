@@ -249,7 +249,7 @@ public:
         pnh_.param<double>("balloon_direct_forward_speed", balloon_direct_forward_speed_, 0.45);
         pnh_.param<double>("balloon_direct_slow_speed", balloon_direct_slow_speed_, 0.24);
         pnh_.param<double>("balloon_direct_max_distance", balloon_direct_max_distance_, 1.20);
-        pnh_.param<double>("balloon_direct_min_puncture_distance", balloon_direct_min_puncture_distance_, 0.65);
+        pnh_.param<double>("balloon_direct_min_puncture_distance", balloon_direct_min_puncture_distance_, 0.56);
         pnh_.param<double>("balloon_direct_timeout", balloon_direct_timeout_, 8.0);
         pnh_.param<double>("balloon_direct_kp_u", balloon_direct_kp_u_, 0.24);
         pnh_.param<double>("balloon_direct_kd_u", balloon_direct_kd_u_, 0.04);
@@ -2495,7 +2495,7 @@ private:
     double balloon_direct_forward_speed_ = 0.45;
     double balloon_direct_slow_speed_ = 0.24;
     double balloon_direct_max_distance_ = 1.20;
-    double balloon_direct_min_puncture_distance_ = 0.65;
+    double balloon_direct_min_puncture_distance_ = 0.56;
     double balloon_direct_timeout_ = 8.0;
     double balloon_direct_kp_u_ = 0.24;
     double balloon_direct_kd_u_ = 0.04;
