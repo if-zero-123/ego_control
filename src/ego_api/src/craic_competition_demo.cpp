@@ -274,7 +274,7 @@ public:
         pnh_.param<double>("return_frame_post_fast_threshold", return_frame_post_fast_threshold_, 0.18);
         pnh_.param<double>("return_frame_post_settle_speed", return_frame_post_settle_speed_, 0.70);
         pnh_.param<double>("return_frame_post_precision_threshold", return_frame_post_precision_threshold_, 0.08);
-        pnh_.param<double>("return_frame_post_confirm_hold", return_frame_post_confirm_hold_, 0.0);
+        pnh_.param<double>("return_frame_post_confirm_hold", return_frame_post_confirm_hold_, 0.25);
         pnh_.param<double>("return_frame_post_confirm_timeout", return_frame_post_confirm_timeout_, 3.0);
         pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
         pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.40);
@@ -667,19 +667,13 @@ private:
                                                               settle_deadline,
                                                               false,
                                                               return_frame_post_settle_speed_);
-            if (settle_result == MoveResult::Reached) {
-                if (return_frame_post_confirm_hold_ <= 1e-3) {
-                    confirmed = true;
-                } else {
-                    confirmed = holdTargetUntilClose(
-                        "return_frame_post_confirm",
-                        target,
-                        yaw,
-                        return_frame_post_precision_threshold_,
-                        return_frame_post_confirm_hold_,
-                        ros::Time::now() + ros::Duration(std::max(0.2, return_frame_post_confirm_timeout_)));
-                }
-            }
+            confirmed = settle_result == MoveResult::Reached &&
+                        holdTargetUntilClose("return_frame_post_confirm",
+                                             target,
+                                             yaw,
+                                             return_frame_post_precision_threshold_,
+                                             return_frame_post_confirm_hold_,
+                                             ros::Time::now() + ros::Duration(std::max(0.2, return_frame_post_confirm_timeout_)));
         }
 
         const Eigen::Vector3d odom = api_.getOdomPosition();
@@ -2395,7 +2389,7 @@ private:
     double return_frame_post_fast_threshold_ = 0.18;
     double return_frame_post_settle_speed_ = 0.70;
     double return_frame_post_precision_threshold_ = 0.08;
-    double return_frame_post_confirm_hold_ = 0.0;
+    double return_frame_post_confirm_hold_ = 0.25;
     double return_frame_post_confirm_timeout_ = 3.0;
     double override_yaw_timeout_ = 10.0;
     double override_yaw_threshold_ = 0.40;
