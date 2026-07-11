@@ -344,9 +344,7 @@
         override_move_post_hold：override 位置移动到点后的短保持时间，当前压短以减少段间空等。
         aggressive_override_speed：只给 QR 去程等明确提速段使用。
         attack_descent_override_speed：回到打击区后下降到 attack_height 的单独提速参数。
-        return_frame_post_*：QR 后回门后点使用，先快速回近，再在短确认窗口内精确/近似确认，确保后续 EGO 回打击区从门后开始。
-        - precision_threshold/confirm_hold：优先尝试 0.08m 内稳定 0.25s。
-        - release_threshold/release_hold：如果现场难压进 0.08m，0.12m 内稳定 0.08s 也放行，避免长时间停在门后。
+        return_frame_post_*：QR 后回门后点使用，先快速回近，再低速精确确认到点，确保后续 EGO 回打击区从门后开始。
         override_yaw_*：原地 yaw 对齐阈值、保持时间和角速度限幅。
         reverse_yaw_threshold：门后 180 度旋转的单独释放阈值，提前交给下一段 QR 移动继续收敛 yaw。
         override_yaw_post_hold：普通 yaw 对齐后的短保持时间。
@@ -378,9 +376,7 @@
     <arg name="return_frame_post_settle_speed" default="0.70" />
     <arg name="return_frame_post_precision_threshold" default="0.08" />
     <arg name="return_frame_post_confirm_hold" default="0.25" />
-    <arg name="return_frame_post_release_threshold" default="0.12" />
-    <arg name="return_frame_post_release_hold" default="0.08" />
-    <arg name="return_frame_post_confirm_timeout" default="1.20" />
+    <arg name="return_frame_post_confirm_timeout" default="3.0" />
     <arg name="override_yaw_timeout" default="10.0" />
     <arg name="override_yaw_threshold" default="0.40" />
     <arg name="reverse_yaw_threshold" default="0.65" />
@@ -918,8 +914,6 @@
         <param name="return_frame_post_settle_speed" value="$(arg return_frame_post_settle_speed)" />
         <param name="return_frame_post_precision_threshold" value="$(arg return_frame_post_precision_threshold)" />
         <param name="return_frame_post_confirm_hold" value="$(arg return_frame_post_confirm_hold)" />
-        <param name="return_frame_post_release_threshold" value="$(arg return_frame_post_release_threshold)" />
-        <param name="return_frame_post_release_hold" value="$(arg return_frame_post_release_hold)" />
         <param name="return_frame_post_confirm_timeout" value="$(arg return_frame_post_confirm_timeout)" />
         <param name="override_yaw_timeout" value="$(arg override_yaw_timeout)" />
         <param name="override_yaw_threshold" value="$(arg override_yaw_threshold)" />
