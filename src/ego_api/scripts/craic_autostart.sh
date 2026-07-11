@@ -40,7 +40,7 @@ D435_BALLOON_REQUIRED="${D435_BALLOON_REQUIRED:-false}"
 D435_BALLOON_PACKAGE="${D435_BALLOON_PACKAGE:-usb_camera_vision}"
 D435_BALLOON_LAUNCH="${D435_BALLOON_LAUNCH:-d435_balloon_detector.launch}"
 D435_BALLOON_GAP_SEC="${D435_BALLOON_GAP_SEC:-3}"
-D435_BALLOON_LAUNCH_ARGS="${D435_BALLOON_LAUNCH_ARGS:-needle_down_offset_m:=0.05 needle_right_offset_m:=0.065}"
+D435_BALLOON_LAUNCH_ARGS="${D435_BALLOON_LAUNCH_ARGS:-needle_down_offset_m:=0.0 needle_right_offset_m:=0.0}"
 WEB_PACKAGE="${WEB_PACKAGE:-ego_api}"
 WEB_LAUNCH="${WEB_LAUNCH:-craic_web_control.launch}"
 

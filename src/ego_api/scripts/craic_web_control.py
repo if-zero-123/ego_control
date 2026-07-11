@@ -65,6 +65,7 @@ PARAM_SPECS = {
     "qr_search_raise_z": (0.0, 1.0),
     "qr_search_offset": (0.0, 2.0),
     "balloon_needle_right_offset_m": (-0.2, 0.2),
+    "balloon_needle_down_offset_m": (-0.2, 0.2),
 }
 MODE_VALUES = ("auto_detect", "expected_direct")
 FRAME_POST_MODE_VALUES = ("auto", "manual")
@@ -543,7 +544,7 @@ INDEX_HTML = r"""<!doctype html>
             <div class="param-row"><div class="param-name">二维码搜索</div><div class="row3" data-group="qr_search"></div></div>
             <div class="param-row"><div class="param-name">打击区</div><div class="row3" data-group="attack_zone"></div></div>
             <div class="param-row"><div class="param-name">击打高度</div><div class="row3" data-group="attack_height"></div></div>
-            <div class="param-row"><div class="param-name">扎球补偿</div><div class="row1" data-group="balloon_needle"></div></div>
+            <div class="param-row"><div class="param-name">扎球补偿</div><div class="row2" data-group="balloon_needle"></div></div>
           </div>
         </div>
         <div class="settings-grid">
@@ -601,7 +602,8 @@ const PARAMS = [
   ['qr_search_timeout', '超时'],
   ['qr_search_raise_z', '上升'],
   ['qr_search_offset', '距离'],
-  ['balloon_needle_right_offset_m', '针右偏m']
+  ['balloon_needle_right_offset_m', '针右偏m'],
+  ['balloon_needle_down_offset_m', '针下偏m']
 ];
 const WEB_ONLY_PARAMS = ['qr_demo_result_id'];
 let token = '';
@@ -668,7 +670,8 @@ function buildForm() {
   document.querySelector('[data-group="attack_height"]').innerHTML =
     makeInput('attack_height','Z 高度');
   document.querySelector('[data-group="balloon_needle"]').innerHTML =
-    makeInput('balloon_needle_right_offset_m','针右偏m');
+    makeInput('balloon_needle_right_offset_m','针右偏m') +
+    makeInput('balloon_needle_down_offset_m','针下偏m');
   document.querySelectorAll('.param, input[name="frame_center_mode"], input[name="frame_post_mode"], #qr_demo_result_id').forEach(el => {
     el.addEventListener('input', updatePreview);
     el.addEventListener('change', updatePreview);
@@ -704,7 +707,7 @@ function updatePreview() {
     `门框识别: 中心容差${fmt(p.frame_center_reject_distance)}  识别超时${fmt(p.frame_detect_timeout)}s  高度${heightText}\n` +
     `穿门保护: X偏移${fmt(p.frame_post_x_offset)}  Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
     `QR搜索 超时${fmt(p.qr_search_timeout)}s 上升${fmt(p.qr_search_raise_z)} 距离${fmt(p.qr_search_offset)}\n` +
-    `QR (${fmt(p.qr_goal_x)},${fmt(p.qr_goal_y)},${fmt(p.qr_goal_z)})  打击区 (${fmt(p.attack_zone_x)},${fmt(p.attack_zone_y)},${fmt(p.attack_zone_z)})  高度 ${fmt(p.attack_height)}  针右偏 ${fmt(p.balloon_needle_right_offset_m, 3)}m`;
+    `QR (${fmt(p.qr_goal_x)},${fmt(p.qr_goal_y)},${fmt(p.qr_goal_z)})  打击区 (${fmt(p.attack_zone_x)},${fmt(p.attack_zone_y)},${fmt(p.attack_zone_z)})  高度 ${fmt(p.attack_height)}  针右偏 ${fmt(p.balloon_needle_right_offset_m, 3)}m  针下偏 ${fmt(p.balloon_needle_down_offset_m, 3)}m`;
 }
 function paramsPreviewText(p, emptyText) {
   if (!p || !Object.keys(p).length) return emptyText !== undefined ? emptyText : '--';
@@ -718,7 +721,7 @@ function paramsPreviewText(p, emptyText) {
     `门框识别: 中心容差${fmt(p.frame_center_reject_distance)}  识别超时${fmt(p.frame_detect_timeout)}s  高度${heightText}\n` +
     `穿门保护: X偏移${fmt(p.frame_post_x_offset)}  Y偏移${fmt(p.frame_post_y_offset)}  过门判定X+${fmt(p.frame_pass_guard_x_offset)}  超时${fmt(p.frame_pass_guard_timeout)}s  回区保护: X<${fmt(p.attack_zone_overrun_x)}\n` +
     `QR搜索 超时${fmt(p.qr_search_timeout)}s 上升${fmt(p.qr_search_raise_z)} 距离${fmt(p.qr_search_offset)}\n` +
-    `QR (${fmt(p.qr_goal_x)},${fmt(p.qr_goal_y)},${fmt(p.qr_goal_z)})  打击区 (${fmt(p.attack_zone_x)},${fmt(p.attack_zone_y)},${fmt(p.attack_zone_z)})  高度 ${fmt(p.attack_height)}  针右偏 ${fmt(p.balloon_needle_right_offset_m, 3)}m`;
+    `QR (${fmt(p.qr_goal_x)},${fmt(p.qr_goal_y)},${fmt(p.qr_goal_z)})  打击区 (${fmt(p.attack_zone_x)},${fmt(p.attack_zone_y)},${fmt(p.attack_zone_z)})  高度 ${fmt(p.attack_height)}  针右偏 ${fmt(p.balloon_needle_right_offset_m, 3)}m  针下偏 ${fmt(p.balloon_needle_down_offset_m, 3)}m`;
 }
 async function loadDefaults() {
   const data = await api('/api/defaults');
@@ -1482,6 +1485,8 @@ class CraicWebControl:
         for name in CONTROL_PARAM_NAMES:
             if name == "balloon_needle_right_offset_m":
                 key = "/balloon_detector/needle_right_offset_m"
+            elif name == "balloon_needle_down_offset_m":
+                key = "/balloon_detector/needle_down_offset_m"
             else:
                 key = "/craic_competition_demo/%s" % name
             if rospy.has_param(key):
@@ -1583,17 +1588,21 @@ class CraicWebControl:
         return clean, effective
 
     def _sync_balloon_detector_params(self, effective):
-        raw_value = effective.get("balloon_needle_right_offset_m")
-        if raw_value is None:
-            return
-        try:
-            value = float(raw_value)
-        except Exception:
-            return
-        if not math.isfinite(value):
-            return
-        rospy.set_param("/balloon_detector/needle_right_offset_m", value)
-        rospy.loginfo("[craic_web_control] set /balloon_detector/needle_right_offset_m=%.3f", value)
+        for name, key in (
+            ("balloon_needle_right_offset_m", "/balloon_detector/needle_right_offset_m"),
+            ("balloon_needle_down_offset_m", "/balloon_detector/needle_down_offset_m"),
+        ):
+            raw_value = effective.get(name)
+            if raw_value is None:
+                continue
+            try:
+                value = float(raw_value)
+            except Exception:
+                continue
+            if not math.isfinite(value):
+                continue
+            rospy.set_param(key, value)
+            rospy.loginfo("[craic_web_control] set %s=%.3f", key, value)
 
     @staticmethod
     def _parse_bool(value, name):
