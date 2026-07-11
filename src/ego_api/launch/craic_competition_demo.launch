@@ -220,7 +220,7 @@
         回打击区和气球攻击主参数。
         attack_zone_x/y/z：QR 后返回门后点，再用 EGO 回打击区的目标点。
         attack_height：攻击前右转 90 度后下降到的扎球高度。
-        balloon_wait_timeout：低空等待新鲜气球 world 点的最长时间，超时不盲目前冲。
+        balloon_wait_timeout：低空等待新鲜气球 world 点的最长时间，超时不盲目前冲，直接回原点降落。
         balloon_standoff：粗定位时停在气球前方的安全距离。
         balloon_puncture_distance/speed：旧扎球前冲参数；当前直接 PD 扎球只保留 speed 给后退动作沿用。
 
@@ -240,7 +240,7 @@
     <arg name="attack_zone_y" default="-0.8" />
     <arg name="attack_zone_z" default="1.25" />
     <arg name="attack_height" default="0.35" />
-    <arg name="balloon_wait_timeout" default="8.0" />
+    <arg name="balloon_wait_timeout" default="10.0" />
     <arg name="balloon_valid_max_age" default="0.8" />
     <arg name="balloon_standoff" default="0.70" />
     <arg name="balloon_puncture_distance" default="0.40" />
@@ -308,6 +308,7 @@
     <arg name="balloon_pop_verify_roi_min_px" default="160.0" />
     <arg name="balloon_max_retry" default="1" />
     <arg name="balloon_return_home_land_z" default="1.0" />
+    <arg name="balloon_return_home_speed" default="1.70" />
     <arg name="balloon_approach_override_speed" default="1.35" />
     <arg name="balloon_direct_forward_speed" default="0.45" />
     <arg name="balloon_direct_slow_speed" default="0.24" />
@@ -394,8 +395,9 @@
         px4_land_mode 当前为 AUTO.LAND，扎球成功后会先回 (0,0,1)，再尝试切 PX4 自动降落模式。
 
         降落路径：
-        - 气球扎破验证成功：override 回 home land 点 (0,0,balloon_return_home_land_z)，然后切 px4_land_mode。
-        - 如果切 PX4 LAND 失败，或气球任务未完成，则根据 land_after_finish 决定是否 robust_land。
+        - 气球扎破验证成功：override 快速回 home land 点 (0,0,balloon_return_home_land_z)，然后切 px4_land_mode。
+        - 如果低空等待气球超时，也直接快速回 home land 点后降落。
+        - 如果切 PX4 LAND 失败，或气球任务其它原因未完成，则根据 land_after_finish 决定是否 robust_land。
         - robust_land 会先用低速下降和按压高度做兜底，再尝试 disarm。
 
         注意：
@@ -874,6 +876,7 @@
         <param name="balloon_pop_verify_roi_min_px" value="$(arg balloon_pop_verify_roi_min_px)" />
         <param name="balloon_max_retry" value="$(arg balloon_max_retry)" />
         <param name="balloon_return_home_land_z" value="$(arg balloon_return_home_land_z)" />
+        <param name="balloon_return_home_speed" value="$(arg balloon_return_home_speed)" />
         <param name="balloon_approach_override_speed" value="$(arg balloon_approach_override_speed)" />
         <param name="balloon_direct_forward_speed" value="$(arg balloon_direct_forward_speed)" />
         <param name="balloon_direct_slow_speed" value="$(arg balloon_direct_slow_speed)" />

@@ -199,7 +199,7 @@ public:
         pnh_.param<double>("attack_zone_y", attack_zone_.y(), -0.8);
         pnh_.param<double>("attack_zone_z", attack_zone_.z(), 1.25);
         pnh_.param<double>("attack_height", attack_height_, 0.35);
-        pnh_.param<double>("balloon_wait_timeout", balloon_wait_timeout_, 8.0);
+        pnh_.param<double>("balloon_wait_timeout", balloon_wait_timeout_, 10.0);
         pnh_.param<double>("balloon_valid_max_age", balloon_valid_max_age_, 0.8);
         pnh_.param<double>("balloon_standoff", balloon_standoff_, 0.70);
         pnh_.param<double>("balloon_puncture_distance", balloon_puncture_distance_, 0.40);
@@ -240,6 +240,7 @@ public:
         pnh_.param<double>("balloon_pop_verify_roi_min_px", balloon_pop_verify_roi_min_px_, 160.0);
         pnh_.param<int>("balloon_max_retry", balloon_max_retry_, 1);
         pnh_.param<double>("balloon_return_home_land_z", balloon_return_home_land_z_, 1.0);
+        pnh_.param<double>("balloon_return_home_speed", balloon_return_home_speed_, 1.70);
         pnh_.param<double>("balloon_approach_override_speed", balloon_approach_override_speed_, 1.35);
         pnh_.param<double>("balloon_direct_forward_speed", balloon_direct_forward_speed_, 0.45);
         pnh_.param<double>("balloon_direct_slow_speed", balloon_direct_slow_speed_, 0.24);
@@ -420,6 +421,14 @@ public:
             logStage("BALLOON_RETURN_HOME", "return to (0,0,1) then PX4 LAND mode");
             if (returnHomeAndStartPx4Land(attack_yaw)) {
                 ROS_INFO("[craic_demo] MISSION_DONE result=balloon_popped_px4_land_started");
+                return 0;
+            }
+            ROS_WARN("[craic_demo] BALLOON_RETURN_HOME failed action=robust_land");
+        } else if (balloon_attack_no_world_point_) {
+            ROS_WARN("[craic_demo] BALLOON_ATTACK result=no_world_point action=return_home_land");
+            logStage("BALLOON_RETURN_HOME", "no balloon after low-height wait, return to home land point");
+            if (returnHomeAndStartPx4Land(attack_yaw)) {
+                ROS_INFO("[craic_demo] MISSION_DONE result=no_balloon_px4_land_started");
                 return 0;
             }
             ROS_WARN("[craic_demo] BALLOON_RETURN_HOME failed action=robust_land");
@@ -1213,6 +1222,7 @@ private:
     }
 
     bool attackBalloon(double attack_yaw) {
+        balloon_attack_no_world_point_ = false;
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] BALLOON_ATTACK failed reason=enable_override");
             return false;
@@ -1224,6 +1234,7 @@ private:
             clearVerifyRoi();
             Eigen::Vector3d balloon;
             if (!waitBalloonWorldPoint(balloon)) {
+                balloon_attack_no_world_point_ = true;
                 ROS_WARN("[craic_demo] BALLOON_ATTACK attempt=%d result=no_world_point", attempt);
                 break;
             }
@@ -1894,7 +1905,8 @@ private:
         const MoveResult result = moveOverrideLoop("balloon_return_home_land_point", home, yaw,
                                                    override_pos_threshold_,
                                                    ros::Time::now() + ros::Duration(override_move_timeout_),
-                                                   false);
+                                                   false,
+                                                   balloon_return_home_speed_);
         holdOverride(0.2, yaw);
         const bool disabled = api_.disableOverride();
         if (result != MoveResult::Reached || !disabled) {
@@ -2307,7 +2319,8 @@ private:
 
     Eigen::Vector3d attack_zone_ = Eigen::Vector3d(0.0, -0.8, 1.25);
     double attack_height_ = 0.35;
-    double balloon_wait_timeout_ = 8.0;
+    bool balloon_attack_no_world_point_ = false;
+    double balloon_wait_timeout_ = 10.0;
     double balloon_valid_max_age_ = 0.8;
     double balloon_standoff_ = 0.70;
     double balloon_puncture_distance_ = 0.40;
@@ -2348,6 +2361,7 @@ private:
     double balloon_pop_verify_roi_min_px_ = 160.0;
     int balloon_max_retry_ = 1;
     double balloon_return_home_land_z_ = 1.0;
+    double balloon_return_home_speed_ = 1.70;
     double balloon_approach_override_speed_ = 1.35;
     double balloon_direct_forward_speed_ = 0.45;
     double balloon_direct_slow_speed_ = 0.24;
