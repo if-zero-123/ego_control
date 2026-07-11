@@ -397,6 +397,7 @@
     <arg name="return_frame_post_stuck_window" default="0.40" />
     <arg name="return_frame_post_stuck_min_improve" default="0.03" />
     <arg name="return_frame_post_confirm_timeout" default="1.50" />
+    <arg name="return_frame_post_after_confirm_hold" default="0.50" />
     <arg name="override_yaw_timeout" default="10.0" />
     <arg name="override_yaw_threshold" default="0.40" />
     <arg name="reverse_yaw_threshold" default="0.65" />
@@ -951,6 +952,7 @@
         <param name="return_frame_post_stuck_window" value="$(arg return_frame_post_stuck_window)" />
         <param name="return_frame_post_stuck_min_improve" value="$(arg return_frame_post_stuck_min_improve)" />
         <param name="return_frame_post_confirm_timeout" value="$(arg return_frame_post_confirm_timeout)" />
+        <param name="return_frame_post_after_confirm_hold" value="$(arg return_frame_post_after_confirm_hold)" />
         <param name="override_yaw_timeout" value="$(arg override_yaw_timeout)" />
         <param name="override_yaw_threshold" value="$(arg override_yaw_threshold)" />
         <param name="reverse_yaw_threshold" value="$(arg reverse_yaw_threshold)" />

@@ -292,6 +292,7 @@ public:
         pnh_.param<double>("return_frame_post_stuck_window", return_frame_post_stuck_window_, 0.40);
         pnh_.param<double>("return_frame_post_stuck_min_improve", return_frame_post_stuck_min_improve_, 0.03);
         pnh_.param<double>("return_frame_post_confirm_timeout", return_frame_post_confirm_timeout_, 1.50);
+        pnh_.param<double>("return_frame_post_after_confirm_hold", return_frame_post_after_confirm_hold_, 0.50);
         pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
         pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.40);
         pnh_.param<double>("reverse_yaw_threshold", reverse_yaw_threshold_, 0.65);
@@ -674,11 +675,12 @@ private:
             ROS_ERROR("[craic_demo] RETURN_FRAME_POST invalid reason=non_finite");
             return false;
         }
-        ROS_INFO("[craic_demo] RETURN_FRAME_POST start target=(%.2f %.2f %.2f) yaw=%.3f fast_speed=%.2f fast_threshold=%.2f settle_speed=%.2f precision=%.2f hold=%.2f safe_backoff=%.2f safe_y=%.2f safe_z=%.2f safe_dist=%.2f timeout=%.2f",
+        ROS_INFO("[craic_demo] RETURN_FRAME_POST start target=(%.2f %.2f %.2f) yaw=%.3f fast_speed=%.2f fast_threshold=%.2f settle_speed=%.2f precision=%.2f hold=%.2f after_hold=%.2f safe_backoff=%.2f safe_y=%.2f safe_z=%.2f safe_dist=%.2f timeout=%.2f",
                  target.x(), target.y(), target.z(), yaw,
                  return_frame_post_speed_, return_frame_post_fast_threshold_,
                  return_frame_post_settle_speed_, return_frame_post_precision_threshold_,
-                 return_frame_post_confirm_hold_, return_frame_post_safe_x_backoff_,
+                 return_frame_post_confirm_hold_, return_frame_post_after_confirm_hold_,
+                 return_frame_post_safe_x_backoff_,
                  return_frame_post_safe_y_threshold_, return_frame_post_safe_z_threshold_,
                  return_frame_post_safe_dist_threshold_, return_frame_post_confirm_timeout_);
         if (!api_.enableOverride()) {
@@ -688,6 +690,15 @@ private:
 
         std::string reason = "not_started";
         const bool confirmed = returnFramePostRobustLoop(target, yaw, &reason);
+        if (confirmed) {
+            const double hold_time = std::max(0.0, return_frame_post_after_confirm_hold_);
+            if (hold_time > 1e-3) {
+                const Eigen::Vector3d hold_pos = api_.getOdomPosition();
+                ROS_INFO("[craic_demo] RETURN_FRAME_POST after_confirm_hold seconds=%.2f anchor=(%.2f %.2f %.2f)",
+                         hold_time, hold_pos.x(), hold_pos.y(), hold_pos.z());
+                holdOverrideAt(hold_pos, hold_time, yaw);
+            }
+        }
 
         const Eigen::Vector3d odom = api_.getOdomPosition();
         const double dist = (odom - target).norm();
@@ -2629,6 +2640,7 @@ private:
     double return_frame_post_stuck_window_ = 0.40;
     double return_frame_post_stuck_min_improve_ = 0.03;
     double return_frame_post_confirm_timeout_ = 1.50;
+    double return_frame_post_after_confirm_hold_ = 0.50;
     double override_yaw_timeout_ = 10.0;
     double override_yaw_threshold_ = 0.40;
     double reverse_yaw_threshold_ = 0.65;
