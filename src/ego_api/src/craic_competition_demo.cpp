@@ -271,11 +271,18 @@ public:
         pnh_.param<double>("aggressive_override_speed", aggressive_override_speed_, 1.70);
         pnh_.param<double>("attack_descent_override_speed", attack_descent_override_speed_, 2.20);
         pnh_.param<double>("return_frame_post_speed", return_frame_post_speed_, 1.70);
-        pnh_.param<double>("return_frame_post_fast_threshold", return_frame_post_fast_threshold_, 0.18);
+        pnh_.param<double>("return_frame_post_fast_threshold", return_frame_post_fast_threshold_, 0.20);
         pnh_.param<double>("return_frame_post_settle_speed", return_frame_post_settle_speed_, 0.70);
         pnh_.param<double>("return_frame_post_precision_threshold", return_frame_post_precision_threshold_, 0.08);
-        pnh_.param<double>("return_frame_post_confirm_hold", return_frame_post_confirm_hold_, 0.25);
-        pnh_.param<double>("return_frame_post_confirm_timeout", return_frame_post_confirm_timeout_, 3.0);
+        pnh_.param<double>("return_frame_post_confirm_hold", return_frame_post_confirm_hold_, 0.15);
+        pnh_.param<double>("return_frame_post_safe_x_backoff", return_frame_post_safe_x_backoff_, 0.30);
+        pnh_.param<double>("return_frame_post_safe_y_threshold", return_frame_post_safe_y_threshold_, 0.22);
+        pnh_.param<double>("return_frame_post_safe_z_threshold", return_frame_post_safe_z_threshold_, 0.18);
+        pnh_.param<double>("return_frame_post_safe_dist_threshold", return_frame_post_safe_dist_threshold_, 0.18);
+        pnh_.param<double>("return_frame_post_safe_min_time", return_frame_post_safe_min_time_, 0.80);
+        pnh_.param<double>("return_frame_post_stuck_window", return_frame_post_stuck_window_, 0.40);
+        pnh_.param<double>("return_frame_post_stuck_min_improve", return_frame_post_stuck_min_improve_, 0.03);
+        pnh_.param<double>("return_frame_post_confirm_timeout", return_frame_post_confirm_timeout_, 1.50);
         pnh_.param<double>("override_yaw_timeout", override_yaw_timeout_, 10.0);
         pnh_.param<double>("override_yaw_threshold", override_yaw_threshold_, 0.40);
         pnh_.param<double>("reverse_yaw_threshold", reverse_yaw_threshold_, 0.65);
@@ -638,50 +645,205 @@ private:
             ROS_ERROR("[craic_demo] RETURN_FRAME_POST invalid reason=non_finite");
             return false;
         }
-        ROS_INFO("[craic_demo] RETURN_FRAME_POST start target=(%.2f %.2f %.2f) yaw=%.3f fast_speed=%.2f fast_threshold=%.2f settle_speed=%.2f precision=%.2f hold=%.2f",
+        ROS_INFO("[craic_demo] RETURN_FRAME_POST start target=(%.2f %.2f %.2f) yaw=%.3f fast_speed=%.2f fast_threshold=%.2f settle_speed=%.2f precision=%.2f hold=%.2f safe_backoff=%.2f safe_y=%.2f safe_z=%.2f safe_dist=%.2f timeout=%.2f",
                  target.x(), target.y(), target.z(), yaw,
                  return_frame_post_speed_, return_frame_post_fast_threshold_,
                  return_frame_post_settle_speed_, return_frame_post_precision_threshold_,
-                 return_frame_post_confirm_hold_);
+                 return_frame_post_confirm_hold_, return_frame_post_safe_x_backoff_,
+                 return_frame_post_safe_y_threshold_, return_frame_post_safe_z_threshold_,
+                 return_frame_post_safe_dist_threshold_, return_frame_post_confirm_timeout_);
         if (!api_.enableOverride()) {
             ROS_ERROR("[craic_demo] RETURN_FRAME_POST failed reason=enable_override");
             return false;
         }
 
-        const ros::Time fast_deadline = ros::Time::now() + ros::Duration(override_move_timeout_);
-        const MoveResult fast_result = moveOverrideLoop("return_frame_post_fast",
-                                                        target,
-                                                        yaw,
-                                                        return_frame_post_fast_threshold_,
-                                                        fast_deadline,
-                                                        false,
-                                                        return_frame_post_speed_);
-        bool confirmed = false;
-        if (fast_result == MoveResult::Reached) {
-            const ros::Time settle_deadline =
-                ros::Time::now() + ros::Duration(std::max(0.2, return_frame_post_confirm_timeout_));
-            const MoveResult settle_result = moveOverrideLoop("return_frame_post_settle",
-                                                              target,
-                                                              yaw,
-                                                              return_frame_post_precision_threshold_,
-                                                              settle_deadline,
-                                                              false,
-                                                              return_frame_post_settle_speed_);
-            confirmed = settle_result == MoveResult::Reached &&
-                        holdTargetUntilClose("return_frame_post_confirm",
-                                             target,
-                                             yaw,
-                                             return_frame_post_precision_threshold_,
-                                             return_frame_post_confirm_hold_,
-                                             ros::Time::now() + ros::Duration(std::max(0.2, return_frame_post_confirm_timeout_)));
-        }
+        std::string reason = "not_started";
+        const bool confirmed = returnFramePostRobustLoop(target, yaw, &reason);
 
         const Eigen::Vector3d odom = api_.getOdomPosition();
         const double dist = (odom - target).norm();
         const bool disabled = api_.disableOverride();
-        ROS_INFO("[craic_demo] RETURN_FRAME_POST result confirmed=%s disabled=%s dist=%.3f odom=(%.2f %.2f %.2f)",
-                 yesNo(confirmed), yesNo(disabled), dist, odom.x(), odom.y(), odom.z());
+        ROS_INFO("[craic_demo] RETURN_FRAME_POST result confirmed=%s reason=%s disabled=%s dist=%.3f odom=(%.2f %.2f %.2f)",
+                 yesNo(confirmed), reason.c_str(), yesNo(disabled), dist,
+                 odom.x(), odom.y(), odom.z());
         return confirmed && disabled;
+    }
+
+    bool returnFramePostSafeZone(const Eigen::Vector3d& odom,
+                                 const Eigen::Vector3d& target,
+                                 bool* x_ok = nullptr,
+                                 bool* y_ok = nullptr,
+                                 bool* z_ok = nullptr) const {
+        const double pass_sign = frame_post_x_offset_ >= 0.0 ? 1.0 : -1.0;
+        const double x_margin = pass_sign * (odom.x() - target.x());
+        const bool ok_x = x_margin >= -std::max(0.0, return_frame_post_safe_x_backoff_);
+        const bool ok_y =
+            std::abs(odom.y() - target.y()) <= std::max(0.01, return_frame_post_safe_y_threshold_);
+        const bool ok_z =
+            std::abs(odom.z() - target.z()) <= std::max(0.01, return_frame_post_safe_z_threshold_);
+        if (x_ok) *x_ok = ok_x;
+        if (y_ok) *y_ok = ok_y;
+        if (z_ok) *z_ok = ok_z;
+        return ok_x && ok_y && ok_z;
+    }
+
+    bool returnFramePostRobustLoop(const Eigen::Vector3d& target,
+                                   double yaw,
+                                   std::string* reason) {
+        ros::Rate rate(50);
+        Eigen::Vector3d setpoint = api_.getOdomPosition();
+        ros::Time last = ros::Time::now();
+        const ros::Time hard_deadline = ros::Time::now() + ros::Duration(override_move_timeout_);
+        ros::Time confirm_start;
+        ros::Time precision_since;
+        ros::Time safe_since;
+        ros::Time stuck_window_start;
+        bool confirm_started = false;
+        bool precision_stable = false;
+        bool safe_active = false;
+        bool stuck_window_active = false;
+        double stuck_window_start_dist = std::numeric_limits<double>::infinity();
+        double stuck_window_best_dist = std::numeric_limits<double>::infinity();
+        double dist = std::numeric_limits<double>::infinity();
+        bool x_ok = false;
+        bool y_ok = false;
+        bool z_ok = false;
+        const double precision_threshold = std::max(0.01, return_frame_post_precision_threshold_);
+        const double fast_threshold = std::max(precision_threshold, return_frame_post_fast_threshold_);
+        const double safe_dist_threshold =
+            std::max(precision_threshold, return_frame_post_safe_dist_threshold_);
+        const double precision_hold = std::max(0.0, return_frame_post_confirm_hold_);
+        const double confirm_timeout = std::max(0.2, return_frame_post_confirm_timeout_);
+        const double safe_min_time = std::max(0.0, return_frame_post_safe_min_time_);
+        const double stuck_window = std::max(0.1, return_frame_post_stuck_window_);
+        const double stuck_min_improve = std::max(0.0, return_frame_post_stuck_min_improve_);
+
+        while (ros::ok()) {
+            ros::spinOnce();
+            const ros::Time now = ros::Time::now();
+            const Eigen::Vector3d odom = api_.getOdomPosition();
+            dist = (odom - target).norm();
+            const bool safe_zone = returnFramePostSafeZone(odom, target, &x_ok, &y_ok, &z_ok);
+
+            if (!confirm_started && (dist <= fast_threshold || safe_zone)) {
+                confirm_started = true;
+                confirm_start = now;
+                ROS_INFO("[craic_demo] RETURN_FRAME_POST_CONFIRM start reason=%s dist=%.3f safe=%s x_ok=%s y_ok=%s z_ok=%s",
+                         dist <= fast_threshold ? "fast_threshold" : "safe_zone",
+                         dist, yesNo(safe_zone), yesNo(x_ok), yesNo(y_ok), yesNo(z_ok));
+            }
+
+            const double dt = std::max(0.0, (now - last).toSec());
+            last = now;
+            const double speed = confirm_started
+                                     ? std::max(0.03, return_frame_post_settle_speed_)
+                                     : std::max(0.03, return_frame_post_speed_);
+            const double step = speed * dt;
+            const Eigen::Vector3d remaining = target - setpoint;
+            const double remaining_norm = remaining.norm();
+            if (remaining_norm <= step || remaining_norm < 1e-4) {
+                setpoint = target;
+            } else if (step > 0.0) {
+                setpoint += remaining / remaining_norm * step;
+            }
+            sendPositionCmd(setpoint, yaw);
+
+            if (dist <= precision_threshold) {
+                if (precision_hold <= 0.0) {
+                    if (reason) *reason = "precision";
+                    ROS_INFO("[craic_demo] RETURN_FRAME_POST_CONFIRM result=precision dist=%.3f hold=0.00",
+                             dist);
+                    return true;
+                }
+                if (!precision_stable) {
+                    precision_stable = true;
+                    precision_since = now;
+                } else if ((now - precision_since).toSec() >= precision_hold) {
+                    if (reason) *reason = "precision_hold";
+                    ROS_INFO("[craic_demo] RETURN_FRAME_POST_CONFIRM result=precision_hold dist=%.3f hold=%.2f",
+                             dist, precision_hold);
+                    return true;
+                }
+            } else {
+                precision_stable = false;
+            }
+
+            if (confirm_started && safe_zone) {
+                if (!safe_active) {
+                    safe_active = true;
+                    safe_since = now;
+                    stuck_window_active = false;
+                }
+                if (!stuck_window_active) {
+                    stuck_window_active = true;
+                    stuck_window_start = now;
+                    stuck_window_start_dist = dist;
+                    stuck_window_best_dist = dist;
+                } else {
+                    stuck_window_best_dist = std::min(stuck_window_best_dist, dist);
+                }
+
+                const double safe_elapsed = (now - safe_since).toSec();
+                const bool safe_dist = dist <= safe_dist_threshold;
+                const bool safe_time = safe_elapsed >= safe_min_time;
+                bool safe_stuck = false;
+                if ((now - stuck_window_start).toSec() >= stuck_window) {
+                    const double improvement = stuck_window_start_dist - stuck_window_best_dist;
+                    safe_stuck = improvement <= stuck_min_improve;
+                    if (!safe_stuck) {
+                        stuck_window_start = now;
+                        stuck_window_start_dist = dist;
+                        stuck_window_best_dist = dist;
+                    }
+                }
+
+                if (safe_dist || safe_time || safe_stuck) {
+                    if (reason) {
+                        *reason = safe_dist ? "safe_dist" : (safe_time ? "safe_time" : "safe_stuck");
+                    }
+                    ROS_INFO("[craic_demo] RETURN_FRAME_POST_CONFIRM result=%s dist=%.3f safe_elapsed=%.2f x_ok=%s y_ok=%s z_ok=%s",
+                             reason ? reason->c_str() : "safe",
+                             dist, safe_elapsed, yesNo(x_ok), yesNo(y_ok), yesNo(z_ok));
+                    return true;
+                }
+            } else {
+                safe_active = false;
+                stuck_window_active = false;
+            }
+
+            if (confirm_started && (now - confirm_start).toSec() >= confirm_timeout) {
+                if (safe_zone) {
+                    if (reason) *reason = "safe_confirm_timeout";
+                    ROS_INFO("[craic_demo] RETURN_FRAME_POST_CONFIRM result=safe_confirm_timeout dist=%.3f x_ok=%s y_ok=%s z_ok=%s",
+                             dist, yesNo(x_ok), yesNo(y_ok), yesNo(z_ok));
+                    return true;
+                }
+                if (reason) *reason = "confirm_timeout";
+                ROS_WARN("[craic_demo] RETURN_FRAME_POST_CONFIRM timeout dist=%.3f safe=%s x_ok=%s y_ok=%s z_ok=%s",
+                         dist, yesNo(safe_zone), yesNo(x_ok), yesNo(y_ok), yesNo(z_ok));
+                return false;
+            }
+
+            if (now >= hard_deadline) {
+                if (reason) *reason = "move_timeout";
+                ROS_WARN("[craic_demo] RETURN_FRAME_POST_CONFIRM move_timeout dist=%.3f safe=%s x_ok=%s y_ok=%s z_ok=%s",
+                         dist, yesNo(safe_zone), yesNo(x_ok), yesNo(y_ok), yesNo(z_ok));
+                return false;
+            }
+
+            if (!simple_logs_) {
+                ROS_INFO_THROTTLE(mission_log_period_,
+                                  "[craic_demo] RETURN_FRAME_POST_CONFIRM setpoint=(%.2f %.2f %.2f) target=(%.2f %.2f %.2f) dist=%.3f safe=%s x_ok=%s y_ok=%s z_ok=%s speed=%.2f",
+                                  setpoint.x(), setpoint.y(), setpoint.z(),
+                                  target.x(), target.y(), target.z(),
+                                  dist, yesNo(safe_zone), yesNo(x_ok), yesNo(y_ok),
+                                  yesNo(z_ok), speed);
+            }
+            rate.sleep();
+        }
+
+        if (reason) *reason = "ros_stopped";
+        return false;
     }
 
     MoveResult moveOverrideLoop(const std::string& label,
@@ -2386,11 +2548,18 @@ private:
     double aggressive_override_speed_ = 1.70;
     double attack_descent_override_speed_ = 2.20;
     double return_frame_post_speed_ = 1.70;
-    double return_frame_post_fast_threshold_ = 0.18;
+    double return_frame_post_fast_threshold_ = 0.20;
     double return_frame_post_settle_speed_ = 0.70;
     double return_frame_post_precision_threshold_ = 0.08;
-    double return_frame_post_confirm_hold_ = 0.25;
-    double return_frame_post_confirm_timeout_ = 3.0;
+    double return_frame_post_confirm_hold_ = 0.15;
+    double return_frame_post_safe_x_backoff_ = 0.30;
+    double return_frame_post_safe_y_threshold_ = 0.22;
+    double return_frame_post_safe_z_threshold_ = 0.18;
+    double return_frame_post_safe_dist_threshold_ = 0.18;
+    double return_frame_post_safe_min_time_ = 0.80;
+    double return_frame_post_stuck_window_ = 0.40;
+    double return_frame_post_stuck_min_improve_ = 0.03;
+    double return_frame_post_confirm_timeout_ = 1.50;
     double override_yaw_timeout_ = 10.0;
     double override_yaw_threshold_ = 0.40;
     double reverse_yaw_threshold_ = 0.65;

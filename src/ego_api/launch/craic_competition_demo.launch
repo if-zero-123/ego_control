@@ -344,7 +344,8 @@
         override_move_post_hold：override 位置移动到点后的短保持时间，当前压短以减少段间空等。
         aggressive_override_speed：只给 QR 去程等明确提速段使用。
         attack_descent_override_speed：回到打击区后下降到 attack_height 的单独提速参数。
-        return_frame_post_*：QR 后回门后点使用，先快速回近，再低速精确确认到点，确保后续 EGO 回打击区从门后开始。
+        return_frame_post_*：QR 后回门后点使用，继续发门后点位置 setpoint。
+        精确到点优先；若难进 0.08m，则满足门后安全区域 x/y/z 约束后按距离、等待时间或卡住检测放行。
         override_yaw_*：原地 yaw 对齐阈值、保持时间和角速度限幅。
         reverse_yaw_threshold：门后 180 度旋转的单独释放阈值，提前交给下一段 QR 移动继续收敛 yaw。
         override_yaw_post_hold：普通 yaw 对齐后的短保持时间。
@@ -372,11 +373,18 @@
     <arg name="aggressive_override_speed" default="1.70" />
     <arg name="attack_descent_override_speed" default="2.20" />
     <arg name="return_frame_post_speed" default="1.70" />
-    <arg name="return_frame_post_fast_threshold" default="0.18" />
+    <arg name="return_frame_post_fast_threshold" default="0.20" />
     <arg name="return_frame_post_settle_speed" default="0.70" />
     <arg name="return_frame_post_precision_threshold" default="0.08" />
-    <arg name="return_frame_post_confirm_hold" default="0.25" />
-    <arg name="return_frame_post_confirm_timeout" default="3.0" />
+    <arg name="return_frame_post_confirm_hold" default="0.15" />
+    <arg name="return_frame_post_safe_x_backoff" default="0.30" />
+    <arg name="return_frame_post_safe_y_threshold" default="0.22" />
+    <arg name="return_frame_post_safe_z_threshold" default="0.18" />
+    <arg name="return_frame_post_safe_dist_threshold" default="0.18" />
+    <arg name="return_frame_post_safe_min_time" default="0.80" />
+    <arg name="return_frame_post_stuck_window" default="0.40" />
+    <arg name="return_frame_post_stuck_min_improve" default="0.03" />
+    <arg name="return_frame_post_confirm_timeout" default="1.50" />
     <arg name="override_yaw_timeout" default="10.0" />
     <arg name="override_yaw_threshold" default="0.40" />
     <arg name="reverse_yaw_threshold" default="0.65" />
@@ -914,6 +922,13 @@
         <param name="return_frame_post_settle_speed" value="$(arg return_frame_post_settle_speed)" />
         <param name="return_frame_post_precision_threshold" value="$(arg return_frame_post_precision_threshold)" />
         <param name="return_frame_post_confirm_hold" value="$(arg return_frame_post_confirm_hold)" />
+        <param name="return_frame_post_safe_x_backoff" value="$(arg return_frame_post_safe_x_backoff)" />
+        <param name="return_frame_post_safe_y_threshold" value="$(arg return_frame_post_safe_y_threshold)" />
+        <param name="return_frame_post_safe_z_threshold" value="$(arg return_frame_post_safe_z_threshold)" />
+        <param name="return_frame_post_safe_dist_threshold" value="$(arg return_frame_post_safe_dist_threshold)" />
+        <param name="return_frame_post_safe_min_time" value="$(arg return_frame_post_safe_min_time)" />
+        <param name="return_frame_post_stuck_window" value="$(arg return_frame_post_stuck_window)" />
+        <param name="return_frame_post_stuck_min_improve" value="$(arg return_frame_post_stuck_min_improve)" />
         <param name="return_frame_post_confirm_timeout" value="$(arg return_frame_post_confirm_timeout)" />
         <param name="override_yaw_timeout" value="$(arg override_yaw_timeout)" />
         <param name="override_yaw_threshold" value="$(arg override_yaw_threshold)" />
