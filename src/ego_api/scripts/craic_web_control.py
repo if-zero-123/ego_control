@@ -164,6 +164,9 @@ INDEX_HTML = r"""<!doctype html>
       min-height: 0;
       height: calc(100vh - 64px);
     }
+    main.config-collapsed {
+      grid-template-columns: 360px minmax(300px, 1fr) 48px;
+    }
     section {
       min-height: 0;
       background: var(--panel);
@@ -218,7 +221,24 @@ INDEX_HTML = r"""<!doctype html>
     .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 5px; }
     .config-section .panel-body { overflow: hidden; }
     .config-section.collapsed .panel-body { display: none; }
-    .config-section.collapsed { min-height: 0; }
+    .config-section.collapsed {
+      min-height: 0;
+      width: 48px;
+    }
+    .config-section.collapsed .panel-head {
+      height: 100%;
+      min-height: 160px;
+      padding: 8px 6px;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 8px;
+      border-bottom: 0;
+    }
+    .config-section.collapsed .panel-head > span {
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      line-height: 1.2;
+    }
     .config-toggle {
       display: inline-flex;
       align-items: center;
@@ -365,7 +385,24 @@ INDEX_HTML = r"""<!doctype html>
         grid-auto-rows: auto;
         height: auto;
       }
+      main.config-collapsed {
+        grid-template-columns: 1fr;
+      }
       .config-section .panel-body { overflow: visible; }
+      .config-section.collapsed {
+        width: auto;
+      }
+      .config-section.collapsed .panel-head {
+        height: 42px;
+        min-height: 0;
+        padding: 0 12px;
+        flex-direction: row;
+        justify-content: space-between;
+        border-bottom: 0;
+      }
+      .config-section.collapsed .panel-head > span {
+        writing-mode: horizontal-tb;
+      }
       section.scene {
         height: min(62vh, 560px);
         min-height: 380px;
@@ -969,10 +1006,22 @@ function resetView() {
 }
 function toggleConfigSection() {
   const section = document.getElementById('configSection');
+  if (!section) return;
+  setConfigCollapsed(!section.classList.contains('collapsed'), true);
+}
+function setConfigCollapsed(collapsed, remember=false) {
+  const main = document.querySelector('main');
+  const section = document.getElementById('configSection');
   const btn = document.getElementById('configToggleBtn');
   if (!section || !btn) return;
-  const collapsed = section.classList.toggle('collapsed');
+  section.classList.toggle('collapsed', collapsed);
+  if (main) main.classList.toggle('config-collapsed', collapsed);
   btn.textContent = collapsed ? '展开' : '收起';
+  btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  if (remember) {
+    try { localStorage.setItem('craic_config_collapsed', collapsed ? '1' : '0'); } catch (e) {}
+  }
+  setTimeout(drawScene, 0);
 }
 function matMul(a,b) {
   const r = new Float32Array(16);
@@ -1103,6 +1152,9 @@ document.getElementById('configToggleBtn').addEventListener('click', toggleConfi
 document.getElementById('pin').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
 buildForm();
 initGL();
+try {
+  setConfigCollapsed(localStorage.getItem('craic_config_collapsed') === '1');
+} catch (e) {}
 loadDefaults().catch(e => alert(e.message));
 setInterval(refreshStatus, 300);
 setInterval(refreshScene, 500);
