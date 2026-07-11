@@ -228,15 +228,16 @@
         attack_zone_x/y/z：QR 后返回门后点，再用 EGO 回打击区的目标点。
         attack_height：攻击前右转 90 度后下降到的扎球高度。
         balloon_wait_timeout：低空等待新鲜气球 world 点的最长时间，超时不盲目前冲，直接回原点降落。
-        balloon_standoff：粗定位时停在气球前方的安全距离。
-        balloon_puncture_distance/speed：旧扎球前冲参数；当前直接 PD 扎球只保留 speed 给后退动作沿用。
+        balloon_standoff：旧 standoff 流程的安全距离；当前世界坐标锁定 PD 流程默认不再先飞 standoff。
+        balloon_puncture_distance/speed：旧扎球前冲参数；当前只保留 speed 给后退动作沿用。
 
         当前顺序：
         - QR 后 override 返回 frame_post_control。
         - 再 EGO 回 attack_zone。
         - 到 attack_zone 或触发 attack_zone_overrun_x 保护后，先右转 90 度，再下降到 attack_height。
         - 然后才开始气球识别和扎球。
-        - 扎球阶段先到 balloon_standoff，再锁定 ROI，随后直接 PD 前冲。
+        - 扎球阶段采样 /balloon/world_point 和深度，锁定气球世界坐标。
+        - 根据针长、针右偏、针下偏计算机体目标点，再用 odom 世界坐标误差做 PD 冲刺。
 
         扎球安全性：
         - balloon_standoff 越大，离车/气球越远，粗定位更保守。
@@ -263,23 +264,20 @@
     <arg name="balloon_align_z_max" default="0.60" />
 
     <!--
-        气球针头、画面对齐和扎球确认参数。
-        needle_length/puncture_extra、servo_*、fine_forward_* 保留给旧流程和回退调试。
-        balloon_direct_* 是 standoff 后直接 PD 前冲参数，使用 /balloon/servo 的 err_u/err_v 修横向和高度。
+        气球针头、世界坐标 PD 和扎球确认参数。
+        needle_length/puncture_extra/right/down 用于把气球中心换算成机体目标点。
+        servo_*、fine_forward_*、balloon_direct_kp_u/kd_u/kp_v/kd_v 等保留给旧流程和回退调试。
+        balloon_world_* 是当前默认扎球流程：锁定深度世界坐标后，用 odom 误差做 PD。
+        balloon_direct_forward/speed/max_distance/max_lateral/max_z 仍作为世界 PD 的速度上限和安全距离。
         pop_verify_* 是直接前冲中和后退后通过 ROI 面积变化确认是否扎破。
 
         气球攻击流程更细：
-        - 先用 /balloon/world_point 计算气球前方 standoff 点。
-        - override 到 standoff 点后，立即读取新鲜 /balloon/servo 并锁定较大 verify ROI。
-        - 直接 PD 前冲：err_u 修横向，err_v 修高度，forward_v 持续前进。
-        - state=5 near blob 时继续 PD，但横向/高度限幅降低；state=4 filtered hold 短时间继续冲刺。
-        - error_filter_alpha/error_deadband 用于压住画面 bbox 中心轻微跳动导致的 PD 晃动。
-        - err_u/err_v 大于 fast_u/v_threshold 时先慢速前冲，避免还没对准就快速冲过。
+        - 攻击区下降并完成 attack_yaw 后，等待新鲜 /balloon/world_point 和 /balloon/detection 深度。
+        - 连续采样 balloon_world_lock_sample_time，取中值锁定气球坐标。
+        - 锁定较大 verify ROI 后，按锁定世界目标做 PD，不再用近距离图像中心持续横向修正。
         - min_puncture_distance 之前不接受 area_drop/depth_jump 扎破判断，避免前进距离不够就停。
-        - puncture_commit_distance 是疑似扎破后的保底继续前冲距离，防止 ROI 提前掉面积但针还没扎到。
         - 前冲中优先用 verify_roi 面积下降判断扎破，depth jump 只作辅助。
         - 触发扎破、达到最大前冲距离或超时后，立即 hold、后退 0.12m，再最终 verify。
-        - lateral_sign/z_sign 用于现场确认 PD 方向，如果修正方向反了可临时改成 1.0。
 
         速度含义：
         - balloon_servo_max_lateral_speed 限制横向对齐速度。
@@ -290,6 +288,15 @@
     -->
     <arg name="balloon_needle_length" default="0.18" />
     <arg name="balloon_puncture_extra" default="0.04" />
+    <arg name="balloon_world_lock_sample_time" default="0.30" />
+    <arg name="balloon_world_lock_min_samples" default="3" />
+    <arg name="balloon_world_pd_kp_forward" default="0.90" />
+    <arg name="balloon_world_pd_kd_forward" default="0.08" />
+    <arg name="balloon_world_pd_kp_lateral" default="1.10" />
+    <arg name="balloon_world_pd_kd_lateral" default="0.08" />
+    <arg name="balloon_world_pd_kp_z" default="0.90" />
+    <arg name="balloon_world_pd_kd_z" default="0.06" />
+    <arg name="balloon_world_pd_reach_threshold" default="0.04" />
     <arg name="balloon_servo_timeout" default="8.0" />
     <arg name="balloon_servo_u_threshold" default="0.12" />
     <arg name="balloon_servo_v_threshold" default="0.13" />
@@ -880,6 +887,17 @@
         <param name="balloon_align_z_max" value="$(arg balloon_align_z_max)" />
         <param name="balloon_needle_length" value="$(arg balloon_needle_length)" />
         <param name="balloon_puncture_extra" value="$(arg balloon_puncture_extra)" />
+        <param name="balloon_needle_right_offset_m" value="$(arg balloon_needle_right_offset_m)" />
+        <param name="balloon_needle_down_offset_m" value="$(arg balloon_needle_down_offset_m)" />
+        <param name="balloon_world_lock_sample_time" value="$(arg balloon_world_lock_sample_time)" />
+        <param name="balloon_world_lock_min_samples" value="$(arg balloon_world_lock_min_samples)" />
+        <param name="balloon_world_pd_kp_forward" value="$(arg balloon_world_pd_kp_forward)" />
+        <param name="balloon_world_pd_kd_forward" value="$(arg balloon_world_pd_kd_forward)" />
+        <param name="balloon_world_pd_kp_lateral" value="$(arg balloon_world_pd_kp_lateral)" />
+        <param name="balloon_world_pd_kd_lateral" value="$(arg balloon_world_pd_kd_lateral)" />
+        <param name="balloon_world_pd_kp_z" value="$(arg balloon_world_pd_kp_z)" />
+        <param name="balloon_world_pd_kd_z" value="$(arg balloon_world_pd_kd_z)" />
+        <param name="balloon_world_pd_reach_threshold" value="$(arg balloon_world_pd_reach_threshold)" />
         <param name="balloon_servo_timeout" value="$(arg balloon_servo_timeout)" />
         <param name="balloon_servo_u_threshold" value="$(arg balloon_servo_u_threshold)" />
         <param name="balloon_servo_v_threshold" value="$(arg balloon_servo_v_threshold)" />

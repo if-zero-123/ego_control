@@ -138,6 +138,15 @@ struct BalloonDetection {
     int depth_source = 0;
 };
 
+struct BalloonStrikeTarget {
+    Eigen::Vector3d balloon_world = Eigen::Vector3d::Zero();
+    Eigen::Vector3d drone_target = Eigen::Vector3d::Zero();
+    double depth = 0.0;
+    double forward_distance = 0.0;
+    double lateral_offset = 0.0;
+    int samples = 0;
+};
+
 struct VerifyRoi {
     double x = 0.0;
     double y = 0.0;
@@ -219,6 +228,8 @@ public:
         pnh_.param<double>("balloon_align_z_max", balloon_align_z_max_, 0.60);
         pnh_.param<double>("balloon_needle_length", balloon_needle_length_, 0.18);
         pnh_.param<double>("balloon_puncture_extra", balloon_puncture_extra_, 0.04);
+        pnh_.param<double>("balloon_needle_right_offset_m", balloon_needle_right_offset_m_, 0.0);
+        pnh_.param<double>("balloon_needle_down_offset_m", balloon_needle_down_offset_m_, 0.0);
         pnh_.param<double>("balloon_servo_timeout", balloon_servo_timeout_, 8.0);
         pnh_.param<double>("balloon_servo_u_threshold", balloon_servo_u_threshold_, 0.12);
         pnh_.param<double>("balloon_servo_v_threshold", balloon_servo_v_threshold_, 0.13);
@@ -272,6 +283,15 @@ public:
         pnh_.param<double>("balloon_direct_terminal_lateral_scale", balloon_direct_terminal_lateral_scale_, 0.15);
         pnh_.param<double>("balloon_direct_terminal_z_scale", balloon_direct_terminal_z_scale_, 0.20);
         pnh_.param<bool>("balloon_direct_freeze_on_near_blob", balloon_direct_freeze_on_near_blob_, true);
+        pnh_.param<double>("balloon_world_lock_sample_time", balloon_world_lock_sample_time_, 0.30);
+        pnh_.param<int>("balloon_world_lock_min_samples", balloon_world_lock_min_samples_, 3);
+        pnh_.param<double>("balloon_world_pd_kp_forward", balloon_world_pd_kp_forward_, 0.90);
+        pnh_.param<double>("balloon_world_pd_kd_forward", balloon_world_pd_kd_forward_, 0.08);
+        pnh_.param<double>("balloon_world_pd_kp_lateral", balloon_world_pd_kp_lateral_, 1.10);
+        pnh_.param<double>("balloon_world_pd_kd_lateral", balloon_world_pd_kd_lateral_, 0.08);
+        pnh_.param<double>("balloon_world_pd_kp_z", balloon_world_pd_kp_z_, 0.90);
+        pnh_.param<double>("balloon_world_pd_kd_z", balloon_world_pd_kd_z_, 0.06);
+        pnh_.param<double>("balloon_world_pd_reach_threshold", balloon_world_pd_reach_threshold_, 0.04);
 
         pnh_.param<double>("override_move_timeout", override_move_timeout_, 30.0);
         pnh_.param<double>("override_pos_threshold", override_pos_threshold_, 0.10);
@@ -452,7 +472,7 @@ public:
             return 1;
         }
 
-        logStage("BALLOON_ATTACK_OVERRIDE", "3d coarse approach, 2d servo, roi verified puncture");
+        logStage("BALLOON_ATTACK_OVERRIDE", "depth world lock, odom PD puncture, roi verified pop");
         const bool balloon_popped = attackBalloon(attack_yaw);
         if (balloon_popped) {
             logStage("BALLOON_RETURN_HOME", "return to (0,0,1) then PX4 LAND mode");
@@ -1428,31 +1448,15 @@ private:
         const int attempts = std::max(1, balloon_max_retry_ + 1);
         for (int attempt = 1; ros::ok() && attempt <= attempts; ++attempt) {
             clearVerifyRoi();
-            Eigen::Vector3d balloon;
-            if (!waitBalloonWorldPoint(balloon)) {
-                balloon_attack_no_world_point_ = true;
-                ROS_WARN("[craic_demo] BALLOON_ATTACK attempt=%d result=no_world_point", attempt);
-                break;
-            }
-
             const double puncture_yaw = attack_yaw;
             const Eigen::Vector2d forward(std::cos(puncture_yaw), std::sin(puncture_yaw));
             const Eigen::Vector2d left(-std::sin(puncture_yaw), std::cos(puncture_yaw));
-            Eigen::Vector3d approach = balloonApproachTarget(balloon, forward);
-            ROS_INFO("[craic_demo] BALLOON_APPROACH attempt=%d target=(%.2f %.2f %.2f) balloon=(%.2f %.2f %.2f) standoff=%.2f yaw=%.3f",
-                     attempt,
-                     approach.x(), approach.y(), approach.z(),
-                     balloon.x(), balloon.y(), balloon.z(),
-                     balloon_standoff_, puncture_yaw);
 
-            MoveResult approach_result = moveOverrideLoop("balloon_safe_standoff", approach, puncture_yaw,
-                                                          override_pos_threshold_,
-                                                          ros::Time::now() + ros::Duration(balloon_approach_timeout_),
-                                                          false,
-                                                          balloon_approach_override_speed_);
-            if (approach_result != MoveResult::Reached) {
-                ROS_WARN("[craic_demo] BALLOON_APPROACH attempt=%d result=not_reached", attempt);
-                continue;
+            BalloonStrikeTarget strike_target;
+            if (!lockBalloonStrikeTarget(puncture_yaw, forward, left, strike_target)) {
+                balloon_attack_no_world_point_ = true;
+                ROS_WARN("[craic_demo] BALLOON_ATTACK attempt=%d result=no_depth_world_lock", attempt);
+                break;
             }
 
             if (!freshBalloonServo()) {
@@ -1471,7 +1475,8 @@ private:
                      locked_servo.bbox_x, locked_servo.bbox_y, locked_servo.bbox_w, locked_servo.bbox_h,
                      roi.x, roi.y, roi.w, roi.h, roi.baseline_area);
 
-            const bool direct_detected = directPdPuncture(puncture_yaw, forward, left, roi);
+            const bool direct_detected = worldLockedPdPuncture(puncture_yaw, forward, left,
+                                                               strike_target, roi);
 
             driveAlongForward("balloon_backoff", puncture_yaw, forward,
                               -std::abs(balloon_puncture_speed_), balloon_backoff_distance_);
@@ -1487,6 +1492,247 @@ private:
         clearVerifyRoi();
         ROS_INFO("[craic_demo] BALLOON_ATTACK result=%s disabled=%s", yesNo(popped), yesNo(disabled));
         return popped && disabled;
+    }
+
+    bool lockBalloonStrikeTarget(double yaw,
+                                 const Eigen::Vector2d& forward,
+                                 const Eigen::Vector2d& left,
+                                 BalloonStrikeTarget& out) {
+        std::vector<Eigen::Vector3d> world_samples;
+        std::vector<double> depth_samples;
+        world_samples.reserve(20);
+        depth_samples.reserve(20);
+
+        ros::Rate rate(40);
+        const ros::Time start = ros::Time::now();
+        const ros::Time deadline = start + ros::Duration(std::max(0.5, balloon_wait_timeout_));
+        ros::Time first_sample_stamp;
+        const double sample_time = std::max(0.05, balloon_world_lock_sample_time_);
+        const int min_samples = std::max(1, balloon_world_lock_min_samples_);
+
+        while (ros::ok() && ros::Time::now() < deadline) {
+            ros::spinOnce();
+            if (freshBalloonWorldPoint() && freshBalloonDepth()) {
+                const Eigen::Vector3d sample = balloon_world_point_;
+                const Eigen::Vector3d odom = api_.getOdomPosition();
+                const Eigen::Vector2d to_balloon(sample.x() - odom.x(), sample.y() - odom.y());
+                const double forward_distance = to_balloon.dot(forward);
+                if (forward_distance > 0.05 && forward_distance <= balloon_direct_max_distance_ + 0.80) {
+                    world_samples.push_back(sample);
+                    depth_samples.push_back(balloon_detection_.depth);
+                    if (!first_sample_stamp.isValid()) {
+                        first_sample_stamp = ros::Time::now();
+                    }
+                }
+            }
+
+            if (first_sample_stamp.isValid() &&
+                static_cast<int>(world_samples.size()) >= min_samples &&
+                (ros::Time::now() - first_sample_stamp).toSec() >= sample_time) {
+                break;
+            }
+            rate.sleep();
+        }
+
+        if (static_cast<int>(world_samples.size()) < min_samples ||
+            static_cast<int>(depth_samples.size()) < min_samples) {
+            ROS_WARN("[craic_demo] BALLOON_WORLD_LOCK failed samples=%zu min=%d timeout=%.1f have_world=%s have_depth=%s",
+                     world_samples.size(), min_samples, balloon_wait_timeout_,
+                     yesNo(freshBalloonWorldPoint()), yesNo(freshBalloonDepth()));
+            return false;
+        }
+
+        auto medianValue = [](std::vector<double> values) {
+            const std::size_t mid = values.size() / 2;
+            std::nth_element(values.begin(), values.begin() + mid, values.end());
+            return values[mid];
+        };
+
+        std::vector<double> xs;
+        std::vector<double> ys;
+        std::vector<double> zs;
+        xs.reserve(world_samples.size());
+        ys.reserve(world_samples.size());
+        zs.reserve(world_samples.size());
+        for (const auto& sample : world_samples) {
+            xs.push_back(sample.x());
+            ys.push_back(sample.y());
+            zs.push_back(sample.z());
+        }
+
+        out.balloon_world = Eigen::Vector3d(medianValue(xs), medianValue(ys), medianValue(zs));
+        out.depth = medianValue(depth_samples);
+        out.samples = static_cast<int>(world_samples.size());
+
+        const Eigen::Vector3d odom = api_.getOdomPosition();
+        const Eigen::Vector2d to_balloon(out.balloon_world.x() - odom.x(),
+                                         out.balloon_world.y() - odom.y());
+        out.forward_distance = to_balloon.dot(forward);
+        out.lateral_offset = to_balloon.dot(left);
+
+        const double forward_tip_offset = balloon_needle_length_ - balloon_puncture_extra_;
+        out.drone_target = out.balloon_world;
+        out.drone_target.x() -= forward_tip_offset * forward.x();
+        out.drone_target.y() -= forward_tip_offset * forward.y();
+        out.drone_target.x() += balloon_needle_right_offset_m_ * left.x();
+        out.drone_target.y() += balloon_needle_right_offset_m_ * left.y();
+        out.drone_target.z() = clampValue(out.balloon_world.z() +
+                                              balloon_needle_down_offset_m_ +
+                                              balloon_center_z_bias_,
+                                          balloon_align_z_min_,
+                                          balloon_align_z_max_);
+
+        ROS_INFO("[craic_demo] BALLOON_WORLD_LOCK samples=%d depth=%.2f yaw=%.3f balloon=(%.2f %.2f %.2f) target=(%.2f %.2f %.2f) forward_dist=%.2f lateral=%.2f needle=(len=%.2f extra=%.2f right=%.3f down=%.3f)",
+                 out.samples, out.depth, yaw,
+                 out.balloon_world.x(), out.balloon_world.y(), out.balloon_world.z(),
+                 out.drone_target.x(), out.drone_target.y(), out.drone_target.z(),
+                 out.forward_distance, out.lateral_offset,
+                 balloon_needle_length_, balloon_puncture_extra_,
+                 balloon_needle_right_offset_m_, balloon_needle_down_offset_m_);
+        return finiteVec(out.balloon_world) && finiteVec(out.drone_target);
+    }
+
+    bool worldLockedPdPuncture(double yaw,
+                               const Eigen::Vector2d& forward,
+                               const Eigen::Vector2d& left,
+                               const BalloonStrikeTarget& target,
+                               const VerifyRoi& roi) {
+        const Eigen::Vector3d start = api_.getOdomPosition();
+        const Eigen::Vector2d start_to_target(target.drone_target.x() - start.x(),
+                                              target.drone_target.y() - start.y());
+        const double target_progress = std::max(0.0, start_to_target.dot(forward));
+        const double max_progress = std::max(target_progress + 0.20,
+                                             std::max(0.05, balloon_direct_max_distance_));
+        const double min_pop_progress = clampValue(balloon_direct_min_puncture_distance_,
+                                                   0.0,
+                                                   std::max(0.0, target_progress));
+        const double area_threshold = std::max(1.0, roi.baseline_area * balloon_pop_area_drop_ratio_);
+        const bool have_start_depth = freshBalloonDepth();
+        const double start_depth = have_start_depth ? balloon_detection_.depth : target.depth;
+        const ros::Time start_time = ros::Time::now();
+        const ros::Time deadline = start_time + ros::Duration(std::max(0.5, balloon_direct_timeout_));
+        const double reach_threshold = std::max(0.01, balloon_world_pd_reach_threshold_);
+        const double min_forward_speed = std::min(std::abs(balloon_direct_forward_speed_),
+                                                  std::max(0.03, std::abs(balloon_direct_slow_speed_) * 0.35));
+
+        ros::Time last = start_time;
+        bool have_prev = false;
+        bool detected = false;
+        std::string reason = "target_reached";
+        double prev_forward_error = 0.0;
+        double prev_lateral_error = 0.0;
+        double prev_z_error = 0.0;
+        double progress = 0.0;
+        double area = freshVerifyRoiResult() ? verify_roi_result_.area : -1.0;
+        double depth = start_depth;
+
+        ROS_INFO("[craic_demo] BALLOON_WORLD_LOCK_PD_PUNCTURE start target=(%.2f %.2f %.2f) balloon=(%.2f %.2f %.2f) target_progress=%.2f min_pop=%.2f max=%.2f timeout=%.1f area_threshold=%.0f start_depth=%.2f kp=(%.2f %.2f %.2f) kd=(%.2f %.2f %.2f)",
+                 target.drone_target.x(), target.drone_target.y(), target.drone_target.z(),
+                 target.balloon_world.x(), target.balloon_world.y(), target.balloon_world.z(),
+                 target_progress, min_pop_progress, max_progress, balloon_direct_timeout_,
+                 area_threshold, start_depth,
+                 balloon_world_pd_kp_forward_, balloon_world_pd_kp_lateral_, balloon_world_pd_kp_z_,
+                 balloon_world_pd_kd_forward_, balloon_world_pd_kd_lateral_, balloon_world_pd_kd_z_);
+
+        ros::Rate rate(50);
+        while (ros::ok() && ros::Time::now() < deadline) {
+            ros::spinOnce();
+            const ros::Time now = ros::Time::now();
+            const double dt = std::max(1e-3, (now - last).toSec());
+            last = now;
+
+            const Eigen::Vector3d pos = api_.getOdomPosition();
+            const Eigen::Vector2d start_delta(pos.x() - start.x(), pos.y() - start.y());
+            progress = start_delta.dot(forward);
+
+            if (freshVerifyRoiResult()) {
+                area = verify_roi_result_.area;
+                if (progress >= min_pop_progress && area <= area_threshold) {
+                    detected = true;
+                    reason = "area_drop";
+                    break;
+                }
+            }
+            if (freshBalloonDepth()) {
+                depth = balloon_detection_.depth;
+                if (progress >= min_pop_progress &&
+                    have_start_depth &&
+                    depth >= start_depth + balloon_puncture_depth_jump_) {
+                    detected = true;
+                    reason = "depth_jump";
+                    break;
+                }
+            }
+
+            const Eigen::Vector2d to_target(target.drone_target.x() - pos.x(),
+                                            target.drone_target.y() - pos.y());
+            const double forward_error = to_target.dot(forward);
+            const double lateral_error = to_target.dot(left);
+            const double z_error = target.drone_target.z() - pos.z();
+            const double planar_error = std::hypot(forward_error, lateral_error);
+            const double total_error = std::hypot(planar_error, z_error);
+
+            if (forward_error <= reach_threshold && total_error <= reach_threshold * 1.8) {
+                reason = "target_reached";
+                break;
+            }
+            if (progress >= max_progress) {
+                reason = "distance";
+                break;
+            }
+
+            const double d_forward = have_prev ? (forward_error - prev_forward_error) / dt : 0.0;
+            const double d_lateral = have_prev ? (lateral_error - prev_lateral_error) / dt : 0.0;
+            const double d_z = have_prev ? (z_error - prev_z_error) / dt : 0.0;
+            prev_forward_error = forward_error;
+            prev_lateral_error = lateral_error;
+            prev_z_error = z_error;
+            have_prev = true;
+
+            double forward_speed = balloon_world_pd_kp_forward_ * forward_error +
+                                   balloon_world_pd_kd_forward_ * d_forward;
+            double lateral_speed = balloon_world_pd_kp_lateral_ * lateral_error +
+                                   balloon_world_pd_kd_lateral_ * d_lateral;
+            double z_speed = balloon_world_pd_kp_z_ * z_error +
+                             balloon_world_pd_kd_z_ * d_z;
+
+            const double max_forward = std::abs(balloon_direct_forward_speed_);
+            const double max_lateral = std::abs(balloon_direct_max_lateral_speed_);
+            const double max_z = std::abs(balloon_direct_max_z_speed_);
+            forward_speed = clampValue(forward_speed, 0.0, max_forward);
+            if (forward_error > reach_threshold) {
+                forward_speed = std::max(forward_speed, min_forward_speed);
+            }
+            if (std::abs(lateral_error) > 0.10 || std::abs(z_error) > 0.08) {
+                forward_speed = std::min(forward_speed, std::abs(balloon_direct_slow_speed_));
+            }
+            lateral_speed = clampValue(lateral_speed, -max_lateral, max_lateral);
+            z_speed = clampValue(z_speed, -max_z, max_z);
+
+            sendVelocityCmdWithYaw(forward_speed * forward.x() + lateral_speed * left.x(),
+                                   forward_speed * forward.y() + lateral_speed * left.y(),
+                                   z_speed,
+                                   yaw);
+
+            if (!simple_logs_) {
+                ROS_INFO_THROTTLE(mission_log_period_,
+                                  "[craic_demo] BALLOON_WORLD_LOCK_PD_PUNCTURE err=(f=%.3f l=%.3f z=%.3f total=%.3f) progress=%.2f target=%.2f speed=(f=%.2f l=%.2f z=%.2f) area=%.0f threshold=%.0f depth=%.2f",
+                                  forward_error, lateral_error, z_error, total_error,
+                                  progress, target_progress,
+                                  forward_speed, lateral_speed, z_speed,
+                                  area, area_threshold, depth);
+            }
+            rate.sleep();
+        }
+
+        if (!detected && ros::Time::now() >= deadline) {
+            reason = "timeout";
+        }
+        holdOverride(0.05, yaw);
+        ROS_INFO("[craic_demo] BALLOON_WORLD_LOCK_PD_PUNCTURE result detected=%s reason=%s progress=%.2f target=%.2f max=%.2f area=%.0f threshold=%.0f depth=%.2f start_depth=%.2f",
+                 yesNo(detected), reason.c_str(), progress, target_progress, max_progress,
+                 area, area_threshold, depth, start_depth);
+        return detected;
     }
 
     Eigen::Vector3d balloonApproachTarget(const Eigen::Vector3d& balloon,
@@ -2567,6 +2813,8 @@ private:
     double balloon_align_z_max_ = 0.60;
     double balloon_needle_length_ = 0.18;
     double balloon_puncture_extra_ = 0.04;
+    double balloon_needle_right_offset_m_ = 0.0;
+    double balloon_needle_down_offset_m_ = 0.0;
     double balloon_servo_timeout_ = 8.0;
     double balloon_servo_u_threshold_ = 0.12;
     double balloon_servo_v_threshold_ = 0.13;
@@ -2620,6 +2868,15 @@ private:
     double balloon_direct_terminal_lateral_scale_ = 0.15;
     double balloon_direct_terminal_z_scale_ = 0.20;
     bool balloon_direct_freeze_on_near_blob_ = true;
+    double balloon_world_lock_sample_time_ = 0.30;
+    int balloon_world_lock_min_samples_ = 3;
+    double balloon_world_pd_kp_forward_ = 0.90;
+    double balloon_world_pd_kd_forward_ = 0.08;
+    double balloon_world_pd_kp_lateral_ = 1.10;
+    double balloon_world_pd_kd_lateral_ = 0.08;
+    double balloon_world_pd_kp_z_ = 0.90;
+    double balloon_world_pd_kd_z_ = 0.06;
+    double balloon_world_pd_reach_threshold_ = 0.04;
 
     double override_move_timeout_ = 30.0;
     double override_pos_threshold_ = 0.10;
