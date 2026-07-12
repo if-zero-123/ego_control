@@ -165,12 +165,12 @@ public:
 
         pnh_.param<double>("initial_wait_x", initial_wait_.x(), 0.0);
         pnh_.param<double>("initial_wait_y", initial_wait_.y(), -0.85);
-        pnh_.param<double>("initial_wait_z", initial_wait_.z(), 1.0);
+        pnh_.param<double>("initial_wait_z", initial_wait_.z(), 1.13);
 
         pnh_.param<double>("expected_frame_x", expected_frame_center_.x(), 3.2);
-        pnh_.param<double>("expected_frame_y", expected_frame_center_.y(), -1.25);
+        pnh_.param<double>("expected_frame_y", expected_frame_center_.y(), -1.32);
         pnh_.param<double>("expected_frame_z", expected_frame_center_.z(), 1.25);
-        pnh_.param<std::string>("frame_center_mode", frame_center_mode_, "auto_detect");
+        pnh_.param<std::string>("frame_center_mode", frame_center_mode_, "expected_direct");
         pnh_.param<double>("frame_center_reject_distance", frame_center_reject_distance_, 0.30);
         pnh_.param<double>("frame_post_x_offset", frame_post_x_offset_, 1.50);
         pnh_.param<double>("frame_post_y_offset", frame_post_y_offset_, -0.135);
@@ -178,7 +178,7 @@ public:
         pnh_.param<double>("manual_frame_post_x", manual_frame_post_.x(), 4.70);
         pnh_.param<double>("manual_frame_post_y", manual_frame_post_.y(), -1.25);
         pnh_.param<double>("manual_frame_post_z", manual_frame_post_.z(), 1.25);
-        pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 1.25);
+        pnh_.param<double>("frame_pass_guard_x_offset", frame_pass_guard_x_offset_, 1.17);
         pnh_.param<double>("frame_pass_guard_timeout", frame_pass_guard_timeout_, 30.0);
         pnh_.param<double>("frame_detect_timeout", frame_detect_timeout_, 5.0);
         pnh_.param<double>("frame_valid_max_age", frame_valid_max_age_, 0.8);
@@ -190,9 +190,9 @@ public:
         pnh_.param<double>("frame_partial_min_wait", frame_partial_min_wait_, 2.0);
         pnh_.param<double>("frame_lock_history_duration", frame_lock_history_duration_, 2.0);
 
-        pnh_.param<double>("qr_goal_x", qr_goal_.x(), 4.15);
-        pnh_.param<double>("qr_goal_y", qr_goal_.y(), 0.2);
-        pnh_.param<double>("qr_goal_z", qr_goal_.z(), 1.3);
+        pnh_.param<double>("qr_goal_x", qr_goal_.x(), 4.10);
+        pnh_.param<double>("qr_goal_y", qr_goal_.y(), 0.035);
+        pnh_.param<double>("qr_goal_z", qr_goal_.z(), 1.4);
         pnh_.param<double>("qr_initial_wait", qr_initial_wait_, 0.0);
         pnh_.param<double>("qr_search_timeout", qr_search_timeout_, 10.0);
         pnh_.param<double>("qr_search_raise_z", qr_search_raise_z_, 0.2);
@@ -200,9 +200,9 @@ public:
         pnh_.param<double>("qr_search_hold", qr_search_hold_, 0.35);
 
         pnh_.param<double>("attack_zone_x", attack_zone_.x(), 0.0);
-        pnh_.param<double>("attack_zone_y", attack_zone_.y(), -0.8);
+        pnh_.param<double>("attack_zone_y", attack_zone_.y(), -0.85);
         pnh_.param<double>("attack_zone_z", attack_zone_.z(), 1.25);
-        pnh_.param<double>("attack_height", attack_height_, 0.35);
+        pnh_.param<double>("attack_height", attack_height_, 0.37);
         pnh_.param<double>("balloon_wait_timeout", balloon_wait_timeout_, 10.0);
         pnh_.param<double>("balloon_valid_max_age", balloon_valid_max_age_, 0.8);
         pnh_.param<double>("balloon_standoff", balloon_standoff_, 0.70);
@@ -2419,15 +2419,15 @@ private:
     double mission_log_period_ = 1.0;
     bool simple_logs_ = true;
     bool land_after_finish_ = true;
-    Eigen::Vector3d initial_wait_ = Eigen::Vector3d(0.0, -0.85, 1.0);
-    Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(3.2, -1.25, 1.25);
-    std::string frame_center_mode_ = "auto_detect";
+    Eigen::Vector3d initial_wait_ = Eigen::Vector3d(0.0, -0.85, 1.13);
+    Eigen::Vector3d expected_frame_center_ = Eigen::Vector3d(3.2, -1.32, 1.25);
+    std::string frame_center_mode_ = "expected_direct";
     double frame_center_reject_distance_ = 0.30;
     double frame_post_x_offset_ = 1.50;
     double frame_post_y_offset_ = -0.135;
     std::string frame_post_mode_ = "auto";
     Eigen::Vector3d manual_frame_post_ = Eigen::Vector3d(4.70, -1.25, 1.25);
-    double frame_pass_guard_x_offset_ = 1.25;
+    double frame_pass_guard_x_offset_ = 1.17;
     double frame_pass_guard_timeout_ = 30.0;
     double frame_detect_timeout_ = 5.0;
     double frame_valid_max_age_ = 0.8;
@@ -2439,15 +2439,15 @@ private:
     double frame_partial_min_wait_ = 2.0;
     double frame_lock_history_duration_ = 2.0;
 
-    Eigen::Vector3d qr_goal_ = Eigen::Vector3d(4.15, 0.2, 1.3);
+    Eigen::Vector3d qr_goal_ = Eigen::Vector3d(4.10, 0.035, 1.4);
     double qr_initial_wait_ = 0.0;
     double qr_search_timeout_ = 10.0;
     double qr_search_raise_z_ = 0.2;
     double qr_search_offset_ = 0.3;
     double qr_search_hold_ = 0.35;
 
-    Eigen::Vector3d attack_zone_ = Eigen::Vector3d(0.0, -0.8, 1.25);
-    double attack_height_ = 0.35;
+    Eigen::Vector3d attack_zone_ = Eigen::Vector3d(0.0, -0.85, 1.25);
+    double attack_height_ = 0.37;
     bool balloon_attack_no_world_point_ = false;
     double balloon_wait_timeout_ = 10.0;
     double balloon_valid_max_age_ = 0.8;

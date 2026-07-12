@@ -736,7 +736,7 @@ async function loadDefaults() {
     if (el) el.value = defaults[name] !== undefined ? defaults[name] : 0;
   });
   document.getElementById('frame_use_unified_z').checked = boolValue(defaults.frame_use_unified_z ?? true);
-  const mode = defaults.frame_center_mode || 'auto_detect';
+  const mode = defaults.frame_center_mode || 'expected_direct';
   const radio = document.querySelector(`input[name="frame_center_mode"][value="${mode}"]`);
   if (radio) radio.checked = true;
   const postMode = defaults.frame_post_mode || 'auto';
@@ -1332,7 +1332,7 @@ class CraicWebControl:
         for name in BOOL_PARAM_NAMES:
             defaults.setdefault(name, "false")
         defaults.setdefault("qr_demo_result_id", "0")
-        defaults.setdefault("frame_center_mode", "auto_detect")
+        defaults.setdefault("frame_center_mode", "expected_direct")
         defaults.setdefault("frame_post_mode", "auto")
         defaults = self._resolve_default_refs(defaults)
         return defaults
@@ -1567,11 +1567,11 @@ class CraicWebControl:
             effective[name] = "%.6g" % value
             if default_value is None or abs(value - default_value) > 1e-9:
                 clean[name] = ("%.6g" % value)
-        mode = params.get("frame_center_mode", self.defaults.get("frame_center_mode", "auto_detect"))
+        mode = params.get("frame_center_mode", self.defaults.get("frame_center_mode", "expected_direct"))
         if mode not in MODE_VALUES:
             raise ValueError("invalid frame_center_mode")
         effective["frame_center_mode"] = mode
-        if mode != self.defaults.get("frame_center_mode", "auto_detect"):
+        if mode != self.defaults.get("frame_center_mode", "expected_direct"):
             clean["frame_center_mode"] = mode
         frame_post_mode = params.get("frame_post_mode", self.defaults.get("frame_post_mode", "auto"))
         if frame_post_mode not in FRAME_POST_MODE_VALUES:
