@@ -1,0 +1,7 @@
+<launch>
+  <arg name="config_file" default="$(find d_task_uav_control)/config/d_task_uav.yaml"/>
+  <node pkg="d_task_uav_control" type="fastlio_supervisor_node.py"
+        name="fastlio_supervisor" output="screen">
+    <rosparam command="load" file="$(arg config_file)"/>
+  </node>
+</launch>

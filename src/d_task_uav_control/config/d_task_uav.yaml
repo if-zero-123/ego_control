@@ -1,0 +1,23 @@
+system:
+  uav_id: uav_01
+  allow_arm: false
+
+positioning:
+  launch_package: lidar_to_mavros
+  launch_file: fastlio_to_px4_mid360_direct.launch
+  launch_args: ["rviz:=false", "zero_origin:=true"]
+  stop_timeout_s: 5.0
+  startup_timeout_s: 15.0
+  stable_time_s: 3.0
+  message_timeout_s: 0.3
+  max_xy_drift_m: 0.05
+  max_z_drift_m: 0.05
+  conflict_nodes: [laserMapping, lidar_to_mavros]
+
+topics:
+  mission_config: /uav_protocol/mission_config
+  status: /d_task/positioning/status
+  fastlio_odom: /Odometry
+  vision_pose: /mavros/vision_pose/pose
+  px4_odom: /mavros/local_position/odom
+  mavros_state: /mavros/state
