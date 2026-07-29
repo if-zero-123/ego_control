@@ -1,0 +1,16 @@
+<launch>
+  <arg name="mqtt_host" default="192.168.50.10"/>
+  <arg name="mqtt_port" default="1883"/>
+  <arg name="mqtt_client_id" default="d-task-uav"/>
+
+  <node pkg="uav_protocol_gateway"
+        type="uav_protocol_gateway_node.py"
+        name="uav_protocol_gateway"
+        output="screen">
+    <rosparam command="load"
+              file="$(find uav_protocol_gateway)/config/uav_protocol_gateway.yaml"/>
+    <param name="mqtt_host" value="$(arg mqtt_host)"/>
+    <param name="mqtt_port" value="$(arg mqtt_port)"/>
+    <param name="mqtt_client_id" value="$(arg mqtt_client_id)"/>
+  </node>
+</launch>

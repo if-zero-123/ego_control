@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>uav_protocol_gateway</name>
+  <version>0.1.0</version>
+  <description>ROS1 MQTT protocol gateway for the D-task UAV agent.</description>
+
+  <maintainer email="orangepi@example.com">orangepi</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>geometry_msgs</depend>
+  <depend>mavros_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rospy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>python3-paho-mqtt</exec_depend>
+  <exec_depend>python3-setuptools</exec_depend>
+
+  <test_depend>python3-nose</test_depend>
+
+  <export>
+  </export>
+</package>

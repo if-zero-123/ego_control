@@ -1,0 +1,47 @@
+# MQTT broker and protocol transport.
+mqtt_host: 192.168.50.10
+mqtt_port: 1883
+mqtt_keepalive: 10
+mqtt_reconnect_min_delay: 1
+mqtt_reconnect_max_delay: 10
+mqtt_client_id: d-task-uav
+mqtt_username: ""
+mqtt_password: ""
+
+# The protocol contract requires this exact gate for dynamic descent.
+car_pose_timeout_ms: 300
+safety_gate_period: 0.02
+
+# Existing ROS1 inputs.  These are read-only; the gateway does not change
+# PX4, Fast-LIO/MID360, YOLO, or the existing velocity controller.
+odom_topic: /mavros/local_position/odom
+mavros_state_topic: /mavros/state
+battery_topic: /mavros/battery
+flight_state_topic: /ego_bridge/flight_state
+control_mode_topic: /ego_bridge/control_mode
+camera_image_topic: /usb_camera_vision/usb_cam/image_raw
+camera_health_topic: ""
+vision_health_topic: ""
+
+# Local task-manager inputs.
+task_state_topic: /uav_protocol/task_state
+tracking_topic: /uav_protocol/local_tracking
+event_topic: /uav_protocol/local_event
+health_topic: /uav_protocol/local_health
+fault_topic: /uav_protocol/local_fault
+mission_reset_topic: /uav_protocol/mission_reset
+
+# Local gateway outputs.  JSON String messages contain the full protocol
+# envelope so a ROS1 task manager can keep mission_id/seq/reply metadata.
+mission_start_ros_topic: /uav_protocol/mission_start
+car_pose_ros_topic: /uav_protocol/car/pose
+car_pose_meta_ros_topic: /uav_protocol/car/pose_meta
+car_event_ros_topic: /uav_protocol/car/event
+car_health_ros_topic: /uav_protocol/car/health
+car_heartbeat_ros_topic: /uav_protocol/car/heartbeat
+
+# The D-task mission state machine must check this latch before every descent
+# command.  safety_hold becomes true within 20ms after the 300ms pose gate
+# closes while the mission is in a dynamic-landing low-altitude state.
+dynamic_descent_allowed_topic: /uav_protocol/dynamic_descent_allowed
+safety_hold_topic: /uav_protocol/safety_hold
