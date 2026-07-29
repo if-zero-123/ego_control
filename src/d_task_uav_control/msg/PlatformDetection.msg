@@ -1,0 +1,12 @@
+std_msgs/Header header
+bool found
+int32 class_id
+float32 confidence
+float32 center_u
+float32 center_v
+float32 bbox_x
+float32 bbox_y
+float32 bbox_width
+float32 bbox_height
+uint32 image_width
+uint32 image_height

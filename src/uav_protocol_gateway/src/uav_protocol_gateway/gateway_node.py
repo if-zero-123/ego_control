@@ -45,6 +45,7 @@ _UAV_STATES = {
     "SEARCH_CAR",
     "LOCK_CAR",
     "FOLLOW_CAR",
+    "DROP_DESCEND",
     "RELEASE",
     "RETURN_HOME",
     "DESCEND_HIGH",
@@ -65,6 +66,10 @@ _EGO_BRIDGE_STATE_MAP = {
     "HOVER": "READY",
     "TRACKING": "FOLLOW_CAR",
     "LANDING": "LAND_HOME",
+    "PLATFORM_LANDING": "LAND_ON_PLATFORM",
+    "PLATFORM_LANDED": "PLATFORM_HOLD",
+    "PLATFORM_PRE_OFFBOARD": "PLATFORM_TAKEOFF",
+    "PLATFORM_TAKEOFF": "PLATFORM_TAKEOFF",
 }
 
 
@@ -126,6 +131,7 @@ class UavProtocolGateway:
         self.last_px4_state_ms: Optional[int] = None
         self.last_camera_ms: Optional[int] = None
         self.last_tracking_ms: Optional[int] = None
+        self.last_task_state_ms: Optional[int] = None
         self.last_camera_health: Optional[bool] = None
         self.last_vision_health: Optional[bool] = None
         self.task_health: Dict[str, Any] = {}
@@ -345,6 +351,7 @@ class UavProtocolGateway:
                     self.state = "POSITIONING_INIT"
                     self.fault_code = 0
                     self.fault_text = ""
+                    self.last_task_state_ms = None
                     self._publish_event("MISSION_CONFIG_ACCEPTED", mode=self.mode)
                 elif action.kind == "mission_start":
                     self.pub_mission_start.publish(String(data=message.to_json()))
@@ -415,7 +422,12 @@ class UavProtocolGateway:
 
     def _flight_state_cb(self, message: String) -> None:
         with self.lock:
-            if message.data and self.core.mission_id:
+            task_state_age = self._age_ms(self.last_task_state_ms)
+            if (
+                message.data
+                and self.core.mission_id
+                and (task_state_age is None or task_state_age > 500)
+            ):
                 self.state = self._normalise_state(message.data)
 
     def _control_mode_cb(self, message: UInt8) -> None:
@@ -459,12 +471,22 @@ class UavProtocolGateway:
             data = _json_object(message.data)
             state = data.get("state")
             mode = data.get("mode")
+            mission_id = str(data.get("mission_id", ""))
         except (ValueError, TypeError, json.JSONDecodeError):
             state = message.data
             mode = None
+            mission_id = ""
         with self.lock:
+            expected_ids = {
+                value
+                for value in (self.core.mission_id, self.core.configured_mission_id)
+                if value
+            }
+            if not expected_ids or (mission_id and mission_id not in expected_ids):
+                return
             if state:
                 self.state = self._normalise_state(str(state))
+                self.last_task_state_ms = _now_ms()
             if mode in (Mode.DROP.value, Mode.DYNAMIC_LANDING.value):
                 self.mode = mode
 
@@ -532,6 +554,7 @@ class UavProtocolGateway:
             self.state = "NOT_READY"
             self.mode = Mode.DROP.value
             self._stale_pose_fault_sent = False
+            self.last_task_state_ms = None
 
     def _camera_cb(self, _message: Image) -> None:
         with self.lock:
@@ -556,8 +579,14 @@ class UavProtocolGateway:
         with self.lock:
             mission_id = self._context_mission_id()
             payload = dict(self.tracking)
-            age = self._age_ms(self.last_tracking_ms)
-            payload["vision_age_ms"] = age if age is not None else 2**31 - 1
+            transport_age = self._age_ms(self.last_tracking_ms)
+            source_age = int(payload.get("vision_age_ms", 2**31 - 1))
+            if transport_age is None:
+                payload["vision_age_ms"] = 2**31 - 1
+            else:
+                payload["vision_age_ms"] = min(
+                    2**31 - 1, max(0, source_age) + transport_age
+                )
             payload["landing_gate"] = bool(payload.get("landing_gate", False)) and self.core.dynamic_descent_allowed()
             try:
                 message = build_tracking(self.factory, mission_id, **payload)
@@ -612,7 +641,6 @@ class UavProtocolGateway:
                 "DESCEND_HIGH",
                 "DESCEND_LOW",
                 "LAND_ON_PLATFORM",
-                "PLATFORM_HOLD",
             }
             hold_required = (
                 self.mode == Mode.DYNAMIC_LANDING.value
@@ -693,6 +721,12 @@ class UavProtocolGateway:
                 payload[key] = self._default_tracking()[key]
         payload["release_gate"] = bool(payload.get("release_gate", False))
         payload["landing_gate"] = bool(payload.get("landing_gate", False))
+        try:
+            payload["vision_age_ms"] = max(
+                0, int(payload.get("vision_age_ms", 2**31 - 1))
+            )
+        except (TypeError, ValueError):
+            payload["vision_age_ms"] = 2**31 - 1
         if payload.get("filter_mode") not in {"MEASURED", "PREDICTED", "STALE", "INVALID"}:
             payload["filter_mode"] = "INVALID"
         return payload

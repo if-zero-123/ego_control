@@ -39,6 +39,8 @@
 #include <quadrotor_msgs/PositionCommand.h>
 #include <quadrotor_msgs/TakeoffLand.h>
 
+#include "ego_bridge/platform_landing_detector.h"
+
 // ─────────────────────────────────────────────────────────────
 //  FSM 状态枚举 — 6 个主状态
 // ─────────────────────────────────────────────────────────────
@@ -48,7 +50,11 @@ enum class State : uint8_t {
     TAKEOFF       = 2,   // 电机预热 → 匀速爬升 → 接近目标高度减速
     HOVER         = 3,   // 锁定位置悬停，等待 EGO 命令或降落指令
     TRACKING      = 4,   // 转发 EGO 轨迹命令（或 OVERRIDE 时转发用户命令）
-    LANDING       = 5    // 匀速下降 → 近地减速 → 着陆检测 → 锁桨
+    LANDING       = 5,   // 匀速下降 → 近地减速 → 着陆检测 → 锁桨
+    PLATFORM_LANDING = 6,
+    PLATFORM_LANDED = 7,
+    PLATFORM_PRE_OFFBOARD = 8,
+    PLATFORM_TAKEOFF = 9
 };
 
 // 将状态枚举转为字符串，用于日志输出和 flight_state 话题发布
@@ -60,6 +66,10 @@ static const char* stateStr(State s) {
         case State::HOVER:         return "HOVER";
         case State::TRACKING:      return "TRACKING";
         case State::LANDING:       return "LANDING";
+        case State::PLATFORM_LANDING: return "PLATFORM_LANDING";
+        case State::PLATFORM_LANDED: return "PLATFORM_LANDED";
+        case State::PLATFORM_PRE_OFFBOARD: return "PLATFORM_PRE_OFFBOARD";
+        case State::PLATFORM_TAKEOFF: return "PLATFORM_TAKEOFF";
     }
     return "UNKNOWN";
 }
@@ -96,6 +106,15 @@ struct Params {
     double land_pos_deviation;       // 着陆检测：目标z与实际z的偏差阈值(m)，负值
     double land_vel_threshold;       // 着陆检测：速度阈值(m/s)
     double land_hold_time;           // 着陆检测：条件持续满足多久判定着陆(秒)
+
+    // ── 移动平台降落/再起飞参数 ──
+    double platform_min_landing_detect_time;
+    double platform_land_pos_deviation;
+    double platform_land_vel_threshold;
+    double platform_land_hold_time;
+    double platform_takeoff_warmup_time;
+    double platform_takeoff_warmup_height;
+    double platform_takeoff_reach_threshold;
 
     // ── 超时保护 ──
     double cmd_timeout;              // EGO 命令超时(秒)，超时则 TRACKING→HOVER
@@ -143,6 +162,21 @@ struct Params {
         nh.param("landing/land_vel_threshold",  land_vel_threshold,     0.08);
         nh.param("landing/land_hold_time",      land_hold_time,         1.0);
 
+        nh.param("platform_landing/min_detect_time",
+                 platform_min_landing_detect_time, 0.5);
+        nh.param("platform_landing/land_pos_deviation",
+                 platform_land_pos_deviation, -0.06);
+        nh.param("platform_landing/land_vel_threshold",
+                 platform_land_vel_threshold, 0.10);
+        nh.param("platform_landing/land_hold_time",
+                 platform_land_hold_time, 0.8);
+        nh.param("platform_takeoff/motor_warmup_time",
+                 platform_takeoff_warmup_time, 0.8);
+        nh.param("platform_takeoff/motor_warmup_height",
+                 platform_takeoff_warmup_height, 0.05);
+        nh.param("platform_takeoff/reach_threshold",
+                 platform_takeoff_reach_threshold, 0.08);
+
         nh.param("timeout/cmd",                 cmd_timeout,          0.5);
         nh.param("timeout/odom",                odom_timeout,         0.5);
 
@@ -175,10 +209,14 @@ public:
         sub_odom_            = pnh_.subscribe("odom",            10, &EgoBridgeNode::odomCb, this);               // 无人机里程计位姿+速度
         sub_cmd_             = pnh_.subscribe("cmd",             10, &EgoBridgeNode::cmdCb, this);                // EGO-Planner 轨迹命令
         sub_takeoff_land_    = pnh_.subscribe("takeoff_land",    10, &EgoBridgeNode::takeoffLandCb, this);        // 起飞/降落指令
+        sub_takeoff_target_  = pnh_.subscribe("takeoff_target",  10, &EgoBridgeNode::takeoffTargetCb, this);
         sub_target_point_    = pnh_.subscribe("target_point",    10, &EgoBridgeNode::targetPointCb, this);        // 目标点（用于到达检测）
         sub_set_ctrl_mode_   = pnh_.subscribe("set_control_mode",10, &EgoBridgeNode::setControlModeCb, this);     // 切换 EGO/OVERRIDE 控制模式
         sub_override_cmd_    = pnh_.subscribe("override_cmd",    10, &EgoBridgeNode::overrideCmdCb, this);        // OVERRIDE 模式下的外部命令
         sub_emergency_stop_  = pnh_.subscribe("emergency_stop",  10, &EgoBridgeNode::emergencyStopCb, this);      // 紧急停止
+        sub_platform_land_   = pnh_.subscribe("platform_land",   10, &EgoBridgeNode::platformLandCb, this);
+        sub_platform_takeoff_= pnh_.subscribe("platform_takeoff",10, &EgoBridgeNode::platformTakeoffCb, this);
+        sub_platform_cancel_ = pnh_.subscribe("platform_cancel", 10, &EgoBridgeNode::platformCancelCb, this);
 
         // ---- 发布者：向 MAVROS / EGO / 上层 发送控制指令和状态 ----
         pub_setpoint_    = nh_.advertise<mavros_msgs::PositionTarget>("/mavros/setpoint_raw/local", 10);  // 发给 PX4 的位置/速度/加速度指令
@@ -209,8 +247,9 @@ private:
 
     // 订阅者
     ros::Subscriber sub_mavros_state_, sub_mavros_ext_, sub_odom_, sub_cmd_;
-    ros::Subscriber sub_takeoff_land_, sub_target_point_;
+    ros::Subscriber sub_takeoff_land_, sub_takeoff_target_, sub_target_point_;
     ros::Subscriber sub_set_ctrl_mode_, sub_override_cmd_, sub_emergency_stop_;
+    ros::Subscriber sub_platform_land_, sub_platform_takeoff_, sub_platform_cancel_;
 
     // 发布者
     ros::Publisher pub_setpoint_, pub_trigger_;
@@ -236,6 +275,8 @@ private:
     double          odom_yaw_   = 0.0;                                 // 当前航向角(rad)
     ros::Time       odom_stamp_ = ros::Time(0);                        // 里程计时间戳（用于超时检测）
     bool            odom_received_ = false;                            // 是否收到过里程计数据
+    bool            requested_takeoff_target_valid_ = false;
+    double          requested_takeoff_target_z_ = 0.0;
 
     quadrotor_msgs::PositionCommand latest_cmd_;                       // EGO-Planner 最新轨迹命令
     ros::Time                       cmd_stamp_  = ros::Time(0);        // EGO 命令时间戳（用于超时检测）
@@ -277,6 +318,17 @@ private:
     ros::Time       landing_start_time_;         // 降落计时起点
     ros::Time       land_detect_start_;          // 着陆检测条件开始满足的时间
     bool            land_detect_active_ = false; // 着陆检测是否激活
+
+    // ── 移动平台降落/再起飞状态 ──
+    ego_bridge::PlatformLandingDetector platform_contact_detector_{
+        0.5, -0.06, 0.10, 0.8};
+    ros::Time platform_landing_start_time_;
+    geometry_msgs::PoseStamped platform_takeoff_target_;
+    double platform_takeoff_target_z_ = 0.0;
+    double platform_takeoff_start_z_ = 0.0;
+    double platform_takeoff_yaw_ = 0.0;
+    ros::Time platform_takeoff_start_time_;
+    bool platform_takeoff_warmup_done_ = false;
 
     // ── 到达检测：EGO 到目标点后发布 reach_status=1 ──
     ros::Time reach_detect_start_;          // 满足条件开始计时
@@ -336,6 +388,7 @@ private:
                 if (params_.verbose_info) {
                     ROS_INFO("[ego_bridge] TAKEOFF command received");
                 }
+                requested_takeoff_target_valid_ = false;
                 enterPreOffboard();  // 只有 IDLE 状态才接受起飞
             } else {
                 ROS_WARN("[ego_bridge] TAKEOFF ignored: state=%s", stateStr(state_));
@@ -350,6 +403,27 @@ private:
                 ROS_WARN("[ego_bridge] LAND ignored: state=%s", stateStr(state_));
             }
         }
+    }
+
+    void takeoffTargetCb(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+        if ((state_ == State::PRE_OFFBOARD || state_ == State::TAKEOFF)
+            && requested_takeoff_target_valid_
+            && std::abs(requested_takeoff_target_z_ - msg->pose.position.z)
+                < 1e-6) {
+            return;
+        }
+        if (state_ != State::IDLE || !std::isfinite(msg->pose.position.z)) {
+            ROS_WARN("[ego_bridge] targeted takeoff ignored: state=%s target_z=%.2f",
+                     stateStr(state_), msg->pose.position.z);
+            return;
+        }
+        requested_takeoff_target_z_ = msg->pose.position.z;
+        requested_takeoff_target_valid_ = true;
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] targeted TAKEOFF command: z=%.2f",
+                     requested_takeoff_target_z_);
+        }
+        enterPreOffboard();
     }
 
     /// 【回调】目标点更新：保存目标 + 重置到达检测（确保新目标从 reach_status=0 开始）
@@ -386,7 +460,8 @@ private:
             if (params_.verbose_info) {
                 ROS_INFO("[ego_bridge] Entering OVERRIDE mode (state=%s)", stateStr(state_));
             }
-        } else if (msg->data == 0 && control_mode_ == 1) {
+        } else if (msg->data == 0 && control_mode_ == 1
+                   && (state_ == State::HOVER || state_ == State::TRACKING)) {
             // 退出 OVERRIDE → 回到 HOVER，并等待新的轨迹 ID 再进 TRACKING
             control_mode_ = 0;
             if (params_.verbose_info) {
@@ -400,6 +475,49 @@ private:
     void overrideCmdCb(const quadrotor_msgs::PositionCommand::ConstPtr& msg) {
         override_cmd_ = *msg;
         override_cmd_stamp_ = ros::Time::now();
+    }
+
+    /// 移动平台接触阶段：保持随车 OVERRIDE 指令并由桥接层完成触地判定与锁桨。
+    void platformLandCb(const std_msgs::Empty::ConstPtr& /*msg*/) {
+        if ((state_ == State::HOVER || state_ == State::TRACKING)
+            && control_mode_ == 1) {
+            enterPlatformLanding();
+            return;
+        }
+        if (state_ != State::PLATFORM_LANDING
+            && state_ != State::PLATFORM_LANDED) {
+            ROS_WARN("[ego_bridge] platform land ignored: state=%s control_mode=%u",
+                     stateStr(state_), control_mode_);
+        }
+    }
+
+    /// 平台停留完成后请求再起飞。目标包含恢复巡航的世界系高度和航向。
+    void platformTakeoffCb(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+        if (state_ != State::PLATFORM_LANDED) {
+            if (state_ != State::PLATFORM_PRE_OFFBOARD
+                && state_ != State::PLATFORM_TAKEOFF) {
+                ROS_WARN("[ego_bridge] platform takeoff ignored: state=%s",
+                         stateStr(state_));
+            }
+            return;
+        }
+        platform_takeoff_target_ = *msg;
+        platform_takeoff_target_z_ = msg->pose.position.z;
+        const geometry_msgs::Quaternion& q = msg->pose.orientation;
+        platform_takeoff_yaw_ = std::atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+        enterPlatformPreOffboard();
+    }
+
+    void platformCancelCb(const std_msgs::Empty::ConstPtr& /*msg*/) {
+        if (state_ != State::PLATFORM_LANDING) {
+            return;
+        }
+        platform_takeoff_yaw_ = odom_yaw_;
+        platform_contact_detector_.reset();
+        enterHoverOverride();
+        ROS_WARN("[ego_bridge] platform landing cancelled -> HOVER (OVERRIDE)");
     }
 
     /// 【回调】紧急停止：立即停发 setpoint → PX4 触发 failsafe
@@ -431,7 +549,9 @@ private:
         takeoff_start_pos_  = odom_pos_;                  // 记录当前位置作为起飞基准
         takeoff_setpoint_   = takeoff_start_pos_;
         takeoff_start_yaw_  = odom_yaw_;                  // 锁定起飞航向，避免起飞阶段 yaw 跟随漂动
-        takeoff_target_z_   = params_.takeoff_height;     // 目标绝对高度
+        takeoff_target_z_ = requested_takeoff_target_valid_
+            ? requested_takeoff_target_z_
+            : params_.takeoff_height;
         if (takeoff_target_z_ < odom_pos_.z()) {
             takeoff_target_z_ = odom_pos_.z();            // 保护：如果已经高于目标则保持当前高度
         }
@@ -507,6 +627,66 @@ private:
         control_mode_ = 0;
         if (params_.verbose_info) {
             ROS_INFO("[ego_bridge] STATE -> LANDING from_z=%.2f", landing_start_z_);
+        }
+    }
+
+    void enterPlatformLanding() {
+        state_ = State::PLATFORM_LANDING;
+        control_mode_ = 1;
+        platform_landing_start_time_ = ros::Time::now();
+        platform_contact_detector_ = ego_bridge::PlatformLandingDetector(
+            params_.platform_min_landing_detect_time,
+            params_.platform_land_pos_deviation,
+            params_.platform_land_vel_threshold,
+            params_.platform_land_hold_time);
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> PLATFORM_LANDING");
+        }
+    }
+
+    void enterPlatformLanded() {
+        state_ = State::PLATFORM_LANDED;
+        control_mode_ = 1;
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> PLATFORM_LANDED");
+        }
+    }
+
+    void enterPlatformPreOffboard() {
+        state_ = State::PLATFORM_PRE_OFFBOARD;
+        control_mode_ = 1;
+        pre_send_counter_ = 0;
+        offboard_requested_ = false;
+        offboard_first_try_time_ = ros::Time(0);
+        last_offboard_try_time_ = ros::Time(0);
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> PLATFORM_PRE_OFFBOARD target_z=%.2f",
+                     platform_takeoff_target_z_);
+        }
+    }
+
+    void enterPlatformTakeoff() {
+        state_ = State::PLATFORM_TAKEOFF;
+        control_mode_ = 1;
+        platform_takeoff_start_z_ = odom_pos_.z();
+        platform_takeoff_start_time_ = ros::Time::now();
+        platform_takeoff_warmup_done_ = false;
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> PLATFORM_TAKEOFF from_z=%.2f target_z=%.2f",
+                     platform_takeoff_start_z_, platform_takeoff_target_z_);
+        }
+    }
+
+    void enterHoverOverride() {
+        state_ = State::HOVER;
+        hover_pos_ = odom_pos_;
+        hover_yaw_ = platform_takeoff_yaw_;
+        hover_enter_time_ = ros::Time::now();
+        wait_new_traj_ = false;
+        trigger_sent_ = true;
+        control_mode_ = 1;
+        if (params_.verbose_info) {
+            ROS_INFO("[ego_bridge] STATE -> HOVER (platform takeoff, OVERRIDE)");
         }
     }
 
@@ -649,7 +829,8 @@ private:
         }
 
         // ── 安全检查②：里程计超时 → 停发 setpoint 触发 PX4 failsafe ──
-        if (state_ != State::IDLE && odom_received_) {
+        if (state_ != State::IDLE && state_ != State::PLATFORM_LANDED
+            && odom_received_) {
             if ((now - odom_stamp_).toSec() > params_.odom_timeout) {
                 ROS_ERROR("[ego_bridge] Odom timeout! Stopping setpoints; PX4 failsafe");
                 // Don't send setpoint, PX4 will handle failsafe
@@ -659,7 +840,9 @@ private:
         }
 
         // ── 安全检查③：OFFBOARD 模式丢失检测（仅警告，由飞手或 PX4 处理） ──
-        if (state_ != State::IDLE && state_ != State::PRE_OFFBOARD) {
+        if (state_ != State::IDLE && state_ != State::PRE_OFFBOARD
+            && state_ != State::PLATFORM_LANDED
+            && state_ != State::PLATFORM_PRE_OFFBOARD) {
             if (mavros_state_stamp_ != ros::Time(0) &&
                 mavros_state_.mode != "OFFBOARD")
             {
@@ -687,6 +870,18 @@ private:
                 break;
             case State::LANDING:
                 runLanding(now);
+                break;
+            case State::PLATFORM_LANDING:
+                runPlatformLanding(now);
+                break;
+            case State::PLATFORM_LANDED:
+                runPlatformLanded(now);
+                break;
+            case State::PLATFORM_PRE_OFFBOARD:
+                runPlatformPreOffboard(now);
+                break;
+            case State::PLATFORM_TAKEOFF:
+                runPlatformTakeoff(now);
                 break;
         }
 
@@ -1009,12 +1204,133 @@ private:
         }
     }
 
+    bool overrideCommandFresh(const ros::Time& now) const {
+        return !override_cmd_stamp_.isZero()
+            && (now - override_cmd_stamp_).toSec() < params_.override_cmd_timeout;
+    }
+
+    void runPlatformLanding(const ros::Time& now) {
+        double commanded_z = odom_pos_.z();
+        if (overrideCommandFresh(now)) {
+            pub_setpoint_.publish(fullTrackingSetpoint(override_cmd_));
+            commanded_z = override_cmd_.position.z;
+        } else {
+            pub_setpoint_.publish(posOnlySetpoint(odom_pos_, odom_yaw_));
+            ROS_WARN_THROTTLE(
+                1.0,
+                "[ego_bridge] PLATFORM_LANDING override timeout, holding position");
+        }
+
+        if (extended_state_.landed_state ==
+            mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND) {
+            completePlatformLanding();
+            return;
+        }
+
+        const double elapsed = (now - platform_landing_start_time_).toSec();
+        const double position_error_z = commanded_z - odom_pos_.z();
+        if (platform_contact_detector_.update(
+                elapsed, position_error_z, odom_vel_.z())) {
+            completePlatformLanding();
+        }
+    }
+
+    void runPlatformLanded(const ros::Time& /*now*/) {
+        // 电机已锁定，随车停留阶段不向 PX4 发送 setpoint。
+    }
+
+    void runPlatformPreOffboard(const ros::Time& now) {
+        if (!odom_received_) {
+            ROS_WARN_THROTTLE(
+                1.0,
+                "[ego_bridge] PLATFORM_PRE_OFFBOARD waiting for odometry");
+            return;
+        }
+
+        // 平台仍在运动，预发位置每周期取当前 odom，避免锁死进入状态时的 XY。
+        pub_setpoint_.publish(posOnlySetpoint(odom_pos_, platform_takeoff_yaw_));
+        pre_send_counter_++;
+        if (!offboard_requested_ && pre_send_counter_ < params_.pre_send_count) {
+            return;
+        }
+        if (!offboard_requested_) {
+            offboard_first_try_time_ = now;
+            last_offboard_try_time_ = ros::Time(0);
+            offboard_requested_ = true;
+        }
+
+        if (mavros_state_.mode == "OFFBOARD") {
+            if (params_.enable_auto_arm && !mavros_state_.armed) {
+                armDrone();
+                return;
+            }
+            if (mavros_state_.armed) {
+                enterPlatformTakeoff();
+                return;
+            }
+            ROS_WARN_THROTTLE(
+                1.0,
+                "[ego_bridge] platform takeoff waiting for manual ARM");
+            return;
+        }
+
+        if ((now - offboard_first_try_time_).toSec() > params_.offboard_timeout) {
+            ROS_ERROR("[ego_bridge] platform OFFBOARD timeout, returning PLATFORM_LANDED");
+            enterPlatformLanded();
+            return;
+        }
+        if ((now - last_offboard_try_time_).toSec() >= 1.0) {
+            last_offboard_try_time_ = now;
+            setOffboardMode();
+        }
+    }
+
+    void runPlatformTakeoff(const ros::Time& now) {
+        const double elapsed = (now - platform_takeoff_start_time_).toSec();
+        if (!platform_takeoff_warmup_done_) {
+            if (elapsed < params_.platform_takeoff_warmup_time) {
+                Eigen::Vector3d warmup = odom_pos_;
+                warmup.z() = platform_takeoff_start_z_
+                    + params_.platform_takeoff_warmup_height;
+                pub_setpoint_.publish(
+                    posOnlySetpoint(warmup, platform_takeoff_yaw_));
+                return;
+            }
+            platform_takeoff_warmup_done_ = true;
+        }
+
+        if (overrideCommandFresh(now)) {
+            pub_setpoint_.publish(fullTrackingSetpoint(override_cmd_));
+        } else {
+            pub_setpoint_.publish(posOnlySetpoint(odom_pos_, platform_takeoff_yaw_));
+            ROS_WARN_THROTTLE(
+                1.0,
+                "[ego_bridge] PLATFORM_TAKEOFF override timeout, holding position");
+            return;
+        }
+
+        if (odom_pos_.z() >= platform_takeoff_target_z_
+                - params_.platform_takeoff_reach_threshold) {
+            enterHoverOverride();
+        }
+    }
+
     /// 着陆完成：锁定电机 + 进入 IDLE（不再切 AUTO.LAND，避免落地后控制权切换回弹）
     void completeLanding() {
         if (disarmDrone()) {
             enterIdle();
         } else {
             ROS_WARN_THROTTLE(1.0, "[ego_bridge] Disarm failed during landing, keep LANDING setpoints");
+        }
+    }
+
+    void completePlatformLanding() {
+        if (disarmDrone()) {
+            enterPlatformLanded();
+        } else {
+            ROS_WARN_THROTTLE(
+                1.0,
+                "[ego_bridge] platform DISARM failed, keeping landing setpoints");
         }
     }
 

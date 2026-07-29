@@ -74,6 +74,15 @@ public:
      */
     bool land(double timeout = 30.0);
 
+    /** @brief 非阻塞发送普通起飞请求。 */
+    void requestTakeoff();
+
+    /** @brief 非阻塞请求起飞到指定世界系绝对高度。 */
+    void requestTakeoffTo(double target_z);
+
+    /** @brief 非阻塞发送普通 H 点降落请求。 */
+    void requestLand();
+
     /**
      * @brief 发送目标点（自动使用当前 yaw），阻塞等待到达。
      * @param x, y, z 目标坐标
@@ -112,6 +121,9 @@ public:
      */
     bool disableOverride();
 
+    /** @brief 非阻塞请求切换 EGO/OVERRIDE 控制模式。 */
+    void requestOverrideMode(bool enabled);
+
     /**
      * @brief 发送一帧 override 控制指令。
      * @note 需持续 ≥2Hz 发送，否则 ego_bridge 会自动原地悬停。
@@ -131,6 +143,20 @@ public:
      * @param yaw_rate  偏航角速度 (rad/s)
      */
     void sendVelocityCmd(double vx, double vy, double vz, double yaw_rate = 0.0);
+
+    /** @brief 发送世界系位置+速度前馈命令，调用方需持续发送。 */
+    void sendPositionVelocityCmd(double x, double y, double z,
+                                 double vx, double vy, double vz,
+                                 double yaw);
+
+    /** @brief 请求桥接层进入移动平台触地检测并在确认后锁桨。 */
+    void requestPlatformDisarm();
+
+    /** @brief 取消移动平台接触状态并恢复 OVERRIDE 悬停。 */
+    void requestPlatformLandingCancel();
+
+    /** @brief 请求从移动平台重新进入 OFFBOARD、解锁并爬升。 */
+    void requestPlatformTakeoff(double x, double y, double z, double yaw);
 
     /**
      * @brief 在当前位置发送一帧悬停 override cmd。
@@ -189,12 +215,16 @@ private:
 
     // ── 发布者：向 ego_bridge / ego_planner / override 节点发送指令 ──
     ros::Publisher pub_takeoff_land_;       // 起飞/降落指令
+    ros::Publisher pub_takeoff_target_;     // 带目标高度的起飞请求
     ros::Publisher pub_goal_;               // 发给 EGO-Planner 的目标点
     ros::Publisher pub_target_point_;       // 发给 ego_bridge 的目标点（到达检测用）
     ros::Publisher pub_set_ctrl_mode_;      // 切换 EGO/OVERRIDE 模式
     ros::Publisher pub_override_cmd_;       // OVERRIDE 模式的控制指令
     ros::Publisher pub_emergency_stop_;     // 紧急停止
     ros::Publisher pub_override_trigger_;   // 触发 override 任务
+    ros::Publisher pub_platform_land_;      // 移动平台接触/锁桨请求
+    ros::Publisher pub_platform_takeoff_;   // 移动平台再起飞目标
+    ros::Publisher pub_platform_cancel_;    // 取消移动平台接触状态
 
     // ── 缓存数据：由回调更新，供阻塞函数查询 ──
     std::string     flight_state_   = "UNKNOWN";              // 当前 FSM 状态

@@ -11,6 +11,7 @@ if PACKAGE_SRC not in sys.path:
 from d_task_uav_control.positioning_readiness import (  # noqa: E402
     PositioningReadiness,
     PositioningReadinessConfig,
+    build_roslaunch_command,
 )
 
 
@@ -104,6 +105,26 @@ class PositioningReadinessTests(unittest.TestCase):
         self.assertEqual(status.state, "POSITIONING_FAULT")
         self.assertEqual(status.fault_code, 1302)
         self.assertEqual(status.fault_text, "fastlio_node_conflict")
+
+    def test_roslaunch_uses_the_positioning_workspace_environment(self):
+        command = build_roslaunch_command(
+            "/home/orangepi/ros_ws/devel/env.sh",
+            "lidar_to_mavros",
+            "fastlio_to_px4_mid360_direct.launch",
+            ["rviz:=false", "zero_origin:=true"],
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "/home/orangepi/ros_ws/devel/env.sh",
+                "roslaunch",
+                "lidar_to_mavros",
+                "fastlio_to_px4_mid360_direct.launch",
+                "rviz:=false",
+                "zero_origin:=true",
+            ],
+        )
 
 
 if __name__ == "__main__":

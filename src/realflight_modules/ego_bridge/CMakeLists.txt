@@ -20,6 +20,7 @@ find_package(Eigen3 REQUIRED)
 catkin_package()
 
 include_directories(
+  include
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
 )
@@ -38,3 +39,8 @@ target_link_libraries(rc_commander_node ${catkin_LIBRARIES})
 add_executable(status_monitor_node src/status_monitor_node.cpp)
 add_dependencies(status_monitor_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(status_monitor_node ${catkin_LIBRARIES})
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_platform_landing_detector
+    test/test_platform_landing_detector.cpp)
+endif()

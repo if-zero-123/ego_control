@@ -9,9 +9,15 @@
 
   <buildtool_depend>catkin</buildtool_depend>
   <depend>geometry_msgs</depend>
+  <depend>ego_api</depend>
+  <depend>jsoncpp</depend>
   <depend>mavros_msgs</depend>
+  <build_depend>message_generation</build_depend>
+  <exec_depend>message_runtime</exec_depend>
   <depend>nav_msgs</depend>
+  <depend>roscpp</depend>
   <depend>rospy</depend>
+  <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <exec_depend>roslaunch</exec_depend>
   <exec_depend>rosnode</exec_depend>

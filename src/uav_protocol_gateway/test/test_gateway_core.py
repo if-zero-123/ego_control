@@ -22,6 +22,7 @@ from d_task_protocol import (  # noqa: E402
     build_car_pose,
     build_mission_config,
     build_mission_start,
+    build_uav_state,
 )
 from d_task_protocol.endpoint import ProtocolEndpoint  # noqa: E402
 from d_task_protocol.mqtt_bus import MqttBus, MqttConfig  # noqa: E402
@@ -98,6 +99,28 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertEqual(result.actions[0].message.payload["result"], "accepted")
         self.assertEqual(self.core.configured_mission_id, "mission-0001")
         self.assertFalse(self.core.positioning_ready)
+
+    def test_drop_descend_is_a_valid_uav_state(self):
+        message = build_uav_state(
+            self.uav_factory,
+            "mission-0001",
+            state="DROP_DESCEND",
+            mode="DROP",
+            control_mode="OVERRIDE",
+            px4_mode="OFFBOARD",
+            armed=True,
+            x=0.0,
+            y=0.0,
+            z=1.0,
+            yaw=0.0,
+            vx=0.0,
+            vy=0.0,
+            vz=-0.2,
+            battery_percent=80.0,
+            mission_elapsed_ms=1000,
+        )
+
+        self.assertEqual(message.payload["state"], "DROP_DESCEND")
 
     def test_duplicate_mission_config_only_emits_duplicate_ack(self):
         first = self.mission_config(command_id="config-duplicate")

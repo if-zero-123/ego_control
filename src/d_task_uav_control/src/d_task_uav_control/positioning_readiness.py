@@ -4,7 +4,20 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from typing import Dict, Optional
+from typing import Dict, Iterable, List, Optional
+
+
+def build_roslaunch_command(
+    workspace_env: str,
+    package: str,
+    launch_file: str,
+    launch_args: Iterable[str],
+) -> List[str]:
+    """Build a roslaunch command under the positioning workspace environment."""
+
+    command = ["roslaunch", package, launch_file]
+    command.extend(str(value) for value in launch_args)
+    return [workspace_env, *command] if workspace_env else command
 
 
 @dataclass(frozen=True)

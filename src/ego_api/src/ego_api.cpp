@@ -20,12 +20,16 @@ EgoApi::EgoApi(ros::NodeHandle& nh, const std::string& bridge_ns)
 
     // ── 发布者：向 ego_bridge / ego_planner / override 节点发送指令 ──
     pub_takeoff_land_    = nh_.advertise<quadrotor_msgs::TakeoffLand>(bridge_ns_ + "/takeoff_land", 1);        // 起飞/降落
+    pub_takeoff_target_  = nh_.advertise<geometry_msgs::PoseStamped>(bridge_ns_ + "/takeoff_target", 1);
     pub_goal_            = nh_.advertise<geometry_msgs::PoseStamped>("/move_base_simple/goal", 1);             // EGO 目标点
     pub_target_point_    = nh_.advertise<geometry_msgs::PoseStamped>(bridge_ns_ + "/target_point", 1);         // 到达检测目标
     pub_set_ctrl_mode_   = nh_.advertise<std_msgs::UInt8>(bridge_ns_ + "/set_control_mode", 1);                // 模式切换
     pub_override_cmd_    = nh_.advertise<quadrotor_msgs::PositionCommand>(bridge_ns_ + "/override_cmd", 10);   // OVERRIDE 命令
     pub_emergency_stop_  = nh_.advertise<std_msgs::Empty>(bridge_ns_ + "/emergency_stop", 1);                  // 紧急停止
     pub_override_trigger_= nh_.advertise<std_msgs::Int32>("/ego_api/override_trigger", 1);                     // 任务触发
+    pub_platform_land_    = nh_.advertise<std_msgs::Empty>(bridge_ns_ + "/platform_land", 1);
+    pub_platform_takeoff_ = nh_.advertise<geometry_msgs::PoseStamped>(bridge_ns_ + "/platform_takeoff", 1);
+    pub_platform_cancel_  = nh_.advertise<std_msgs::Empty>(bridge_ns_ + "/platform_cancel", 1);
 
     // 等待连接建立
     ros::Duration(0.5).sleep();
@@ -145,9 +149,7 @@ bool EgoApi::takeoff(double timeout) {
         ROS_INFO("[EgoApi] Sending TAKEOFF command...");
     }
 
-    quadrotor_msgs::TakeoffLand msg;
-    msg.takeoff_land_cmd = quadrotor_msgs::TakeoffLand::TAKEOFF;
-    pub_takeoff_land_.publish(msg);
+    requestTakeoff();
 
     ros::Rate rate(10);
     ros::Time start = ros::Time::now();
@@ -175,9 +177,7 @@ bool EgoApi::land(double timeout) {
         ROS_INFO("[EgoApi] Sending LAND command...");
     }
 
-    quadrotor_msgs::TakeoffLand msg;
-    msg.takeoff_land_cmd = quadrotor_msgs::TakeoffLand::LAND;
-    pub_takeoff_land_.publish(msg);
+    requestLand();
 
     ros::Rate rate(10);
     ros::Time start = ros::Time::now();
@@ -197,6 +197,27 @@ bool EgoApi::land(double timeout) {
         rate.sleep();
     }
     return false;
+}
+
+void EgoApi::requestTakeoff() {
+    quadrotor_msgs::TakeoffLand message;
+    message.takeoff_land_cmd = quadrotor_msgs::TakeoffLand::TAKEOFF;
+    pub_takeoff_land_.publish(message);
+}
+
+void EgoApi::requestTakeoffTo(double target_z) {
+    geometry_msgs::PoseStamped target;
+    target.header.stamp = ros::Time::now();
+    target.header.frame_id = "world";
+    target.pose.position.z = target_z;
+    target.pose.orientation.w = 1.0;
+    pub_takeoff_target_.publish(target);
+}
+
+void EgoApi::requestLand() {
+    quadrotor_msgs::TakeoffLand message;
+    message.takeoff_land_cmd = quadrotor_msgs::TakeoffLand::LAND;
+    pub_takeoff_land_.publish(message);
 }
 
 /// 发送目标点（自动使用当前 yaw）：内部转调 sendGoalWithYaw
@@ -315,6 +336,12 @@ bool EgoApi::disableOverride() {
     return false;
 }
 
+void EgoApi::requestOverrideMode(bool enabled) {
+    std_msgs::UInt8 message;
+    message.data = enabled ? 1 : 0;
+    pub_set_ctrl_mode_.publish(message);
+}
+
 /// 发送一帧 OVERRIDE 控制指令（调用方需自行以 ≥2Hz 持续发送）
 void EgoApi::sendOverrideCmd(const quadrotor_msgs::PositionCommand& cmd) {
     pub_override_cmd_.publish(cmd);
@@ -345,6 +372,34 @@ void EgoApi::sendVelocityCmd(double vx, double vy, double vz, double yaw_rate) {
     cmd.trajectory_id = 0;
     cmd.trajectory_flag = 0;
     pub_override_cmd_.publish(cmd);
+}
+
+void EgoApi::sendPositionVelocityCmd(double x, double y, double z,
+                                     double vx, double vy, double vz,
+                                     double yaw) {
+    pub_override_cmd_.publish(buildPositionCmd(x, y, z, yaw, vx, vy, vz));
+}
+
+void EgoApi::requestPlatformDisarm() {
+    std_msgs::Empty message;
+    pub_platform_land_.publish(message);
+}
+
+void EgoApi::requestPlatformLandingCancel() {
+    std_msgs::Empty message;
+    pub_platform_cancel_.publish(message);
+}
+
+void EgoApi::requestPlatformTakeoff(double x, double y, double z, double yaw) {
+    geometry_msgs::PoseStamped target;
+    target.header.stamp = ros::Time::now();
+    target.header.frame_id = "world";
+    target.pose.position.x = x;
+    target.pose.position.y = y;
+    target.pose.position.z = z;
+    target.pose.orientation.z = std::sin(yaw * 0.5);
+    target.pose.orientation.w = std::cos(yaw * 0.5);
+    pub_platform_takeoff_.publish(target);
 }
 
 /// OVERRIDE 模式下阻塞移动：以 50Hz 持续发 cmd → 检查位置距离 → 到达/超时

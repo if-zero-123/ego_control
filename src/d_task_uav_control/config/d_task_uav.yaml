@@ -3,6 +3,7 @@ system:
   allow_arm: false
 
 positioning:
+  workspace_env: /home/orangepi/ros_ws/devel/env.sh
   launch_package: lidar_to_mavros
   launch_file: fastlio_to_px4_mid360_direct.launch
   launch_args: ["rviz:=false", "zero_origin:=true"]
@@ -16,8 +17,124 @@ positioning:
 
 topics:
   mission_config: /uav_protocol/mission_config
+  mission_start: /uav_protocol/mission_start
+  positioning_status: /d_task/positioning/status
   status: /d_task/positioning/status
   fastlio_odom: /Odometry
   vision_pose: /mavros/vision_pose/pose
   px4_odom: /mavros/local_position/odom
   mavros_state: /mavros/state
+  camera_info: /usb_camera_vision/usb_cam/camera_info
+  platform_detection: /d_task/vision/platform_detection
+  platform_estimate: /d_task/tracking/platform_estimate
+  vision_health: /d_task/vision/health
+  car_pose: /uav_protocol/car/pose
+  car_pose_meta: /uav_protocol/car/pose_meta
+  bridge_state: /ego_bridge/flight_state
+  control_mode: /ego_bridge/control_mode
+  dynamic_descent_allowed: /uav_protocol/dynamic_descent_allowed
+  safety_hold: /uav_protocol/safety_hold
+  local_tracking: /uav_protocol/local_tracking
+  task_state: /uav_protocol/task_state
+  local_event: /uav_protocol/local_event
+  local_fault: /uav_protocol/local_fault
+  local_health: /uav_protocol/local_health
+  mission_reset: /uav_protocol/mission_reset
+
+# 下视相机内参与相机系到机体系外参。use_camera_info=true 时优先使用
+# CameraInfo；收不到 CameraInfo 时使用这里的标定值。
+camera:
+  use_camera_info: true
+  fx: 400.0
+  fy: 400.0
+  cx: 320.0
+  cy: 240.0
+  body_r_camera: [0.0, -1.0, 0.0,
+                  -1.0, 0.0, 0.0,
+                  0.0, 0.0, -1.0]
+  body_t_camera_m: [0.0, 0.0, 0.0]
+
+tracking:
+  world_frame: map
+  platform_height_m: 0.30
+  publish_rate_hz: 20.0
+  uav_odom_timeout_s: 0.30
+
+  # 小车 ROS2 地图系到无人机本地系的固定平移偏移。
+  car_frame_offset_x_m: 0.0
+  car_frame_offset_y_m: 0.0
+  # 小车 base_link 到平台中心的机体系偏移；标靶在中心时通常为 0。
+  platform_offset_body_x_m: 0.0
+  platform_offset_body_y_m: 0.0
+
+  process_noise: 0.20
+  car_position_noise_m: 0.20
+  car_velocity_noise_mps: 0.15
+  vision_position_noise_m: 0.05
+  max_visual_residual_m: 0.80
+  source_timeout_s: 0.30
+  prediction_timeout_s: 1.00
+
+  release_max_xy_error_m: 0.15
+  release_max_relative_speed_mps: 0.20
+  release_target_height_m: 0.80
+  release_height_tolerance_m: 0.15
+  landing_max_xy_error_m: 0.10
+  landing_max_relative_speed_mps: 0.15
+
+mission:
+  bridge_namespace: /ego_bridge
+  control_rate_hz: 30.0
+  odom_timeout_s: 0.30
+  platform_estimate_timeout_s: 0.35
+
+  cruise_height_m: 1.50
+  hover_time_s: 3.0
+  vision_lock_time_s: 0.50
+  follow_stable_time_s: 1.0
+  phase_stable_time_s: 0.50
+  release_settle_time_s: 0.50
+  platform_hold_time_s: 5.20
+
+  drop_height_m: 0.80
+  high_descent_height_m: 0.80
+  low_descent_height_m: 0.30
+  platform_press_depth_m: 0.10
+  follow_lead_time_s: 0.15
+
+  xy_tolerance_m: 0.12
+  relative_speed_tolerance_mps: 0.20
+  height_tolerance_m: 0.08
+  home_xy_tolerance_m: 0.20
+  home_height_tolerance_m: 0.12
+
+  high_descent_speed_mps: 0.25
+  low_descent_speed_mps: 0.12
+  contact_descent_speed_mps: 0.08
+  climb_speed_mps: 0.35
+
+  takeoff_timeout_s: 25.0
+  search_timeout_s: 20.0
+  tracking_loss_timeout_s: 1.0
+  descent_timeout_s: 20.0
+  platform_contact_timeout_s: 8.0
+  platform_takeoff_timeout_s: 20.0
+  return_timeout_s: 35.0
+  home_land_timeout_s: 30.0
+  total_timeout_s: 180.0
+  request_retry_s: 0.50
+
+  # 默认稳定后立即开始投放下降；距 D 点 2m 时强制结束伴飞进入下降。
+  drop_force_descent_distance_to_d_m: 2.0
+  drop_abort_distance_to_d_m: 0.10
+  max_dynamic_landing_retries: 1
+
+# 投放硬件尚未确定，默认只走状态机并发布 DRY_RUN 事件。
+payload:
+  enabled: false
+  topic: /mavros/actuator_control
+  group_mix: 2
+  channel: 0
+  release_value: 1.0
+  neutral_value: 0.0
+  pulse_duration_s: 0.50

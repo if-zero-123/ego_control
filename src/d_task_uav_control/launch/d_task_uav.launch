@@ -1,0 +1,67 @@
+<launch>
+  <arg name="config_file"
+       default="$(find d_task_uav_control)/config/d_task_uav.yaml"/>
+  <arg name="mqtt_config_file"
+       default="$(find uav_protocol_gateway)/config/uav_protocol_gateway.yaml"/>
+  <arg name="mqtt_host" default="192.168.50.10"/>
+  <arg name="mqtt_port" default="1883"/>
+  <arg name="mqtt_client_id" default="d-task-uav"/>
+  <arg name="start_ego_bridge" default="true"/>
+  <arg name="start_gateway" default="true"/>
+  <arg name="start_vision" default="true"/>
+  <arg name="video_device"
+       default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"/>
+  <arg name="model_path"
+       default="$(find metal_ball_rknn)/models/metal_ball_yolov8n_rk3588_i8.rknn"/>
+  <arg name="target_class_id" default="0"/>
+  <arg name="target_label" default="platform_target"/>
+
+  <group if="$(arg start_ego_bridge)">
+    <rosparam command="load"
+              file="$(find ego_bridge)/config/ego_bridge_param.yaml"
+              ns="ego_bridge"/>
+    <node pkg="ego_bridge" type="ego_bridge_node"
+          name="ego_bridge" output="screen">
+      <remap from="~odom" to="/mavros/local_position/odom"/>
+      <remap from="~cmd" to="/position_cmd"/>
+    </node>
+  </group>
+
+  <group if="$(arg start_gateway)">
+    <node pkg="uav_protocol_gateway"
+          type="uav_protocol_gateway_node.py"
+          name="uav_protocol_gateway" output="screen">
+      <rosparam command="load" file="$(arg mqtt_config_file)"/>
+      <param name="mqtt_host" value="$(arg mqtt_host)"/>
+      <param name="mqtt_port" value="$(arg mqtt_port)"/>
+      <param name="mqtt_client_id" value="$(arg mqtt_client_id)"/>
+      <param name="vision_health_topic" value="/d_task/vision/health"/>
+    </node>
+  </group>
+
+  <!-- 本节点只在收到地面站 mission/config 后重启 direct Fast-LIO launch。 -->
+  <node pkg="d_task_uav_control" type="fastlio_supervisor_node.py"
+        name="fastlio_supervisor" output="screen">
+    <rosparam command="load" file="$(arg config_file)"/>
+  </node>
+
+  <group if="$(arg start_vision)">
+    <include file="$(find metal_ball_rknn)/launch/usb_camera_detector.launch">
+      <arg name="video_device" value="$(arg video_device)"/>
+      <arg name="model_path" value="$(arg model_path)"/>
+      <arg name="target_class_id" value="$(arg target_class_id)"/>
+      <arg name="target_label" value="$(arg target_label)"/>
+      <arg name="detection_topic" value="/d_task/vision/platform_detection"/>
+    </include>
+  </group>
+
+  <node pkg="d_task_uav_control" type="platform_tracking_fusion_node"
+        name="platform_tracking_fusion" output="screen">
+    <rosparam command="load" file="$(arg config_file)"/>
+  </node>
+
+  <node pkg="d_task_uav_control" type="d_task_mission_node"
+        name="d_task_mission" output="screen">
+    <rosparam command="load" file="$(arg config_file)"/>
+  </node>
+</launch>

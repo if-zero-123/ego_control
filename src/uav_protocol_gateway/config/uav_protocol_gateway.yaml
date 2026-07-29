@@ -21,7 +21,7 @@ flight_state_topic: /ego_bridge/flight_state
 control_mode_topic: /ego_bridge/control_mode
 camera_image_topic: /usb_camera_vision/usb_cam/image_raw
 camera_health_topic: ""
-vision_health_topic: ""
+vision_health_topic: /d_task/vision/health
 
 # Local task-manager inputs.
 positioning_status_topic: /d_task/positioning/status

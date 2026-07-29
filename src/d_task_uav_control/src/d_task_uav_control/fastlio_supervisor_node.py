@@ -19,7 +19,11 @@ from std_msgs.msg import String
 
 from d_task_protocol import ProtocolCodec, ProtocolError
 
-from .positioning_readiness import PositioningReadiness, PositioningReadinessConfig
+from .positioning_readiness import (
+    PositioningReadiness,
+    PositioningReadinessConfig,
+    build_roslaunch_command,
+)
 
 
 class FastlioSupervisor:
@@ -38,6 +42,9 @@ class FastlioSupervisor:
             rospy.get_param(
                 "~positioning/launch_args", ["rviz:=false", "zero_origin:=true"]
             )
+        )
+        self._workspace_env = rospy.get_param(
+            "~positioning/workspace_env", "/home/orangepi/ros_ws/devel/env.sh"
         )
         self._stop_timeout_s = float(
             rospy.get_param("~positioning/stop_timeout_s", 5.0)
@@ -137,8 +144,17 @@ class FastlioSupervisor:
                 self._publish_status(force=True)
 
     def _start_launch(self) -> None:
-        command = ["roslaunch", self._launch_package, self._launch_file]
-        command.extend(str(value) for value in self._launch_args)
+        if self._workspace_env and not os.access(self._workspace_env, os.X_OK):
+            raise OSError(
+                "positioning workspace env is not executable: "
+                + self._workspace_env
+            )
+        command = build_roslaunch_command(
+            self._workspace_env,
+            self._launch_package,
+            self._launch_file,
+            self._launch_args,
+        )
         rospy.loginfo("[fastlio_supervisor] starting: %s", " ".join(command))
         self._process = subprocess.Popen(command, start_new_session=True)
 
