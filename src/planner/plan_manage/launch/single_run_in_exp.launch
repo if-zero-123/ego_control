@@ -93,7 +93,7 @@
             max_vel 直接影响 EGO 段飞行速度；max_acc 影响轨迹加减速能力。
             当前比赛流程中，override 段的速度不由这里控制，只影响 EGO 穿门框和回打击区等 EGO 段。
         -->
-        <arg name="max_vel" value="0.5" />
+        <arg name="max_vel" value="0.73" />
         <arg name="max_acc" value="6.0" />
 
         <!--
