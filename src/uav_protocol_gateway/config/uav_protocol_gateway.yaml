@@ -24,6 +24,7 @@ camera_health_topic: ""
 vision_health_topic: ""
 
 # Local task-manager inputs.
+positioning_status_topic: /d_task/positioning/status
 task_state_topic: /uav_protocol/task_state
 tracking_topic: /uav_protocol/local_tracking
 event_topic: /uav_protocol/local_event
@@ -33,6 +34,7 @@ mission_reset_topic: /uav_protocol/mission_reset
 
 # Local gateway outputs.  JSON String messages contain the full protocol
 # envelope so a ROS1 task manager can keep mission_id/seq/reply metadata.
+mission_config_ros_topic: /uav_protocol/mission_config
 mission_start_ros_topic: /uav_protocol/mission_start
 car_pose_ros_topic: /uav_protocol/car/pose
 car_pose_meta_ros_topic: /uav_protocol/car/pose_meta

@@ -20,6 +20,7 @@ from d_task_protocol import (  # noqa: E402
     ProtocolCodec,
     Sender,
     build_car_pose,
+    build_mission_config,
     build_mission_start,
 )
 from d_task_protocol.endpoint import ProtocolEndpoint  # noqa: E402
@@ -38,6 +39,9 @@ class GatewayCoreTests(unittest.TestCase):
         self.clock_ms = clock_ms
         self.car_factory = EnvelopeFactory(
             Sender.CAR.value, boot_id="car-boot", clock_ms=clock_ms
+        )
+        self.ground_factory = EnvelopeFactory(
+            Sender.GROUND.value, boot_id="ground-boot", clock_ms=clock_ms
         )
         self.uav_factory = EnvelopeFactory(
             Sender.UAV.value, boot_id="uav-boot", clock_ms=clock_ms
@@ -58,7 +62,103 @@ class GatewayCoreTests(unittest.TestCase):
             command_id=command_id,
         )
 
+    def mission_config(
+        self,
+        mission_id="mission-0001",
+        mode=Mode.DROP,
+        command_id="config-1",
+    ):
+        return build_mission_config(
+            self.ground_factory,
+            mission_id,
+            mode,
+            command_id=command_id,
+        )
+
+    def prepare(self, mission_id="mission-0001", mode=Mode.DROP):
+        config = self.mission_config(mission_id=mission_id, mode=mode)
+        self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(config),
+            now_ms=self.clock[0],
+        )
+        self.assertTrue(self.core.set_positioning_ready(mission_id, True))
+
+    def test_accepts_mission_config_and_requests_one_positioning_reset(self):
+        message = self.mission_config()
+
+        result = self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(message),
+            now_ms=self.clock[0],
+        )
+
+        self.assertEqual([action.kind for action in result.actions], ["ack", "mission_config"])
+        self.assertEqual(result.actions[0].message.payload["command"], "mission_config")
+        self.assertEqual(result.actions[0].message.payload["result"], "accepted")
+        self.assertEqual(self.core.configured_mission_id, "mission-0001")
+        self.assertFalse(self.core.positioning_ready)
+
+    def test_duplicate_mission_config_only_emits_duplicate_ack(self):
+        first = self.mission_config(command_id="config-duplicate")
+        second = self.mission_config(command_id="config-duplicate")
+        self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(first),
+            now_ms=self.clock[0],
+        )
+
+        result = self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(second),
+            now_ms=self.clock[0],
+        )
+
+        self.assertEqual([action.kind for action in result.actions], ["ack"])
+        self.assertEqual(result.actions[0].message.payload["result"], "duplicate")
+
+    def test_start_before_positioning_ready_returns_busy(self):
+        config = self.mission_config()
+        self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(config),
+            now_ms=self.clock[0],
+        )
+
+        result = self.core.receive(
+            Topics.MISSION_START,
+            ProtocolCodec.encode(self.mission_start()),
+            now_ms=self.clock[0],
+        )
+
+        self.assertEqual([action.kind for action in result.actions], ["ack"])
+        self.assertEqual(result.actions[0].message.payload["result"], "busy")
+        self.assertEqual(result.actions[0].message.payload["reason_code"], "uav_not_ready")
+        self.assertEqual(self.core.mission_id, "")
+
+    def test_start_mode_must_match_prepared_mode(self):
+        self.prepare(mode=Mode.DROP)
+        message = build_mission_start(
+            self.car_factory,
+            "mission-0001",
+            Mode.DYNAMIC_LANDING,
+            {"frame_id": "competition_world", "x": 0.0, "y": 0.0, "yaw": 0.0},
+            start_reason="car_button",
+            command_id="cmd-mode-mismatch",
+        )
+
+        result = self.core.receive(
+            Topics.MISSION_START,
+            ProtocolCodec.encode(message),
+            now_ms=self.clock[0],
+        )
+
+        self.assertEqual(result.actions[0].message.payload["result"], "rejected")
+        self.assertEqual(result.actions[0].message.payload["reason_code"], "configured_mode_mismatch")
+        self.assertEqual(self.core.mission_id, "")
+
     def test_accepts_car_button_start_and_emits_one_mission_event(self):
+        self.prepare()
         result = self.core.receive(
             Topics.MISSION_START,
             ProtocolCodec.encode(self.mission_start()),
@@ -72,6 +172,7 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertEqual(self.core.mission_id, "mission-0001")
 
     def test_duplicate_command_only_emits_duplicate_ack(self):
+        self.prepare()
         first = self.mission_start("cmd-duplicate")
         second = self.mission_start("cmd-duplicate")
 
@@ -91,6 +192,7 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertEqual(result.actions[0].message.payload["result"], "duplicate")
 
     def test_rejects_non_physical_start_reason_without_starting(self):
+        self.prepare(mission_id="mission-0002", mode=Mode.DYNAMIC_LANDING)
         message = build_mission_start(
             self.car_factory,
             "mission-0002",
@@ -111,6 +213,7 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertEqual(self.core.mission_id, "")
 
     def test_car_pose_older_than_300ms_disables_dynamic_descent(self):
+        self.prepare()
         self.core.receive(
             Topics.MISSION_START,
             ProtocolCodec.encode(self.mission_start()),
@@ -158,6 +261,7 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertEqual(result.actions, [])
 
     def test_other_mission_pose_does_not_open_current_descent_gate(self):
+        self.prepare()
         self.core.receive(
             Topics.MISSION_START,
             ProtocolCodec.encode(self.mission_start()),
@@ -189,12 +293,24 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertFalse(self.core.dynamic_descent_allowed(self.clock[0]))
 
     def test_finish_mission_allows_a_new_mission(self):
+        self.prepare()
         self.core.receive(
             Topics.MISSION_START,
             ProtocolCodec.encode(self.mission_start()),
             now_ms=self.clock[0],
         )
         self.assertTrue(self.core.finish_mission("mission-0001"))
+        second_config = self.mission_config(
+            mission_id="mission-0002",
+            mode=Mode.DYNAMIC_LANDING,
+            command_id="config-2",
+        )
+        self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(second_config),
+            now_ms=self.clock[0],
+        )
+        self.assertTrue(self.core.set_positioning_ready("mission-0002", True))
         second = build_mission_start(
             self.car_factory,
             "mission-0002",

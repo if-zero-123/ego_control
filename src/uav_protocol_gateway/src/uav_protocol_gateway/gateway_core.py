@@ -19,6 +19,7 @@ from d_task_protocol import (
     MessageGuard,
     ProtocolCodec,
     ProtocolError,
+    build_config_ack,
     build_fault,
     build_start_ack,
 )
@@ -52,6 +53,7 @@ class UavGatewayCore:
     """Pure protocol state used by the ROS1 gateway node."""
 
     _EXPECTED = {
+        Topics.MISSION_CONFIG: ("mission_config", "ground"),
         Topics.MISSION_START: ("mission_start", "car"),
         Topics.CAR_POSE: ("car_pose", "car"),
         Topics.CAR_EVENT: ("event", "car"),
@@ -72,6 +74,9 @@ class UavGatewayCore:
         self.guard = guard or MessageGuard()
         self.clock_ms = clock_ms
         self.car_pose_timeout_ms = car_pose_timeout_ms
+        self.configured_mission_id = ""
+        self.configured_mode = ""
+        self.positioning_ready = False
         self.mission_id = ""
         self.mode = ""
         self.mission_started_ms: Optional[int] = None
@@ -141,12 +146,12 @@ class UavGatewayCore:
             return result
 
         if guard_status is DeliveryStatus.DUPLICATE:
-            if topic == Topics.MISSION_START and message.command_id:
+            if topic in (Topics.MISSION_CONFIG, Topics.MISSION_START) and message.command_id:
                 result.actions.append(self._ack(message, AckResult.DUPLICATE, "duplicate_command"))
             return result
 
         if guard_status is not DeliveryStatus.ACCEPTED:
-            if topic == Topics.MISSION_START and message.command_id:
+            if topic in (Topics.MISSION_CONFIG, Topics.MISSION_START) and message.command_id:
                 ack_result = (
                     AckResult.EXPIRED
                     if guard_status is DeliveryStatus.EXPIRED
@@ -155,7 +160,9 @@ class UavGatewayCore:
                 result.actions.append(self._ack(message, ack_result, guard_status.value))
             return result
 
-        if topic == Topics.MISSION_START:
+        if topic == Topics.MISSION_CONFIG:
+            self._handle_config(result)
+        elif topic == Topics.MISSION_START:
             self._handle_start(result, current)
         elif topic == Topics.CAR_POSE:
             if self.mission_id and message.mission_id != self.mission_id:
@@ -200,11 +207,50 @@ class UavGatewayCore:
             return False
         self.mission_id = ""
         self.mode = ""
+        self.configured_mission_id = ""
+        self.configured_mode = ""
+        self.positioning_ready = False
         self.mission_started_ms = None
         self.last_car_pose_rx_ms = None
         self.last_car_pose_sent_ms = None
         self.last_car_pose = None
         return True
+
+    def set_positioning_ready(self, mission_id: str, ready: bool) -> bool:
+        if not mission_id or mission_id != self.configured_mission_id:
+            return False
+        self.positioning_ready = bool(ready)
+        return True
+
+    def _handle_config(self, result: ReceiveResult) -> None:
+        message = result.message
+        assert message is not None
+        if not message.command_id:
+            result.rejected = True
+            result.reason = "missing_command_id"
+            result.actions.append(self._ack(message, AckResult.REJECTED, result.reason))
+            return
+        if self.mission_id:
+            result.rejected = True
+            result.reason = "mission_busy"
+            result.actions.append(self._ack(message, AckResult.BUSY, result.reason))
+            return
+        if self.configured_mission_id == message.mission_id:
+            if self.configured_mode != message.payload["mode"]:
+                result.rejected = True
+                result.reason = "mission_id_mode_conflict"
+                result.actions.append(self._ack(message, AckResult.REJECTED, result.reason))
+            else:
+                result.actions.append(
+                    self._ack(message, AckResult.DUPLICATE, "mission_already_configured")
+                )
+            return
+
+        self.configured_mission_id = message.mission_id
+        self.configured_mode = message.payload["mode"]
+        self.positioning_ready = False
+        result.actions.append(self._ack(message, AckResult.ACCEPTED, ""))
+        result.actions.append(CoreAction(kind="mission_config", topic="", message=message))
 
     def _handle_start(self, result: ReceiveResult, current_ms: int) -> None:
         message = result.message
@@ -219,6 +265,21 @@ class UavGatewayCore:
             result.rejected = True
             result.reason = "start_reason_must_be_car_button"
             result.actions.append(self._ack(message, AckResult.REJECTED, result.reason))
+            return
+        if message.mission_id != self.configured_mission_id:
+            result.rejected = True
+            result.reason = "mission_not_configured"
+            result.actions.append(self._ack(message, AckResult.REJECTED, result.reason))
+            return
+        if payload["mode"] != self.configured_mode:
+            result.rejected = True
+            result.reason = "configured_mode_mismatch"
+            result.actions.append(self._ack(message, AckResult.REJECTED, result.reason))
+            return
+        if not self.positioning_ready:
+            result.rejected = True
+            result.reason = "uav_not_ready"
+            result.actions.append(self._ack(message, AckResult.BUSY, result.reason))
             return
         if self.mission_id and self.mission_id != message.mission_id:
             result.rejected = True
@@ -245,12 +306,10 @@ class UavGatewayCore:
         )
 
     def _ack(self, message: Envelope, result: AckResult, reason: str) -> CoreAction:
-        ack = build_start_ack(
-            self.factory,
-            message.mission_id,
-            result,
-            reason_code=reason,
-            reply_to=message.command_id,
+        builder = build_config_ack if message.type == "mission_config" else build_start_ack
+        ack = builder(
+            self.factory, message.mission_id, result,
+            reason_code=reason, reply_to=message.command_id,
         )
         return CoreAction(kind="ack", topic=Topics.UAV_ACK, message=ack, qos=1)
 

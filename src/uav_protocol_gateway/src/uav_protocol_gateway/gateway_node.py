@@ -35,6 +35,10 @@ from .gateway_core import CoreAction, UavGatewayCore
 
 
 _UAV_STATES = {
+    "NOT_READY",
+    "POSITIONING_INIT",
+    "POSITIONING_FAULT",
+    "WAIT_START",
     "READY",
     "TAKEOFF",
     "HOVER_3S",
@@ -111,7 +115,7 @@ class UavProtocolGateway:
             password=rospy.get_param("~mqtt_password", "") or None,
         )
 
-        self.state = "READY"
+        self.state = "NOT_READY"
         self.mode = Mode.DROP.value
         self.control_mode = "EGO"
         self.px4_state = "UNKNOWN"
@@ -131,6 +135,7 @@ class UavProtocolGateway:
         self.fault_code = 0
         self.fault_text = ""
         self._stale_pose_fault_sent = False
+        self._last_positioning_state = ""
 
         self._advertise_ros()
         self._subscribe_ros()
@@ -147,6 +152,12 @@ class UavProtocolGateway:
         rospy.on_shutdown(self.shutdown)
 
     def _advertise_ros(self) -> None:
+        self.pub_mission_config = rospy.Publisher(
+            rospy.get_param("~mission_config_ros_topic", "/uav_protocol/mission_config"),
+            String,
+            queue_size=5,
+            latch=True,
+        )
         self.pub_mission_start = rospy.Publisher(
             rospy.get_param("~mission_start_ros_topic", "/uav_protocol/mission_start"),
             String,
@@ -226,6 +237,14 @@ class UavProtocolGateway:
             queue_size=5,
         )
         rospy.Subscriber(
+            rospy.get_param(
+                "~positioning_status_topic", "/d_task/positioning/status"
+            ),
+            String,
+            self._positioning_status_cb,
+            queue_size=5,
+        )
+        rospy.Subscriber(
             rospy.get_param("~task_state_topic", "/uav_protocol/task_state"),
             String,
             self._task_state_cb,
@@ -279,6 +298,13 @@ class UavProtocolGateway:
         self.bus = MqttBus(self.mqtt_config)
         self.endpoint = ProtocolEndpoint(self.bus, guard=self.guard)
         self.endpoint.subscribe(
+            Topics.MISSION_CONFIG,
+            self._mqtt_message_cb,
+            qos=1,
+            include_duplicates=True,
+            include_rejected=True,
+        )
+        self.endpoint.subscribe(
             Topics.MISSION_START,
             self._mqtt_message_cb,
             qos=1,
@@ -313,7 +339,14 @@ class UavProtocolGateway:
                 decision.reason,
             )
             for action in result.actions:
-                if action.kind == "mission_start":
+                if action.kind == "mission_config":
+                    self.pub_mission_config.publish(String(data=message.to_json()))
+                    self.mode = message.payload["mode"]
+                    self.state = "POSITIONING_INIT"
+                    self.fault_code = 0
+                    self.fault_text = ""
+                    self._publish_event("MISSION_CONFIG_ACCEPTED", mode=self.mode)
+                elif action.kind == "mission_start":
                     self.pub_mission_start.publish(String(data=message.to_json()))
                     self.mode = message.payload["mode"]
                     self._publish_event("MISSION_START_ACCEPTED", mode=self.mode)
@@ -382,12 +415,44 @@ class UavProtocolGateway:
 
     def _flight_state_cb(self, message: String) -> None:
         with self.lock:
-            if message.data:
+            if message.data and self.core.mission_id:
                 self.state = self._normalise_state(message.data)
 
     def _control_mode_cb(self, message: UInt8) -> None:
         with self.lock:
             self.control_mode = "OVERRIDE" if message.data else "EGO"
+
+    def _positioning_status_cb(self, message: String) -> None:
+        try:
+            data = _json_object(message.data)
+            mission_id = str(data["mission_id"])
+            state = str(data.get("state", "POSITIONING_INIT"))
+            ready = bool(data.get("ready", False))
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            rospy.logwarn_throttle(
+                2.0, "[uav_protocol_gateway] invalid positioning status: %s", exc
+            )
+            return
+
+        with self.lock:
+            if not self.core.set_positioning_ready(mission_id, ready):
+                rospy.logwarn_throttle(
+                    2.0,
+                    "[uav_protocol_gateway] ignored positioning status for %s",
+                    mission_id,
+                )
+                return
+            normalised = self._normalise_state(state)
+            self.state = "WAIT_START" if ready else normalised
+            if state == "POSITIONING_FAULT":
+                self.fault_code = int(data.get("fault_code", 1301))
+                self.fault_text = str(data.get("fault_text", "positioning_failed"))
+            if self.state != self._last_positioning_state:
+                self._publish_event(
+                    "POSITIONING_READY" if ready else state,
+                    positioning_state=state,
+                )
+                self._last_positioning_state = self.state
 
     def _task_state_cb(self, message: String) -> None:
         try:
@@ -462,8 +527,9 @@ class UavProtocolGateway:
                 return
             self._publish_event("MISSION_FINISHED", final_state=final_state)
             self.core.finish_mission(mission_id)
+            self.pub_mission_config.publish(String(data=""))
             self.pub_mission_start.publish(String(data=""))
-            self.state = "READY"
+            self.state = "NOT_READY"
             self.mode = Mode.DROP.value
             self._stale_pose_fault_sent = False
 
@@ -481,14 +547,14 @@ class UavProtocolGateway:
 
     def _state_timer_cb(self, _event) -> None:
         with self.lock:
-            mission_id = self.core.mission_id or "idle"
+            mission_id = self._context_mission_id()
             payload = self._uav_state_payload()
             message = build_uav_state(self.factory, mission_id, **payload)
             self._safe_publish(Topics.UAV_STATE, message, qos=0)
 
     def _tracking_timer_cb(self, _event) -> None:
         with self.lock:
-            mission_id = self.core.mission_id or "idle"
+            mission_id = self._context_mission_id()
             payload = dict(self.tracking)
             age = self._age_ms(self.last_tracking_ms)
             payload["vision_age_ms"] = age if age is not None else 2**31 - 1
@@ -502,7 +568,7 @@ class UavProtocolGateway:
 
     def _health_timer_cb(self, _event) -> None:
         with self.lock:
-            mission_id = self.core.mission_id or "idle"
+            mission_id = self._context_mission_id()
             odom_ok = self._fresh(self.last_odom_ms, 500)
             px4_ok = self._fresh(self.last_px4_state_ms, 1000)
             camera_ok = self.last_camera_health if self.last_camera_health is not None else self._fresh(self.last_camera_ms, 1000)
@@ -530,7 +596,7 @@ class UavProtocolGateway:
 
     def _heartbeat_timer_cb(self, _event) -> None:
         with self.lock:
-            mission_id = self.core.mission_id or "idle"
+            mission_id = self._context_mission_id()
             message = build_heartbeat(
                 self.factory,
                 mission_id,
@@ -633,7 +699,7 @@ class UavProtocolGateway:
 
     def _publish_event(self, event: str, **details: Any) -> None:
         with self.lock:
-            message = build_event(self.factory, self.core.mission_id or "idle", event, **details)
+            message = build_event(self.factory, self._context_mission_id(), event, **details)
             self._safe_publish(Topics.UAV_EVENT, message, qos=0)
 
     def _publish_fault(self, code: int, severity: str, text: str, **details: Any) -> None:
@@ -641,7 +707,7 @@ class UavProtocolGateway:
         self.fault_text = text
         message = build_fault(
             self.factory,
-            self.core.mission_id or "idle",
+            self._context_mission_id(),
             fault_code=code,
             severity=severity,
             fault_text=text,
@@ -665,6 +731,9 @@ class UavProtocolGateway:
     def _fresh(self, stamp: Optional[int], timeout_ms: int) -> bool:
         age = self._age_ms(stamp)
         return age is not None and age <= timeout_ms
+
+    def _context_mission_id(self) -> str:
+        return self.core.mission_id or self.core.configured_mission_id or "idle"
 
     def shutdown(self) -> None:
         if getattr(self, "bus", None) is not None:

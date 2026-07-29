@@ -3,6 +3,7 @@
 
 class Topics:
     GROUND_START = "d_task/v1/ground/command/start"
+    MISSION_CONFIG = "d_task/v1/mission/config"
     MISSION_START = "d_task/v1/mission/start"
     UAV_ACK = "d_task/v1/uav/ack"
     CAR_POSE = "d_task/v1/car/pose"
@@ -21,8 +22,9 @@ class Topics:
 # A topic may accept more than one sender, but the message type remains fixed.
 TOPIC_MESSAGE_TYPES = {
     Topics.GROUND_START: {"ground_start_request"},
+    Topics.MISSION_CONFIG: {"mission_config"},
     Topics.MISSION_START: {"mission_start"},
-    Topics.UAV_ACK: {"start_ack"},
+    Topics.UAV_ACK: {"config_ack", "start_ack"},
     Topics.CAR_POSE: {"car_pose"},
     Topics.UAV_STATE: {"uav_state"},
     Topics.UAV_TRACKING: {"uav_tracking"},

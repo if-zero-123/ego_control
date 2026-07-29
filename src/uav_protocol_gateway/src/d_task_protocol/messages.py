@@ -46,6 +46,10 @@ class CarState(str, Enum):
 
 
 class UavState(str, Enum):
+    NOT_READY = "NOT_READY"
+    POSITIONING_INIT = "POSITIONING_INIT"
+    POSITIONING_FAULT = "POSITIONING_FAULT"
+    WAIT_START = "WAIT_START"
     READY = "READY"
     TAKEOFF = "TAKEOFF"
     HOVER_3S = "HOVER_3S"
@@ -98,7 +102,7 @@ def _pose(payload: Mapping[str, Any], prefix: str = "") -> None:
 def validate_payload(message_type: str, payload: Mapping[str, Any]) -> None:
     if not isinstance(payload, Mapping):
         raise ProtocolError("payload must be an object")
-    if message_type == "ground_start_request":
+    if message_type in {"ground_start_request", "mission_config"}:
         _require(payload, "mode", "requested_at_ms")
         if payload["mode"] not in {item.value for item in Mode}:
             raise ProtocolError("invalid mission mode")
@@ -117,6 +121,12 @@ def validate_payload(message_type: str, payload: Mapping[str, Any]) -> None:
     elif message_type == "start_ack":
         _require(payload, "command", "result", "reason_code")
         if payload["command"] != "mission_start":
+            raise ProtocolError("unsupported ACK command")
+        if payload["result"] not in {item.value for item in AckResult}:
+            raise ProtocolError("invalid ACK result")
+    elif message_type == "config_ack":
+        _require(payload, "command", "result", "reason_code")
+        if payload["command"] != "mission_config":
             raise ProtocolError("unsupported ACK command")
         if payload["result"] not in {item.value for item in AckResult}:
             raise ProtocolError("invalid ACK result")
@@ -275,6 +285,26 @@ def build_ground_start_request(
     )
 
 
+def build_mission_config(
+    factory: EnvelopeFactory,
+    mission_id: str,
+    mode: Union[Mode, str],
+    command_id: str,
+    requested_at_ms: Optional[int] = None,
+) -> Envelope:
+    return _make(
+        factory,
+        "mission_config",
+        mission_id,
+        {
+            "mode": mode.value if isinstance(mode, Mode) else mode,
+            "requested_at_ms": now_ms() if requested_at_ms is None else requested_at_ms,
+        },
+        ttl_ms=3000,
+        command_id=command_id,
+    )
+
+
 def build_mission_start(
     factory: EnvelopeFactory,
     mission_id: str,
@@ -310,6 +340,27 @@ def build_start_ack(
         mission_id,
         {
             "command": "mission_start",
+            "result": result.value if isinstance(result, AckResult) else result,
+            "reason_code": reason_code,
+        },
+        ttl_ms=3000,
+        reply_to=reply_to,
+    )
+
+
+def build_config_ack(
+    factory: EnvelopeFactory,
+    mission_id: str,
+    result: Union[AckResult, str],
+    reason_code: str = "",
+    reply_to: Optional[str] = None,
+) -> Envelope:
+    return _make(
+        factory,
+        "config_ack",
+        mission_id,
+        {
+            "command": "mission_config",
             "result": result.value if isinstance(result, AckResult) else result,
             "reason_code": reason_code,
         },
