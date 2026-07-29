@@ -12,7 +12,7 @@
   <arg name="video_device"
        default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"/>
   <arg name="model_path"
-       default="$(find metal_ball_rknn)/models/metal_ball_yolov8n_rk3588_i8.rknn"/>
+       default="$(find metal_ball_rknn)/models/yolo_target_yolov8n_640_rk3588_i8.rknn"/>
   <arg name="target_class_id" default="0"/>
   <arg name="target_label" default="platform_target"/>
 

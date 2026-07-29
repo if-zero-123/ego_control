@@ -85,10 +85,18 @@ roslaunch lidar_to_mavros fastlio_to_px4_mid360_direct.launch \
 参数在启动时加载，飞行中不热更新。调整坐标偏移、相机外参和平台高度后，
 必须先做低高度、禁用自动解锁的实机验证。
 
-YOLO 只需训练单类别 `platform_target`，标靶固定在降落平台中心。
-当前仓库外的 `metal_ball_rknn` 包仍使用已有占位 RKNN 模型；训练和转换完成后
-通过 `model_path` 替换。检测节点每帧发布结构化检测，即使未发现目标也发布
+YOLO 使用单类别平台标靶模型 `yolo_target_yolov8n_640_rk3588_i8.rknn`，标靶固定在
+降落平台中心。检测节点每帧发布结构化检测，即使未发现目标也发布
 `found=false`，融合节点使用四状态卡尔曼滤波输出平台位置和速度。
+
+仅验证相机和模型时运行：
+
+```bash
+roslaunch metal_ball_rknn platform_target_test.launch
+```
+
+在地面站运行 `rqt_image_view` 并订阅 `/metal_ball_rknn/debug_image` 查看带框画面；
+`/d_task/vision/platform_detection` 输出结构化检测结果。
 
 投放硬件尚未定型，因此 `payload.enabled` 默认为 `false`。此时完整任务流程会
 发布 `PAYLOAD_RELEASE_DRY_RUN` 事件，但不会向 PX4 输出通道发命令。确定接线、
