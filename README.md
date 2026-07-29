@@ -66,9 +66,9 @@ roslaunch lidar_to_mavros fastlio_to_px4_mid360_direct.launch \
 持续成立后锁桨，随车停留 5.20 秒，再预发 setpoint、切 OFFBOARD、解锁，
 恢复 1.50m 高度并返航。接触超时最多自动取消并重试一次。
 
-小车位姿超过 300ms 未更新时，网关关闭动态下降门。状态机立即保持当前
-高度，只继续水平伴飞；不会用过期位姿继续向下。近距离标靶离开相机视野后，
-跟踪器使用已锁定的“标靶相对小车偏移 + 小车实时位姿”短时预测。
+小车位姿超过 300ms 未更新时，网关关闭动态下降门。高空伴飞在视觉短时丢失、
+但小车位姿仍新鲜时按小车世界坐标继续接近；进入投放下降、动态下降或平台接触后，
+视觉超过 `pixel_servo.source_timeout_s` 未更新会立即保持当前高度和横向位置，不会继续下降。
 
 ## 现场参数
 
@@ -76,18 +76,20 @@ roslaunch lidar_to_mavros fastlio_to_px4_mid360_direct.launch \
 `src/d_task_uav_control/config/d_task_uav.yaml`：
 
 - `tracking.car_frame_offset_x_m/y_m`：小车 ROS 坐标起点到无人机坐标起点的平移。
-- `camera.*`：无畸变相机内参和相机系到机体系外参。
+- `tracking.use_visual_projection`：默认 `false`，避免未标定视觉投影影响小车世界坐标；仅保留旧方案时才开启。
 - `tracking.platform_height_m`：平台中心在无人机世界系中的高度。
+- `pixel_servo.*`：像素滤波、死区、最大横移速度及图像轴到机体系轴的映射；必须先完成台架四方向确认。
 - `mission.cruise_height_m`、`drop_height_m`、两段下降高度和速度。
 - 对中误差、相对速度、稳定时间、超时、5.20 秒停留和重试次数。
 - `payload.*`：投放执行器预留配置。
 
-参数在启动时加载，飞行中不热更新。调整坐标偏移、相机外参和平台高度后，
+参数在启动时加载，飞行中不热更新。调整坐标偏移、像素轴映射和平台高度后，
 必须先做低高度、禁用自动解锁的实机验证。
 
 YOLO 使用单类别平台标靶模型 `yolo_target_yolov8n_640_rk3588_i8.rknn`，标靶固定在
 降落平台中心。检测节点每帧发布结构化检测，即使未发现目标也发布
-`found=false`，融合节点使用四状态卡尔曼滤波输出平台位置和速度。
+`found=false`。小车世界坐标仍由四状态卡尔曼滤波输出平台位置和速度；视觉锁定后的
+伴飞与下降使用像素伺服，不依赖相机内参。
 
 仅验证相机和模型时运行：
 
@@ -97,6 +99,18 @@ roslaunch metal_ball_rknn platform_target_test.launch
 
 在地面站运行 `rqt_image_view` 并订阅 `/metal_ball_rknn/debug_image` 查看带框画面；
 `/d_task/vision/platform_detection` 输出结构化检测结果。
+
+确认下视相机的图像轴与机体系方向时，拆桨、禁止解锁后运行：
+
+```bash
+roslaunch d_task_uav_control pixel_servo_debug.launch
+```
+
+该入口只启动相机、RKNN 检测和调试节点，不启动任务状态机、`ego_bridge` 或飞控控制。
+观察 `/d_task/vision/pixel_servo_debug`、`/d_task/vision/pixel_velocity_body_debug`
+和 `/d_task/vision/pixel_velocity_world_debug`；分别将标靶向机体前后左右移动，确认建议
+速度方向后再修改 `pixel_servo.body_*` 参数。视觉超过 `pixel_servo.source_timeout_s` 未更新时，
+调试与任务控制都会输出零像素修正，下降阶段会立即冻结。
 
 投放硬件尚未定型，因此 `payload.enabled` 默认为 `false`。此时完整任务流程会
 发布 `PAYLOAD_RELEASE_DRY_RUN` 事件，但不会向 PX4 输出通道发命令。确定接线、
@@ -111,5 +125,5 @@ PX4 mixer/control allocation 和安全通道后，再配置 MAVROS
 由任务节点发布，底层 bridge 状态不会覆盖正在运行的任务阶段。
 
 首次实机运行前至少确认：MQTT 心跳稳定、三路定位 READY、相机健康、标靶世界
-坐标方向正确、车机坐标偏移正确、300ms 断链能停止下降、平台锁桨条件不会在
+像素建议速度方向正确、车机坐标偏移正确、300ms 断链能停止下降、平台锁桨条件不会在
 空中误触发，以及投放执行器仍处于 dry-run。

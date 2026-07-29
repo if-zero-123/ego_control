@@ -70,6 +70,8 @@ public:
     PlatformTrackingFusionNode() : private_node_("~"), tracker_(loadTrackerConfig()) {
         private_node_.param("tracking/platform_height_m", platform_height_m_, 0.30);
         private_node_.param("tracking/uav_odom_timeout_s", uav_odom_timeout_s_, 0.30);
+        private_node_.param("tracking/use_visual_projection",
+                            use_visual_projection_, false);
         private_node_.param("tracking/release_max_xy_error_m",
                             release_max_xy_error_m_, 0.15);
         private_node_.param("tracking/release_max_relative_speed_mps",
@@ -248,7 +250,8 @@ private:
         last_detection_found_ = message->found;
         last_center_u_ = message->center_u;
         last_center_v_ = message->center_v;
-        if (!message->found || !has_uav_odom_ || !projector_) {
+        if (!message->found || !use_visual_projection_
+            || !has_uav_odom_ || !projector_) {
             return;
         }
         if (now_s - last_uav_odom_received_s_ > uav_odom_timeout_s_) {
@@ -291,8 +294,8 @@ private:
         const bool odom_fresh = has_uav_odom_
             && now_s - last_uav_odom_received_s_ <= uav_odom_timeout_s_;
         const bool vision_detected = last_detection_found_
-            && last_vision_accepted_s_ >= 0.0
-            && now_s - last_vision_accepted_s_ <= sourceTimeout();
+            && last_detection_received_s_ >= 0.0
+            && now_s - last_detection_received_s_ <= sourceTimeout();
 
         PlatformEstimate estimate;
         estimate.header.stamp = ros::Time::now();
@@ -398,6 +401,7 @@ private:
     nav_msgs::Odometry latest_uav_odom_;
     bool has_uav_odom_ = false;
     bool use_camera_info_ = true;
+    bool use_visual_projection_ = false;
     bool last_detection_found_ = false;
     double last_uav_odom_received_s_ = -1.0;
     double last_detection_received_s_ = -1.0;

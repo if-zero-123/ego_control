@@ -188,6 +188,17 @@ void MissionController::commandPlatform(const MissionInput& input,
         output);
 }
 
+void MissionController::commandPixelPlatform(const MissionInput& input,
+                                             double target_z, double target_vz,
+                                             MissionCommand& output) const {
+    const double target_vx = input.platform_vx + input.pixel_world_vx;
+    const double target_vy = input.platform_vy + input.pixel_world_vy;
+    const double lead = config_.follow_lead_time_s;
+    commandPosition(input.uav_x + target_vx * lead,
+                    input.uav_y + target_vy * lead,
+                    target_z, target_vx, target_vy, target_vz, output);
+}
+
 bool MissionController::stateTimedOut(double now_s, double timeout_s) const {
     return timeout_s > 0.0 && now_s - state_enter_s_ > timeout_s;
 }
@@ -287,8 +298,7 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 commandPosition(input.uav_x, input.uav_y, cruiseZ(),
                                 0.0, 0.0, 0.0, output);
             }
-            if (conditionHeld(input.platform_valid
-                                  && input.platform_vision_detected,
+            if (conditionHeld(input.platform_valid && input.pixel_valid,
                               input.now_s, config_.vision_lock_time_s)) {
                 transition(MissionState::LOCK_CAR, input.now_s);
             } else if (stateTimedOut(input.now_s, config_.search_timeout_s)) {
@@ -297,12 +307,12 @@ MissionCommand MissionController::update(const MissionInput& input) {
             break;
 
         case MissionState::LOCK_CAR:
-            if (!input.platform_valid || !input.platform_vision_detected) {
+            if (!input.platform_valid || !input.pixel_valid) {
                 transition(MissionState::SEARCH_CAR, input.now_s);
                 break;
             }
-            commandPlatform(input, cruiseZ(), 0.0, output);
-            if (conditionHeld(aligned(input), input.now_s,
+            commandPixelPlatform(input, cruiseZ(), 0.0, output);
+            if (conditionHeld(input.pixel_aligned, input.now_s,
                               config_.vision_lock_time_s)) {
                 transition(MissionState::FOLLOW_CAR, input.now_s);
             }
@@ -327,11 +337,17 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 break;
             }
             tracking_loss_start_s_ = -1.0;
-            commandPlatform(input, cruiseZ(), 0.0, output);
+            if (input.pixel_valid) {
+                commandPixelPlatform(input, cruiseZ(), 0.0, output);
+            } else {
+                commandPlatform(input, cruiseZ(), 0.0, output);
+            }
             const bool force_drop = mode_ == MissionMode::DROP
+                && input.pixel_valid && input.pixel_aligned
                 && input.distance_to_d_m
                     <= config_.drop_force_descent_distance_to_d_m;
-            if (conditionHeld(aligned(input), input.now_s,
+            if (conditionHeld(input.pixel_valid && input.pixel_aligned,
+                              input.now_s,
                               config_.follow_stable_time_s)
                 || force_drop) {
                 transition(mode_ == MissionMode::DROP
@@ -343,17 +359,26 @@ MissionCommand MissionController::update(const MissionInput& input) {
         }
 
         case MissionState::DROP_DESCEND:
-            if (!input.platform_valid) {
-                beginAbortReturn(input, output, 2106,
-                                 "drop_platform_tracking_lost");
+            if (!input.platform_valid || !input.pixel_valid) {
+                commandPosition(input.uav_x, input.uav_y, input.uav_z,
+                                0.0, 0.0, 0.0, output);
+                if (tracking_loss_start_s_ < 0.0) {
+                    tracking_loss_start_s_ = input.now_s;
+                }
+                if (input.now_s - tracking_loss_start_s_
+                        > config_.tracking_loss_timeout_s) {
+                    beginAbortReturn(input, output, 2106,
+                                     "drop_visual_tracking_lost");
+                }
                 break;
             }
-            commandPlatform(input, input.platform_z + config_.drop_height_m,
-                            -config_.high_descent_speed_mps, output);
+            tracking_loss_start_s_ = -1.0;
+            commandPixelPlatform(input, input.platform_z + config_.drop_height_m,
+                                 -config_.high_descent_speed_mps, output);
             if (input.distance_to_d_m <= config_.drop_abort_distance_to_d_m) {
                 beginAbortReturn(input, output, 2107, "drop_window_missed");
             } else if (conditionHeld(
-                           aligned(input)
+                           input.pixel_aligned
                                && atRelativeHeight(input, config_.drop_height_m),
                            input.now_s, config_.phase_stable_time_s)) {
                 transition(MissionState::RELEASE, input.now_s);
@@ -368,9 +393,13 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 release_started_s_ = input.now_s;
                 output.release_payload = true;
             }
-            if (input.platform_valid) {
-                commandPlatform(input, input.platform_z + config_.drop_height_m,
-                                0.0, output);
+            if (input.platform_valid && input.pixel_valid) {
+                commandPixelPlatform(input,
+                                     input.platform_z + config_.drop_height_m,
+                                     0.0, output);
+            } else {
+                commandPosition(input.uav_x, input.uav_y, input.uav_z,
+                                0.0, 0.0, 0.0, output);
             }
             if (input.now_s - release_started_s_ + kTimeEpsilon
                     >= config_.release_settle_time_s) {
@@ -387,7 +416,7 @@ MissionCommand MissionController::update(const MissionInput& input) {
             const double speed = high
                 ? config_.high_descent_speed_mps
                 : config_.low_descent_speed_mps;
-            if (!input.platform_valid) {
+            if (!input.platform_valid || !input.pixel_valid) {
                 if (tracking_loss_start_s_ < 0.0) {
                     tracking_loss_start_s_ = input.now_s;
                 }
@@ -406,9 +435,9 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 condition_start_s_ = -1.0;
                 break;
             }
-            commandPlatform(input, input.platform_z + target_height,
-                            -speed, output);
-            if (conditionHeld(aligned(input)
+            commandPixelPlatform(input, input.platform_z + target_height,
+                                 -speed, output);
+            if (conditionHeld(input.pixel_aligned
                                   && atRelativeHeight(input, target_height),
                               input.now_s, config_.phase_stable_time_s)) {
                 transition(high ? MissionState::DESCEND_LOW
@@ -427,12 +456,12 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 transition(MissionState::PLATFORM_HOLD, input.now_s);
                 break;
             }
-            if (!input.platform_valid || !input.descent_allowed
+            if (!input.platform_valid || !input.pixel_valid || !input.descent_allowed
                 || input.safety_hold) {
                 commandPosition(input.uav_x, input.uav_y, input.uav_z,
                                 0.0, 0.0, 0.0, output);
             } else {
-                commandPlatform(
+                commandPixelPlatform(
                     input,
                     input.platform_z - config_.platform_press_depth_m,
                     -config_.contact_descent_speed_mps,

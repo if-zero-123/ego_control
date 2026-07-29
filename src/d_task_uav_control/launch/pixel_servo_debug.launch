@@ -1,0 +1,16 @@
+<launch>
+  <!-- 台架方向确认入口：不启动任务状态机、桥接层或飞控控制命令。 -->
+  <arg name="config_file"
+       default="$(find d_task_uav_control)/config/d_task_uav.yaml"/>
+  <arg name="video_device"
+       default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"/>
+
+  <include file="$(find metal_ball_rknn)/launch/platform_target_test.launch">
+    <arg name="video_device" value="$(arg video_device)"/>
+  </include>
+
+  <node pkg="d_task_uav_control" type="pixel_servo_debug_node"
+        name="pixel_servo_debug" output="screen">
+    <rosparam command="load" file="$(arg config_file)"/>
+  </node>
+</launch>

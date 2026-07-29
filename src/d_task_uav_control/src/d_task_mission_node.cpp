@@ -13,8 +13,10 @@
 #include <std_msgs/String.h>
 #include <std_msgs/UInt8.h>
 
+#include "d_task_uav_control/PlatformDetection.h"
 #include "d_task_uav_control/PlatformEstimate.h"
 #include "d_task_uav_control/mission_controller.h"
+#include "d_task_uav_control/pixel_servo.h"
 #include "ego_api/ego_api.h"
 
 namespace d_task_uav_control {
@@ -58,6 +60,10 @@ double yawFromQuaternion(const geometry_msgs::Quaternion& quaternion) {
                + quaternion.x * quaternion.y),
         1.0 - 2.0 * (quaternion.y * quaternion.y
                      + quaternion.z * quaternion.z));
+}
+
+double stampOrNow(const ros::Time& stamp) {
+    return stamp.isZero() ? ros::Time::now().toSec() : stamp.toSec();
 }
 
 class PayloadActuator {
@@ -146,6 +152,8 @@ public:
         : private_node_("~"),
           controller_config_(loadControllerConfig()),
           controller_(controller_config_),
+          pixel_servo_config_(loadPixelServoConfig()),
+          pixel_servo_(pixel_servo_config_),
           payload_actuator_(node_, private_node_) {
         const std::string bridge_namespace = private_node_.param<std::string>(
             "mission/bridge_namespace", "/ego_bridge");
@@ -232,6 +240,28 @@ private:
         }
     }
 
+    PixelServoConfig loadPixelServoConfig() {
+        PixelServoConfig config;
+#define LOAD_PIXEL_PARAM(name, field) \
+        private_node_.param("pixel_servo/" name, config.field, config.field)
+        LOAD_PIXEL_PARAM("filter_alpha", filter_alpha);
+        LOAD_PIXEL_PARAM("filter_beta", filter_beta);
+        LOAD_PIXEL_PARAM("source_timeout_s", source_timeout_s);
+        LOAD_PIXEL_PARAM("min_confidence", min_confidence);
+        LOAD_PIXEL_PARAM("deadband", deadband);
+        LOAD_PIXEL_PARAM("gain_mps", gain_mps);
+        LOAD_PIXEL_PARAM("max_speed_mps", max_speed_mps);
+        LOAD_PIXEL_PARAM("body_x_from_u", body_x_from_u);
+        LOAD_PIXEL_PARAM("body_x_from_v", body_x_from_v);
+        LOAD_PIXEL_PARAM("body_y_from_u", body_y_from_u);
+        LOAD_PIXEL_PARAM("body_y_from_v", body_y_from_v);
+#undef LOAD_PIXEL_PARAM
+        if (!pixelServoConfigValid(config)) {
+            throw std::runtime_error("invalid pixel_servo configuration");
+        }
+        return config;
+    }
+
     void subscribeTopics() {
         mission_config_subscriber_ = node_.subscribe(
             private_node_.param<std::string>(
@@ -249,6 +279,10 @@ private:
             private_node_.param<std::string>(
                 "topics/platform_estimate", "/d_task/tracking/platform_estimate"),
             10, &DTaskMissionNode::platformEstimateCallback, this);
+        detection_subscriber_ = node_.subscribe(
+            private_node_.param<std::string>(
+                "topics/platform_detection", "/d_task/vision/platform_detection"),
+            10, &DTaskMissionNode::platformDetectionCallback, this);
         odom_subscriber_ = node_.subscribe(
             private_node_.param<std::string>(
                 "topics/px4_odom", "/mavros/local_position/odom"),
@@ -319,6 +353,7 @@ private:
         }
         const std::string mission_id = root.get("mission_id", "").asString();
         controller_.reset();
+        pixel_servo_.reset();
         payload_actuator_.reset();
         terminal_published_ = false;
         last_fault_key_.clear();
@@ -392,6 +427,15 @@ private:
         last_platform_received_s_ = ros::Time::now().toSec();
     }
 
+    void platformDetectionCallback(const PlatformDetection::ConstPtr& message) {
+        if (!message->found) {
+            return;
+        }
+        pixel_servo_.update(PixelMeasurement{
+            stampOrNow(message->header.stamp), message->center_u, message->center_v,
+            message->image_width, message->image_height, message->confidence});
+    }
+
     void bridgeStateCallback(const std_msgs::String::ConstPtr& message) {
         bridge_state_ = message->data;
     }
@@ -447,6 +491,15 @@ private:
             input.platform_vx = latest_platform_.vx;
             input.platform_vy = latest_platform_.vy;
         }
+        const double yaw = has_odom_
+            ? yawFromQuaternion(latest_odom_.pose.pose.orientation) : 0.0;
+        const PixelServoState pixel_state = pixel_servo_.stateAt(now_s, yaw);
+        input.pixel_valid = pixel_state.valid;
+        input.pixel_aligned = pixel_state.valid
+            && std::abs(pixel_state.error_u) <= 1e-9
+            && std::abs(pixel_state.error_v) <= 1e-9;
+        input.pixel_world_vx = pixel_state.world_vx;
+        input.pixel_world_vy = pixel_state.world_vy;
         input.descent_allowed = descent_allowed_;
         input.safety_hold = safety_hold_;
         input.distance_to_d_m = distance_to_d_m_;
@@ -590,6 +643,8 @@ private:
     ros::NodeHandle private_node_;
     MissionControllerConfig controller_config_;
     MissionController controller_;
+    PixelServoConfig pixel_servo_config_;
+    PixelServo pixel_servo_;
     PayloadActuator payload_actuator_;
     std::unique_ptr<EgoApi> ego_api_;
 
@@ -597,6 +652,7 @@ private:
     ros::Subscriber mission_start_subscriber_;
     ros::Subscriber positioning_subscriber_;
     ros::Subscriber platform_subscriber_;
+    ros::Subscriber detection_subscriber_;
     ros::Subscriber odom_subscriber_;
     ros::Subscriber bridge_state_subscriber_;
     ros::Subscriber control_mode_subscriber_;

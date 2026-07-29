@@ -36,6 +36,7 @@ include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS})
 
 add_library(d_task_platform_tracking
   src/pixel_projector.cpp
+  src/pixel_servo.cpp
   src/platform_tracker.cpp
 )
 add_dependencies(d_task_platform_tracking ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
@@ -53,12 +54,26 @@ add_executable(platform_tracking_fusion_node
 add_executable(d_task_mission_node
   src/d_task_mission_node.cpp
 )
+
+add_executable(pixel_servo_debug_node
+  src/pixel_servo_debug_node.cpp
+)
 add_dependencies(d_task_mission_node
   ${${PROJECT_NAME}_EXPORTED_TARGETS}
   ${catkin_EXPORTED_TARGETS}
 )
 target_link_libraries(d_task_mission_node
   d_task_mission_controller
+  d_task_platform_tracking
+  ${catkin_LIBRARIES}
+  jsoncpp_lib
+)
+add_dependencies(pixel_servo_debug_node
+  ${${PROJECT_NAME}_EXPORTED_TARGETS}
+  ${catkin_EXPORTED_TARGETS}
+)
+target_link_libraries(pixel_servo_debug_node
+  d_task_platform_tracking
   ${catkin_LIBRARIES}
   jsoncpp_lib
 )
@@ -83,9 +98,14 @@ install(DIRECTORY config launch
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_positioning_readiness.py)
+  catkin_add_nosetests(test/test_pixel_servo_debug_launch.py)
   catkin_add_gtest(test_platform_tracker test/test_platform_tracker.cpp)
   if(TARGET test_platform_tracker)
     target_link_libraries(test_platform_tracker d_task_platform_tracking ${catkin_LIBRARIES})
+  endif()
+  catkin_add_gtest(test_pixel_servo test/test_pixel_servo.cpp)
+  if(TARGET test_pixel_servo)
+    target_link_libraries(test_pixel_servo d_task_platform_tracking ${catkin_LIBRARIES})
   endif()
   catkin_add_gtest(test_mission_controller test/test_mission_controller.cpp)
   if(TARGET test_mission_controller)
@@ -95,7 +115,7 @@ if(CATKIN_ENABLE_TESTING)
   endif()
 endif()
 
-install(TARGETS d_task_platform_tracking d_task_mission_controller platform_tracking_fusion_node d_task_mission_node
+install(TARGETS d_task_platform_tracking d_task_mission_controller platform_tracking_fusion_node d_task_mission_node pixel_servo_debug_node
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

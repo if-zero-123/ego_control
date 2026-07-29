@@ -34,6 +34,8 @@ MissionInput nominalInput() {
     input.control_mode = 1;
     input.platform_valid = true;
     input.platform_vision_detected = true;
+    input.pixel_valid = true;
+    input.pixel_aligned = true;
     input.platform_x = 1.0;
     input.platform_y = 2.0;
     input.platform_z = 0.3;
@@ -56,6 +58,15 @@ void advanceToFollow(MissionController& controller, MissionInput& input) {
         controller.update(input);
     }
     ASSERT_EQ(controller.state(), MissionState::FOLLOW_CAR);
+}
+
+void advanceToLock(MissionController& controller, MissionInput& input) {
+    for (int index = 0; index < 8
+         && controller.state() != MissionState::LOCK_CAR; ++index) {
+        input.now_s += 0.01;
+        controller.update(input);
+    }
+    ASSERT_EQ(controller.state(), MissionState::LOCK_CAR);
 }
 
 TEST(MissionController, DoesNotStartBeforePositioningReady) {
@@ -131,6 +142,99 @@ TEST(MissionController, StaleCarPoseFreezesDynamicDescentAltitude) {
     EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
     EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
     EXPECT_EQ(controller.state(), MissionState::DESCEND_HIGH);
+}
+
+TEST(MissionController, PixelLossFreezesDynamicDescentImmediately) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::DESCEND_HIGH);
+
+    input.pixel_valid = false;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_DOUBLE_EQ(command.target_x, input.uav_x);
+    EXPECT_DOUBLE_EQ(command.target_y, input.uav_y);
+    EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
+    EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
+    EXPECT_EQ(controller.state(), MissionState::DESCEND_HIGH);
+}
+
+TEST(MissionController, PixelFollowAddsCorrectionToCarVelocity) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
+    MissionInput input = nominalInput();
+    input.platform_vx = 0.20;
+    input.platform_vy = -0.10;
+    input.pixel_world_vx = 0.10;
+    input.pixel_world_vy = 0.05;
+    advanceToFollow(controller, input);
+
+    const MissionCommand command = controller.update(input);
+
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_NEAR(command.target_vx, 0.30, 1e-9);
+    EXPECT_NEAR(command.target_vy, -0.05, 1e-9);
+    EXPECT_NEAR(command.target_x, input.uav_x + 0.30 * fastConfig().follow_lead_time_s,
+                1e-9);
+    EXPECT_NEAR(command.target_y, input.uav_y - 0.05 * fastConfig().follow_lead_time_s,
+                1e-9);
+}
+
+TEST(MissionController, LockUsesPixelCorrectionBeforePixelAlignment) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
+    MissionInput input = nominalInput();
+    input.pixel_aligned = false;
+    input.pixel_world_vx = 0.10;
+    input.pixel_world_vy = -0.05;
+    advanceToLock(controller, input);
+
+    const MissionCommand command = controller.update(input);
+
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_NEAR(command.target_vx, 0.10, 1e-9);
+    EXPECT_NEAR(command.target_vy, -0.05, 1e-9);
+    EXPECT_EQ(controller.state(), MissionState::LOCK_CAR);
+}
+
+TEST(MissionController, ForceDropDoesNotBypassPixelLock) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+    input.pixel_valid = false;
+    input.pixel_aligned = false;
+    input.distance_to_d_m = 1.0;
+
+    controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::FOLLOW_CAR);
+}
+
+TEST(MissionController, ReleaseKeepsPixelCorrectionWhileVisible) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    input.uav_z = input.platform_z + fastConfig().drop_height_m;
+    input.now_s += 0.1;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::RELEASE);
+    input.pixel_world_vx = 0.10;
+    input.pixel_world_vy = 0.05;
+    input.now_s += 0.01;
+
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_NEAR(command.target_vx, 0.10, 1e-9);
+    EXPECT_NEAR(command.target_vy, 0.05, 1e-9);
 }
 
 TEST(MissionController, HoldsOnPlatformForFullFivePointTwoSeconds) {

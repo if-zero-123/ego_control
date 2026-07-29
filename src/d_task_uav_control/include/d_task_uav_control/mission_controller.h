@@ -107,6 +107,10 @@ struct MissionInput {
     double platform_z = 0.0;
     double platform_vx = 0.0;
     double platform_vy = 0.0;
+    bool pixel_valid = false;
+    bool pixel_aligned = false;
+    double pixel_world_vx = 0.0;
+    double pixel_world_vy = 0.0;
 
     bool descent_allowed = false;
     bool safety_hold = false;
@@ -165,6 +169,8 @@ private:
     double cruiseZ() const;
     void commandPlatform(const MissionInput& input, double target_z,
                          double target_vz, MissionCommand& output) const;
+    void commandPixelPlatform(const MissionInput& input, double target_z,
+                              double target_vz, MissionCommand& output) const;
     void commandPosition(double x, double y, double z,
                          double vx, double vy, double vz,
                          MissionCommand& output) const;
