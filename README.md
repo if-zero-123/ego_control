@@ -38,6 +38,31 @@ MQTT Broker 运行在小车 `192.168.0.198`，图形地面站运行在本机
    video_device:=/dev/v4l/by-id/your-camera
    ```
 
+也可以使用一键启动脚本。它会依次启动或复用 ROS Master、MAVROS 和
+MID360 驱动，然后启动 D 题无人机完整后端：
+
+```bash
+/home/orangepi/catkin_ws/src/ego_control/src/d_task_uav_control/scripts/start_d_task_uav.sh
+```
+
+需要覆盖现场连接参数时使用：
+
+```bash
+/home/orangepi/catkin_ws/src/ego_control/src/d_task_uav_control/scripts/start_d_task_uav.sh \
+  --mqtt-host 192.168.0.198 \
+  --video-device /dev/v4l/by-id/your-camera
+```
+
+飞控不是 `mavros/px4.launch` 默认连接方式时，再按实际串口或 UDP 配置附加
+`--mavros-fcu-url URL`，不要直接套用未经确认的设备名和波特率。
+
+先用 `--dry-run` 可查看启动顺序而不启动进程。脚本前台常驻，日志写入
+`~/.ros/d_task_uav/<启动时间>_<PID>/`；按 `Ctrl+C` 时只停止脚本自己启动的
+进程，不停止启动前已经存在的 ROS Master、MAVROS 或 MID360 驱动。脚本不会
+发布起飞消息，后端仍会停在准备流程并等待小车合法指令。注意合法
+`mission/start` 到达后，当前 `ego_bridge` 配置会自动切换 OFFBOARD 并解锁，
+投放任务也会按 `payload.enabled` 配置驱动真实 GPIO。
+
 `d_task_uav.launch` 不启动 MID360 驱动，也不重复直接启动 mapping launch。
 实体短按或地面站 `SELECT` 都先交给小车，由小车生成 mission ID 并发送
 `mission_config(sender=car)`。无人机收到该配置后，`fastlio_supervisor`

@@ -99,6 +99,11 @@ catkin_install_python(PROGRAMS
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
+install(PROGRAMS
+  scripts/start_d_task_uav.sh
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 install(DIRECTORY config launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
@@ -107,6 +112,7 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_positioning_readiness.py)
   catkin_add_nosetests(test/test_pixel_servo_debug_launch.py)
   catkin_add_nosetests(test/test_payload_gpio.py)
+  catkin_add_nosetests(test/test_start_d_task_uav_script.py)
   catkin_add_gtest(test_platform_tracker test/test_platform_tracker.cpp)
   if(TARGET test_platform_tracker)
     target_link_libraries(test_platform_tracker d_task_platform_tracking ${catkin_LIBRARIES})
