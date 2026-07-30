@@ -29,7 +29,7 @@ def _topic_matches(subscription: str, topic: str) -> bool:
 
 @dataclass
 class MqttConfig:
-    host: str = "192.168.50.10"
+    host: str = "192.168.0.198"
     port: int = 1883
     keepalive: int = 10
     client_id: str = "d-task-client"

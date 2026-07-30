@@ -1,5 +1,5 @@
 <launch>
-  <arg name="mqtt_host" default="192.168.50.10"/>
+  <arg name="mqtt_host" default="192.168.0.198"/>
   <arg name="mqtt_port" default="1883"/>
   <arg name="mqtt_client_id" default="d-task-uav"/>
 

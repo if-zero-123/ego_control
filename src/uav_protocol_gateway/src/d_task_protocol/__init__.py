@@ -1,6 +1,6 @@
 """Reusable protocol implementation for the D-task car/UAV system."""
 
-PROTOCOL_IMPLEMENTATION_VERSION = "1.1.0"
+PROTOCOL_IMPLEMENTATION_VERSION = "1.2.0"
 
 from .envelope import Envelope, EnvelopeFactory, ProtocolError
 from .messages import (

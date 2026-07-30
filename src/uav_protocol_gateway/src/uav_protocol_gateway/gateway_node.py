@@ -113,7 +113,7 @@ class UavProtocolGateway:
         )
 
         self.mqtt_config = MqttConfig(
-            host=rospy.get_param("~mqtt_host", "192.168.50.10"),
+            host=rospy.get_param("~mqtt_host", "192.168.0.198"),
             port=int(rospy.get_param("~mqtt_port", 1883)),
             keepalive=int(rospy.get_param("~mqtt_keepalive", 10)),
             client_id=rospy.get_param("~mqtt_client_id", "d-task-uav"),
@@ -697,9 +697,19 @@ class UavProtocolGateway:
 
     def _uav_state_payload(self) -> Dict[str, Any]:
         odom = self.odom
+        pose_age_ms = self._age_ms(self.last_odom_ms)
+        pose_valid = (
+            odom is not None
+            and pose_age_ms is not None
+            and pose_age_ms <= 500
+        )
         if odom is None:
+            frame_id = "unknown"
+            pose_age_ms = 2**31 - 1
             x = y = z = yaw = vx = vy = vz = 0.0
         else:
+            frame_id = odom.header.frame_id or "unknown"
+            assert pose_age_ms is not None
             x = odom.pose.pose.position.x
             y = odom.pose.pose.position.y
             z = odom.pose.pose.position.z
@@ -717,6 +727,9 @@ class UavProtocolGateway:
             "control_mode": self.control_mode,
             "px4_mode": self.px4_state,
             "armed": self.armed,
+            "frame_id": frame_id,
+            "pose_valid": pose_valid,
+            "pose_age_ms": pose_age_ms,
             "x": x,
             "y": y,
             "z": z,

@@ -1,5 +1,5 @@
 # MQTT broker and protocol transport.
-mqtt_host: 192.168.50.10
+mqtt_host: 192.168.0.198
 mqtt_port: 1883
 mqtt_keepalive: 10
 mqtt_reconnect_min_delay: 1

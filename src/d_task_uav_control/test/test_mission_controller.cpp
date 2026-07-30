@@ -78,7 +78,7 @@ TEST(MissionController, DoesNotStartBeforePositioningReady) {
     EXPECT_EQ(controller.state(), MissionState::POSITIONING_INIT);
 }
 
-TEST(MissionController, RejectsNonCarButtonStart) {
+TEST(MissionController, RejectsUnknownStartReason) {
     MissionController controller(fastConfig());
     ASSERT_TRUE(controller.configure("mission-1", MissionMode::DROP));
     ASSERT_TRUE(controller.markPositioningReady(
@@ -87,6 +87,17 @@ TEST(MissionController, RejectsNonCarButtonStart) {
     EXPECT_FALSE(controller.start(
         "mission-1", MissionMode::DROP, "ground_command", 10.0));
     EXPECT_EQ(controller.state(), MissionState::WAIT_START);
+}
+
+TEST(MissionController, AcceptsGroundWebStartRelayedByCar) {
+    MissionController controller(fastConfig());
+    ASSERT_TRUE(controller.configure("mission-1", MissionMode::DROP));
+    ASSERT_TRUE(controller.markPositioningReady(
+        "mission-1", HomePosition{0.0, 0.0, 0.0, 0.0}));
+
+    EXPECT_TRUE(controller.start(
+        "mission-1", MissionMode::DROP, "ground_web", 10.0));
+    EXPECT_EQ(controller.state(), MissionState::TAKEOFF);
 }
 
 TEST(MissionController, RequestsConfiguredHeightRelativeToHome) {

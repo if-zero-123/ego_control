@@ -100,10 +100,12 @@ bool MissionController::markPositioningReady(const std::string& mission_id,
 
 bool MissionController::start(const std::string& mission_id, MissionMode mode,
                               const std::string& start_reason, double now_s) {
+    const bool authorized_start =
+        start_reason == "car_button" || start_reason == "ground_web";
     if (!positioning_ready_ || mission_started_
         || state_ != MissionState::WAIT_START
         || mission_id != mission_id_ || mode != mode_
-        || start_reason != "car_button") {
+        || !authorized_start) {
         return false;
     }
     mission_started_ = true;

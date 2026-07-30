@@ -52,6 +52,8 @@ class ReceiveResult:
 class UavGatewayCore:
     """Pure protocol state used by the ROS1 gateway node."""
 
+    _AUTHORIZED_START_REASONS = {"car_button", "ground_web"}
+
     _EXPECTED = {
         Topics.MISSION_CONFIG: ("mission_config", "car"),
         Topics.MISSION_START: ("mission_start", "car"),
@@ -261,9 +263,9 @@ class UavGatewayCore:
             result.reason = "missing_command_id"
             result.actions.append(self._ack(message, AckResult.REJECTED, result.reason))
             return
-        if payload.get("start_reason") != "car_button":
+        if payload.get("start_reason") not in self._AUTHORIZED_START_REASONS:
             result.rejected = True
-            result.reason = "start_reason_must_be_car_button"
+            result.reason = "start_reason_not_authorized"
             result.actions.append(self._ack(message, AckResult.REJECTED, result.reason))
             return
         if message.mission_id != self.configured_mission_id:

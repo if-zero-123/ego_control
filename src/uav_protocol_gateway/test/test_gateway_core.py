@@ -53,13 +53,13 @@ class GatewayCoreTests(unittest.TestCase):
             clock_ms=clock_ms,
         )
 
-    def mission_start(self, command_id="cmd-1"):
+    def mission_start(self, command_id="cmd-1", start_reason="car_button"):
         return build_mission_start(
             self.car_factory,
             "mission-0001",
             Mode.DROP,
             {"frame_id": "competition_world", "x": 0.0, "y": 0.0, "yaw": 0.0},
-            start_reason="car_button",
+            start_reason=start_reason,
             command_id=command_id,
         )
 
@@ -131,6 +131,9 @@ class GatewayCoreTests(unittest.TestCase):
             control_mode="OVERRIDE",
             px4_mode="OFFBOARD",
             armed=True,
+            frame_id="map",
+            pose_valid=True,
+            pose_age_ms=20,
             x=0.0,
             y=0.0,
             z=1.0,
@@ -216,6 +219,20 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertEqual(result.actions[1].message.mission_id, "mission-0001")
         self.assertEqual(self.core.mission_id, "mission-0001")
 
+    def test_accepts_ground_web_start_relayed_by_car(self):
+        self.prepare()
+        result = self.core.receive(
+            Topics.MISSION_START,
+            ProtocolCodec.encode(
+                self.mission_start("cmd-ground-web", "ground_web")
+            ),
+            now_ms=self.clock[0],
+        )
+
+        self.assertEqual([action.kind for action in result.actions], ["ack", "mission_start"])
+        self.assertEqual(result.actions[0].message.payload["result"], "accepted")
+        self.assertEqual(self.core.mission_id, "mission-0001")
+
     def test_duplicate_command_only_emits_duplicate_ack(self):
         self.prepare()
         first = self.mission_start("cmd-duplicate")
@@ -236,7 +253,7 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertEqual([action.kind for action in result.actions], ["ack"])
         self.assertEqual(result.actions[0].message.payload["result"], "duplicate")
 
-    def test_rejects_non_physical_start_reason_without_starting(self):
+    def test_rejects_unknown_start_reason_without_starting(self):
         self.prepare(mission_id="mission-0002", mode=Mode.DYNAMIC_LANDING)
         message = build_mission_start(
             self.car_factory,

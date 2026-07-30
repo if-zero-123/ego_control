@@ -1,8 +1,9 @@
 # D题陆空协同无人机后端
 
 本仓库中的 D 题后端由 `uav_protocol_gateway`、`d_task_uav_control`、
-`ego_api` 和 `ego_bridge` 组成。无人机只运行 ROS1 控制和 MQTT Agent，
-地面站网页与 MQTT Broker 均运行在地面站设备。
+`ego_api` 和 `ego_bridge` 组成。无人机只运行 ROS1 控制和 MQTT Agent；
+MQTT Broker 运行在小车 `192.168.0.198`，图形地面站运行在本机
+`192.168.0.133`。
 
 ## 启动顺序
 
@@ -23,11 +24,11 @@
    source devel/setup.bash
    ```
 
-4. 启动无人机完整后端，将 Broker 地址改为地面站地址：
+4. 启动无人机完整后端，连接小车上的 Broker：
 
    ```bash
    roslaunch d_task_uav_control d_task_uav.launch \
-     mqtt_host:=192.168.50.10
+     mqtt_host:=192.168.0.198
    ```
 
    更换模型或摄像头设备时可附加：
@@ -52,12 +53,14 @@ roslaunch lidar_to_mavros fastlio_to_px4_mid360_direct.launch \
 因此不依赖启动无人机后端的终端是否 source 过定位工作空间；路径可在
 `positioning.workspace_env` 中修改。
 当 `/Odometry`、`/mavros/vision_pose/pose` 和 PX4 odom 连续稳定 3 秒后，
-系统记录 H 点并进入 `WAIT_START`。正式起飞只接受小车实体按键产生的
-`mission/start`，且 `start_reason` 必须为 `car_button`。
+系统记录 H 点并进入 `WAIT_START`。正式起飞只接受 `sender=car` 的
+`mission/start`，且 `start_reason` 必须为实体长按的 `car_button` 或小车通过完整
+安全门后代网页发布的 `ground_web`。地面站不能直接向无人机发起起飞。
 UAV health 同时发布 `positioning_ready=true`，小车不会再把“旧 odom 仍新鲜”
 误判为本次任务已经准备完成。
 地面站 `START_CAR_ONLY` 只在小车侧打开调试任务，不会向无人机发布 start。
-无人机内置协议与车端共同实现版本均为 `1.1.0`。
+无人机内置协议与车端共同实现版本均为 `1.2.0`。UAV state 同时回传定位坐标系、
+位姿有效性和数据年龄，地面站必须将过期位置显示为失效而不是继续外推。
 
 ## 任务流程
 

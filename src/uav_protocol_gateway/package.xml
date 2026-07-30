@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>uav_protocol_gateway</name>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>ROS1 MQTT protocol gateway for the D-task UAV agent.</description>
 
   <maintainer email="orangepi@example.com">orangepi</maintainer>

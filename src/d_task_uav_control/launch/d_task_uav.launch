@@ -3,7 +3,7 @@
        default="$(find d_task_uav_control)/config/d_task_uav.yaml"/>
   <arg name="mqtt_config_file"
        default="$(find uav_protocol_gateway)/config/uav_protocol_gateway.yaml"/>
-  <arg name="mqtt_host" default="192.168.50.10"/>
+  <arg name="mqtt_host" default="192.168.0.198"/>
   <arg name="mqtt_port" default="1883"/>
   <arg name="mqtt_client_id" default="d-task-uav"/>
   <arg name="start_ego_bridge" default="true"/>
