@@ -1,0 +1,13 @@
+<launch>
+  <!-- 台架投递 GPIO 测试入口：不启动任务状态机、桥接层或飞控控制命令。 -->
+  <arg name="wiringpi_pin" default="9"/>
+  <arg name="active_high" default="true"/>
+  <arg name="topic" default="/payload_gpio_test/set"/>
+
+  <node pkg="d_task_uav_control" type="payload_gpio_test_node.py"
+        name="payload_gpio_test" output="screen">
+    <param name="wiringpi_pin" value="$(arg wiringpi_pin)"/>
+    <param name="active_high" value="$(arg active_high)"/>
+    <param name="topic" value="$(arg topic)"/>
+  </node>
+</launch>

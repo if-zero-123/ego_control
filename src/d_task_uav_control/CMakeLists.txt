@@ -95,6 +95,7 @@ target_link_libraries(platform_tracking_fusion_node
 
 catkin_install_python(PROGRAMS
   scripts/fastlio_supervisor_node.py
+  scripts/payload_gpio_test_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -105,6 +106,7 @@ install(DIRECTORY config launch
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_positioning_readiness.py)
   catkin_add_nosetests(test/test_pixel_servo_debug_launch.py)
+  catkin_add_nosetests(test/test_payload_gpio.py)
   catkin_add_gtest(test_platform_tracker test/test_platform_tracker.cpp)
   if(TARGET test_platform_tracker)
     target_link_libraries(test_platform_tracker d_task_platform_tracking ${catkin_LIBRARIES})

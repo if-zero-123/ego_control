@@ -133,6 +133,19 @@ roslaunch d_task_uav_control pixel_servo_debug.launch
 `mavros`，并继续使用已有的 `topic`、`group_mix`、`channel`、`release_value` 和
 `neutral_value` 参数。
 
+仅台架确认投放驱动输入时，可单独启动 GPIO 测试节点；它不启动任务状态机、桥接层、
+飞控或视觉节点，启动和退出时均输出低电平：
+
+```bash
+roslaunch d_task_uav_control payload_gpio_test.launch
+rostopic pub -1 /payload_gpio_test/set std_msgs/Bool "data: true"
+rostopic pub -1 /payload_gpio_test/set std_msgs/Bool "data: false"
+```
+
+默认仍是物理 16 脚（`wiringpi_pin:=9`）和高电平有效；引脚或极性不同可通过
+`wiringpi_pin:=<n>`、`active_high:=false` 覆盖。完成台架测试后退出该节点，再启动完整
+任务后端，避免两个节点同时控制同一 GPIO。
+
 ## 关键状态与检查
 
 地面站应依次看到 `POSITIONING_INIT -> WAIT_START -> TAKEOFF`，之后根据模式
