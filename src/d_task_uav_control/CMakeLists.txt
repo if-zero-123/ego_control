@@ -47,6 +47,11 @@ add_library(d_task_mission_controller
 )
 target_link_libraries(d_task_mission_controller ${catkin_LIBRARIES})
 
+add_library(d_task_payload_pulse
+  src/payload_pulse.cpp
+)
+target_link_libraries(d_task_payload_pulse ${catkin_LIBRARIES})
+
 add_executable(platform_tracking_fusion_node
   src/platform_tracking_fusion_node.cpp
 )
@@ -64,6 +69,7 @@ add_dependencies(d_task_mission_node
 )
 target_link_libraries(d_task_mission_node
   d_task_mission_controller
+  d_task_payload_pulse
   d_task_platform_tracking
   ${catkin_LIBRARIES}
   jsoncpp_lib
@@ -113,9 +119,13 @@ if(CATKIN_ENABLE_TESTING)
       d_task_mission_controller
       ${catkin_LIBRARIES})
   endif()
+  catkin_add_gtest(test_payload_pulse test/test_payload_pulse.cpp)
+  if(TARGET test_payload_pulse)
+    target_link_libraries(test_payload_pulse d_task_payload_pulse ${catkin_LIBRARIES})
+  endif()
 endif()
 
-install(TARGETS d_task_platform_tracking d_task_mission_controller platform_tracking_fusion_node d_task_mission_node pixel_servo_debug_node
+install(TARGETS d_task_platform_tracking d_task_mission_controller d_task_payload_pulse platform_tracking_fusion_node d_task_mission_node pixel_servo_debug_node
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

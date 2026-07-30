@@ -1,9 +1,14 @@
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <json/json.h>
 #include <mavros_msgs/ActuatorControl.h>
@@ -16,6 +21,7 @@
 #include "d_task_uav_control/PlatformDetection.h"
 #include "d_task_uav_control/PlatformEstimate.h"
 #include "d_task_uav_control/mission_controller.h"
+#include "d_task_uav_control/payload_pulse.h"
 #include "d_task_uav_control/pixel_servo.h"
 #include "ego_api/ego_api.h"
 
@@ -68,59 +74,139 @@ double stampOrNow(const ros::Time& stamp) {
 
 class PayloadActuator {
 public:
-    PayloadActuator(ros::NodeHandle& node, ros::NodeHandle& private_node) {
+    PayloadActuator(ros::NodeHandle& node, ros::NodeHandle& private_node)
+        : pulse_(loadPulseDuration(private_node)) {
         private_node.param("payload/enabled", enabled_, false);
+        private_node.param("payload/backend", backend_, std::string("mavros"));
         private_node.param("payload/group_mix", group_mix_, 2);
         private_node.param("payload/channel", channel_, 0);
         private_node.param("payload/release_value", release_value_, 1.0);
         private_node.param("payload/neutral_value", neutral_value_, 0.0);
-        private_node.param("payload/pulse_duration_s", pulse_duration_s_, 0.50);
+        private_node.param("payload/gpio_wiringpi_pin", gpio_wiringpi_pin_, 9);
+        private_node.param("payload/gpio_active_high", gpio_active_high_, true);
         const std::string topic = private_node.param<std::string>(
             "payload/topic", "/mavros/actuator_control");
-        if (channel_ < 0 || channel_ >= 8) {
-            throw std::runtime_error("payload/channel must be in [0, 7]");
+        if (backend_ == "mavros") {
+            if (channel_ < 0 || channel_ >= 8) {
+                throw std::runtime_error("payload/channel must be in [0, 7]");
+            }
+            publisher_ = node.advertise<mavros_msgs::ActuatorControl>(topic, 5);
+        } else if (backend_ == "gpio") {
+            if (gpio_wiringpi_pin_ < 0) {
+                throw std::runtime_error("payload/gpio_wiringpi_pin must be non-negative");
+            }
+            if (!setGpioOutputMode() || !writeGpio(false, true)) {
+                throw std::runtime_error("failed to initialize payload GPIO through /usr/bin/gpio");
+            }
+        } else {
+            throw std::runtime_error("payload/backend must be mavros or gpio");
         }
-        if (pulse_duration_s_ < 0.0) {
-            throw std::runtime_error("payload/pulse_duration_s cannot be negative");
+    }
+
+    ~PayloadActuator() {
+        if (backend_ == "gpio") {
+            writeGpio(false, true);
         }
-        publisher_ = node.advertise<mavros_msgs::ActuatorControl>(topic, 5);
     }
 
     bool trigger(double now_s) {
-        if (triggered_) {
-            return false;
-        }
-        triggered_ = true;
-        active_ = enabled_;
-        neutral_pending_ = enabled_;
-        release_started_s_ = now_s;
-        return true;
+        return pulse_.trigger(now_s);
     }
 
     void update(double now_s) {
-        if (!enabled_ || (!active_ && !neutral_pending_)) {
+        const PayloadPulseCommand command = pulse_.update(now_s);
+        if (!enabled_ || command == PayloadPulseCommand::NONE) {
             return;
         }
-        if (active_ && now_s - release_started_s_ <= pulse_duration_s_) {
-            publish(release_value_);
-            return;
-        }
-        active_ = false;
-        if (neutral_pending_) {
-            publish(neutral_value_);
-            neutral_pending_ = false;
+        if (command == PayloadPulseCommand::RELEASE) {
+            writeRelease();
+        } else if (command == PayloadPulseCommand::NEUTRAL) {
+            writeNeutral();
         }
     }
 
     void reset() {
-        triggered_ = false;
-        active_ = false;
-        neutral_pending_ = false;
+        const PayloadPulseCommand command = pulse_.reset();
+        if (backend_ == "gpio") {
+            if (!writeGpio(false, true)) {
+                ROS_ERROR("[d_task_mission] failed to reset payload GPIO to low");
+            }
+        } else if (enabled_ && command == PayloadPulseCommand::NEUTRAL) {
+            publish(neutral_value_);
+        }
     }
 
     bool enabled() const { return enabled_; }
 
 private:
+    static double loadPulseDuration(ros::NodeHandle& private_node) {
+        double pulse_duration_s = 0.50;
+        private_node.param("payload/pulse_duration_s", pulse_duration_s, 0.50);
+        if (pulse_duration_s < 0.0) {
+            throw std::runtime_error("payload/pulse_duration_s cannot be negative");
+        }
+        return pulse_duration_s;
+    }
+
+    void writeRelease() {
+        if (backend_ == "gpio") {
+            if (!writeGpio(true)) {
+                ROS_ERROR("[d_task_mission] failed to set payload GPIO high");
+            }
+        } else {
+            publish(release_value_);
+        }
+    }
+
+    void writeNeutral() {
+        if (backend_ == "gpio") {
+            if (!writeGpio(false)) {
+                ROS_ERROR("[d_task_mission] failed to set payload GPIO low");
+            }
+        } else {
+            publish(neutral_value_);
+        }
+    }
+
+    bool setGpioOutputMode() const {
+        const std::string pin = std::to_string(gpio_wiringpi_pin_);
+        return runGpioCommand("mode", pin, "out");
+    }
+
+    bool writeGpio(bool release, bool force = false) {
+        const bool high_level = gpio_active_high_ ? release : !release;
+        if (!force && gpio_level_known_ && gpio_level_high_ == high_level) {
+            return true;
+        }
+        const std::string pin = std::to_string(gpio_wiringpi_pin_);
+        if (!runGpioCommand("write", pin, high_level ? "1" : "0")) {
+            return false;
+        }
+        gpio_level_known_ = true;
+        gpio_level_high_ = high_level;
+        return true;
+    }
+
+    static bool runGpioCommand(const char* command, const std::string& pin,
+                               const char* value) {
+        const pid_t child = fork();
+        if (child < 0) {
+            return false;
+        }
+        if (child == 0) {
+            execl("/usr/bin/gpio", "gpio", command, pin.c_str(), value,
+                  static_cast<char*>(nullptr));
+            _exit(127);
+        }
+
+        int status = 0;
+        pid_t result = -1;
+        do {
+            result = waitpid(child, &status, 0);
+        } while (result == -1 && errno == EINTR);
+        return result == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    }
+
     void publish(double channel_value) {
         mavros_msgs::ActuatorControl message;
         message.header.stamp = ros::Time::now();
@@ -135,15 +221,16 @@ private:
 
     ros::Publisher publisher_;
     bool enabled_ = false;
-    bool triggered_ = false;
-    bool active_ = false;
-    bool neutral_pending_ = false;
+    std::string backend_ = "mavros";
     int group_mix_ = 2;
     int channel_ = 0;
     double release_value_ = 1.0;
     double neutral_value_ = 0.0;
-    double pulse_duration_s_ = 0.50;
-    double release_started_s_ = 0.0;
+    int gpio_wiringpi_pin_ = 9;
+    bool gpio_active_high_ = true;
+    bool gpio_level_known_ = false;
+    bool gpio_level_high_ = false;
+    PayloadPulse pulse_;
 };
 
 class DTaskMissionNode {

@@ -120,10 +120,18 @@ roslaunch d_task_uav_control pixel_servo_debug.launch
 速度方向后再修改 `pixel_servo.body_*` 参数。视觉超过 `pixel_servo.source_timeout_s` 未更新时，
 调试与任务控制都会输出零像素修正，下降阶段会立即冻结。
 
-投放硬件尚未定型，因此 `payload.enabled` 默认为 `false`。此时完整任务流程会
-发布 `PAYLOAD_RELEASE_DRY_RUN` 事件，但不会向 PX4 输出通道发命令。确定接线、
-PX4 mixer/control allocation 和安全通道后，再配置 MAVROS
-`/mavros/actuator_control` 的 group、channel、释放值与脉冲时间。
+投放执行器由 Orange Pi 5 Ultra 的 40Pin 排针物理 16 脚控制，即
+`GPIO1_A3`（WiringOP 编号 `9`）。本机默认配置为 `payload.backend: gpio`、
+`payload.gpio_active_high: true` 和 `payload.pulse_duration_s: 5.0`：状态机仅在
+`RELEASE` 阶段把该脚输出高电平 5 秒，之后自动恢复低电平；节点启动、任务复位和
+节点退出时也会强制输出低电平。`payload.enabled: false` 时保留完整状态机，但只发布
+`PAYLOAD_RELEASE_DRY_RUN` 事件，不会输出高电平。
+
+物理 16 脚只连接投放驱动模块的 `IN`，物理 14 脚可连接驱动模块 `GND`；驱动模块
+电源必须按执行器额定电压单独供电，并与 Orange Pi 共地。严禁将电磁锁、继电器线圈或
+电机直接接到 Orange Pi GPIO。需要改用 PX4 辅助输出时，将 `payload.backend` 改为
+`mavros`，并继续使用已有的 `topic`、`group_mix`、`channel`、`release_value` 和
+`neutral_value` 参数。
 
 ## 关键状态与检查
 

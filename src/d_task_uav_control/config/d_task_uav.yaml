@@ -150,12 +150,15 @@ mission:
   drop_abort_distance_to_d_m: 0.10
   max_dynamic_landing_retries: 1
 
-# 投放硬件尚未确定，默认只走状态机并发布 DRY_RUN 事件。
+# Orange Pi 5 Ultra 物理 16 脚（GPIO1_A3，WiringOP 编号 9）控制投放驱动。
 payload:
-  enabled: false
+  enabled: true
+  backend: gpio
+  gpio_wiringpi_pin: 9
+  gpio_active_high: true
   topic: /mavros/actuator_control
   group_mix: 2
   channel: 0
   release_value: 1.0
   neutral_value: 0.0
-  pulse_duration_s: 0.50
+  pulse_duration_s: 5.0
