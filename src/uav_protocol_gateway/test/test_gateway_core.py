@@ -25,7 +25,7 @@ from d_task_protocol import (  # noqa: E402
     build_uav_state,
 )
 from d_task_protocol.endpoint import ProtocolEndpoint  # noqa: E402
-from d_task_protocol.mqtt_bus import MqttBus, MqttConfig  # noqa: E402
+from d_task_protocol.mqtt_bus import MqttBus, MqttConfig, _topic_matches  # noqa: E402
 from d_task_protocol.topics import Topics  # noqa: E402
 from uav_protocol_gateway.gateway_core import UavGatewayCore  # noqa: E402
 
@@ -70,9 +70,11 @@ class GatewayCoreTests(unittest.TestCase):
         command_id="config-1",
     ):
         return build_mission_config(
-            self.ground_factory,
+            self.car_factory,
             mission_id,
             mode,
+            selected_by="car_button",
+            config_reason="button_mode_select",
             command_id=command_id,
         )
 
@@ -99,6 +101,26 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertEqual(result.actions[0].message.payload["result"], "accepted")
         self.assertEqual(self.core.configured_mission_id, "mission-0001")
         self.assertFalse(self.core.positioning_ready)
+
+    def test_rejects_ground_as_the_mission_config_authority(self):
+        message = build_mission_config(
+            self.ground_factory,
+            "mission-ground",
+            Mode.DROP,
+            selected_by="ground_web",
+            config_reason="web_select",
+            command_id="config-ground",
+        )
+
+        result = self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(message),
+            now_ms=self.clock[0],
+        )
+
+        self.assertTrue(result.rejected)
+        self.assertEqual(result.reason, "unexpected_sender_or_type")
+        self.assertEqual(self.core.configured_mission_id, "")
 
     def test_drop_descend_is_a_valid_uav_state(self):
         message = build_uav_state(
@@ -386,20 +408,20 @@ class FakeBus:
 
     def emit(self, topic, message):
         for topic_filter, callback, _qos in list(self.subscriptions):
-            if topic_filter == topic:
+            if _topic_matches(topic_filter, topic):
                 callback(topic, message)
 
 
 class EndpointTests(unittest.TestCase):
-    def test_subscribes_to_concrete_topics(self):
+    def test_subscribes_once_to_wildcard_at_the_highest_qos(self):
         bus = FakeBus()
         endpoint = ProtocolEndpoint(bus)
         endpoint.subscribe(Topics.MISSION_START, lambda *_args: None, qos=1)
         endpoint.subscribe(Topics.CAR_POSE, lambda *_args: None, qos=0)
 
         self.assertEqual(
-            [item[0] for item in bus.subscriptions],
-            [Topics.MISSION_START, Topics.CAR_POSE],
+            [(item[0], item[2]) for item in bus.subscriptions],
+            [("#", 1)],
         )
 
     def test_can_dispatch_expired_start_for_expired_ack(self):

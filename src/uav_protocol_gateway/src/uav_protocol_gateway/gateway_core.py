@@ -53,7 +53,7 @@ class UavGatewayCore:
     """Pure protocol state used by the ROS1 gateway node."""
 
     _EXPECTED = {
-        Topics.MISSION_CONFIG: ("mission_config", "ground"),
+        Topics.MISSION_CONFIG: ("mission_config", "car"),
         Topics.MISSION_START: ("mission_start", "car"),
         Topics.CAR_POSE: ("car_pose", "car"),
         Topics.CAR_EVENT: ("event", "car"),

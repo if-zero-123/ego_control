@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Any, Dict, Mapping, Optional, Union
 
@@ -17,6 +18,14 @@ class Sender(str, Enum):
 class Mode(str, Enum):
     DROP = "DROP"
     DYNAMIC_LANDING = "DYNAMIC_LANDING"
+
+
+class GroundCommandAction(str, Enum):
+    SELECT = "SELECT"
+    START = "START"
+    START_CAR_ONLY = "START_CAR_ONLY"
+    ABORT = "ABORT"
+    RESET_LOCALIZATION = "RESET_LOCALIZATION"
 
 
 class AckResult(str, Enum):
@@ -36,12 +45,15 @@ class RouteSegment(str, Enum):
 
 
 class CarState(str, Enum):
+    NOT_READY = "NOT_READY"
+    LOCALIZATION_INIT = "LOCALIZATION_INIT"
     READY = "READY"
     RUN_AB = "RUN_AB"
     RUN_BC = "RUN_BC"
     RUN_CD = "RUN_CD"
     RUN_DA = "RUN_DA"
     COMPLETE = "COMPLETE"
+    ABORT = "ABORT"
     FAULT = "FAULT"
 
 
@@ -62,6 +74,7 @@ class UavState(str, Enum):
     DESCEND_HIGH = "DESCEND_HIGH"
     DESCEND_LOW = "DESCEND_LOW"
     LAND_ON_PLATFORM = "LAND_ON_PLATFORM"
+    PLATFORM_LANDED = "PLATFORM_LANDED"
     PLATFORM_HOLD = "PLATFORM_HOLD"
     PLATFORM_TAKEOFF = "PLATFORM_TAKEOFF"
     CLIMB_TO_CRUISE = "CLIMB_TO_CRUISE"
@@ -84,8 +97,12 @@ def _require(payload: Mapping[str, Any], *fields: str) -> None:
 
 
 def _number(value: Any, field: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ProtocolError(f"{field} must be numeric")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
+        raise ProtocolError(f"{field} must be a finite number")
 
 
 def _bool(value: Any, field: str) -> None:
@@ -103,10 +120,21 @@ def _pose(payload: Mapping[str, Any], prefix: str = "") -> None:
 def validate_payload(message_type: str, payload: Mapping[str, Any]) -> None:
     if not isinstance(payload, Mapping):
         raise ProtocolError("payload must be an object")
-    if message_type in {"ground_start_request", "mission_config"}:
+    if message_type == "ground_start_request":
         _require(payload, "mode", "requested_at_ms")
         if payload["mode"] not in {item.value for item in Mode}:
             raise ProtocolError("invalid mission mode")
+        if not isinstance(payload["requested_at_ms"], int):
+            raise ProtocolError("requested_at_ms must be integer")
+        action = payload.get("action", GroundCommandAction.SELECT.value)
+        if action not in {item.value for item in GroundCommandAction}:
+            raise ProtocolError("invalid ground command action")
+    elif message_type == "mission_config":
+        _require(payload, "mode", "selected_by", "config_reason", "requested_at_ms")
+        if payload["mode"] not in {item.value for item in Mode}:
+            raise ProtocolError("invalid mission mode")
+        if payload["selected_by"] not in {"car_button", "ground_web"}:
+            raise ProtocolError("invalid mission config source")
         if not isinstance(payload["requested_at_ms"], int):
             raise ProtocolError("requested_at_ms must be integer")
     elif message_type == "mission_start":
@@ -119,15 +147,15 @@ def validate_payload(message_type: str, payload: Mapping[str, Any]) -> None:
         _number(payload["car_start_pose"]["x"], "car_start_pose.x")
         _number(payload["car_start_pose"]["y"], "car_start_pose.y")
         _number(payload["car_start_pose"]["yaw"], "car_start_pose.yaw")
-    elif message_type == "start_ack":
-        _require(payload, "command", "result", "reason_code")
-        if payload["command"] != "mission_start":
-            raise ProtocolError("unsupported ACK command")
-        if payload["result"] not in {item.value for item in AckResult}:
-            raise ProtocolError("invalid ACK result")
     elif message_type == "config_ack":
         _require(payload, "command", "result", "reason_code")
         if payload["command"] != "mission_config":
+            raise ProtocolError("unsupported ACK command")
+        if payload["result"] not in {item.value for item in AckResult}:
+            raise ProtocolError("invalid ACK result")
+    elif message_type == "start_ack":
+        _require(payload, "command", "result", "reason_code")
+        if payload["command"] != "mission_start":
             raise ProtocolError("unsupported ACK command")
         if payload["result"] not in {item.value for item in AckResult}:
             raise ProtocolError("invalid ACK result")
@@ -167,6 +195,26 @@ def validate_payload(message_type: str, payload: Mapping[str, Any]) -> None:
         _bool(payload["odom_valid"], "odom_valid")
         if payload["route_segment"] not in {item.value for item in RouteSegment}:
             raise ProtocolError("invalid route_segment")
+    elif message_type == "car_state":
+        _require(
+            payload,
+            "state",
+            "mode",
+            "localization_state",
+            "route_segment",
+            "start_allowed",
+            "start_block_reason",
+            "mission_elapsed_ms",
+            "trigger_source",
+        )
+        if payload["state"] not in {item.value for item in CarState}:
+            raise ProtocolError("invalid car state")
+        if payload["mode"] not in {item.value for item in Mode}:
+            raise ProtocolError("invalid mode")
+        if payload["route_segment"] not in {item.value for item in RouteSegment}:
+            raise ProtocolError("invalid route_segment")
+        _bool(payload["start_allowed"], "start_allowed")
+        _number(payload["mission_elapsed_ms"], "mission_elapsed_ms")
     elif message_type == "uav_state":
         _require(
             payload,
@@ -244,6 +292,8 @@ def validate_payload(message_type: str, payload: Mapping[str, Any]) -> None:
         _require(payload, "event")
     elif message_type == "fault":
         _require(payload, "fault_code", "severity", "fault_text")
+    else:
+        raise ProtocolError(f"unsupported message type: {message_type}")
 
 
 def _make(
@@ -272,6 +322,7 @@ def build_ground_start_request(
     mode: Union[Mode, str],
     command_id: str,
     requested_at_ms: Optional[int] = None,
+    action: Union[GroundCommandAction, str] = GroundCommandAction.SELECT,
 ) -> Envelope:
     return _make(
         factory,
@@ -280,6 +331,7 @@ def build_ground_start_request(
         {
             "mode": mode.value if isinstance(mode, Mode) else mode,
             "requested_at_ms": now_ms() if requested_at_ms is None else requested_at_ms,
+            "action": action.value if isinstance(action, GroundCommandAction) else action,
         },
         ttl_ms=3000,
         command_id=command_id,
@@ -290,6 +342,8 @@ def build_mission_config(
     factory: EnvelopeFactory,
     mission_id: str,
     mode: Union[Mode, str],
+    selected_by: str,
+    config_reason: str,
     command_id: str,
     requested_at_ms: Optional[int] = None,
 ) -> Envelope:
@@ -299,9 +353,11 @@ def build_mission_config(
         mission_id,
         {
             "mode": mode.value if isinstance(mode, Mode) else mode,
+            "selected_by": selected_by,
+            "config_reason": config_reason,
             "requested_at_ms": now_ms() if requested_at_ms is None else requested_at_ms,
         },
-        ttl_ms=3000,
+        ttl_ms=5000,
         command_id=command_id,
     )
 
@@ -372,6 +428,10 @@ def build_config_ack(
 
 def build_car_pose(factory: EnvelopeFactory, mission_id: str, **payload: Any) -> Envelope:
     return _make(factory, "car_pose", mission_id, payload, ttl_ms=500)
+
+
+def build_car_state(factory: EnvelopeFactory, mission_id: str, **payload: Any) -> Envelope:
+    return _make(factory, "car_state", mission_id, payload, ttl_ms=1000)
 
 
 def build_uav_state(factory: EnvelopeFactory, mission_id: str, **payload: Any) -> Envelope:

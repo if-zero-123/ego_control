@@ -7,6 +7,7 @@ class Topics:
     MISSION_START = "d_task/v1/mission/start"
     UAV_ACK = "d_task/v1/uav/ack"
     CAR_POSE = "d_task/v1/car/pose"
+    CAR_STATE = "d_task/v1/car/state"
     UAV_STATE = "d_task/v1/uav/state"
     UAV_TRACKING = "d_task/v1/uav/tracking"
     CAR_HEALTH = "d_task/v1/car/health"
@@ -26,6 +27,7 @@ TOPIC_MESSAGE_TYPES = {
     Topics.MISSION_START: {"mission_start"},
     Topics.UAV_ACK: {"config_ack", "start_ack"},
     Topics.CAR_POSE: {"car_pose"},
+    Topics.CAR_STATE: {"car_state"},
     Topics.UAV_STATE: {"uav_state"},
     Topics.UAV_TRACKING: {"uav_tracking"},
     Topics.CAR_HEALTH: {"health"},

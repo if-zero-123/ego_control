@@ -98,7 +98,9 @@ class MqttBus:
     ) -> None:
         if qos not in (0, 1, 2):
             raise ValueError("qos must be 0, 1, or 2")
-        self._callbacks.append((topic_filter, callback))
+        callback_entry = (topic_filter, callback)
+        if callback_entry not in self._callbacks:
+            self._callbacks.append(callback_entry)
         self._subscriptions[topic_filter] = qos
         if self.connected:
             self._client.subscribe(topic_filter, qos=qos)
@@ -140,6 +142,11 @@ class MqttBus:
             message = ProtocolCodec.decode(msg.payload)
         except (ProtocolError, UnicodeDecodeError) as exc:
             self.last_error = f"decode_error={exc}"
+            return
+        if not topic_accepts_message(msg.topic, message.type):
+            self.last_error = (
+                f"topic_type_mismatch={msg.topic}:{message.type}"
+            )
             return
         for topic_filter, callback in self._callbacks:
             if _topic_matches(topic_filter, msg.topic):

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Set
+from typing import Callable, List, Optional
 
 from .dedupe import DeliveryStatus, GuardDecision, MessageGuard
 from .envelope import Envelope
 from .mqtt_bus import MqttBus, _topic_matches
+from .topics import topic_accepts_message
 
 
 Handler = Callable[[str, Envelope, GuardDecision], None]
@@ -28,7 +29,8 @@ class ProtocolEndpoint:
         self.bus = bus
         self.guard = guard or MessageGuard()
         self._subscriptions: List[_Subscription] = []
-        self._bus_topic_filters: Set[str] = set()
+        self._all_topics_subscribed = False
+        self._all_topics_qos = -1
 
     def subscribe(
         self,
@@ -38,6 +40,8 @@ class ProtocolEndpoint:
         include_duplicates: bool = False,
         include_rejected: bool = False,
     ) -> None:
+        if qos not in (0, 1, 2):
+            raise ValueError("qos must be 0, 1, or 2")
         subscription = _Subscription(
             topic_filter,
             handler,
@@ -45,14 +49,20 @@ class ProtocolEndpoint:
             include_rejected,
         )
         self._subscriptions.append(subscription)
-        if topic_filter not in self._bus_topic_filters:
-            self.bus.subscribe(topic_filter, self._dispatch, qos=qos)
-            self._bus_topic_filters.add(topic_filter)
+        if not self._all_topics_subscribed or qos > self._all_topics_qos:
+            # One callback prevents duplicate dispatch when several filters
+            # match the same MQTT message. Re-subscribe when a command filter
+            # needs a higher QoS so the internal wildcard cannot downgrade it.
+            self.bus.subscribe("#", self._dispatch, qos=qos)
+            self._all_topics_subscribed = True
+            self._all_topics_qos = qos
 
     def publish(self, topic: str, message: Envelope, qos: int = 0, retain: bool = False) -> None:
         self.bus.publish(topic, message, qos=qos, retain=retain)
 
     def _dispatch(self, topic: str, message: Envelope) -> None:
+        if not topic_accepts_message(topic, message.type):
+            return
         decision = self.guard.check(message)
         for subscription in self._subscriptions:
             if _topic_matches(subscription.topic_filter, topic):

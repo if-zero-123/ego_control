@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Union
 
-from .envelope import Envelope, ProtocolError
+from .envelope import Envelope
 from .messages import validate_payload
 
 

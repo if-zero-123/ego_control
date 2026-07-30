@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+import queue
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -142,11 +143,15 @@ class UavProtocolGateway:
         self.fault_text = ""
         self._stale_pose_fault_sent = False
         self._last_positioning_state = ""
+        self._mqtt_inbox = queue.SimpleQueue()
+        self._mqtt_outbox = queue.SimpleQueue()
 
         self._advertise_ros()
         self._subscribe_ros()
         self._connect_mqtt()
 
+        self.mqtt_timer = rospy.Timer(
+            rospy.Duration(0.01), self._mqtt_io_timer_cb)
         self.state_timer = rospy.Timer(rospy.Duration(0.2), self._state_timer_cb)
         self.tracking_timer = rospy.Timer(rospy.Duration(0.2), self._tracking_timer_cb)
         self.health_timer = rospy.Timer(rospy.Duration(1.0), self._health_timer_cb)
@@ -336,6 +341,45 @@ class UavProtocolGateway:
             rospy.logerr("[uav_protocol_gateway] MQTT adapter start failed: %s", exc)
 
     def _mqtt_message_cb(self, topic, message, decision) -> None:
+        # Paho invokes this on its network thread.  Do not publish ROS or MQTT
+        # messages here: a high-rate car pose stream can otherwise block the
+        # keepalive loop through cross-thread lock ordering.
+        self._mqtt_inbox.put((topic, message, decision))
+
+    def _mqtt_io_timer_cb(self, _event) -> None:
+        # ROS state transitions are handled first.  All resulting MQTT writes
+        # are queued, so no Paho call can run while the gateway state lock is
+        # held.  This prevents lock inversion under the 20 Hz car pose stream.
+        for _ in range(50):
+            try:
+                topic, message, decision = self._mqtt_inbox.get_nowait()
+            except queue.Empty:
+                break
+            self._handle_mqtt_message(topic, message, decision)
+
+        for _ in range(100):
+            try:
+                topic, message, qos, retain = self._mqtt_outbox.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self.endpoint.publish(
+                    topic,
+                    message,
+                    qos=qos,
+                    retain=retain,
+                )
+            except Exception as exc:
+                with self.lock:
+                    self.fault_code = 1101
+                    self.fault_text = "mqtt_publish_failed: " + str(exc)
+                rospy.logwarn_throttle(
+                    2.0,
+                    "[uav_protocol_gateway] MQTT publish failed: %s",
+                    exc,
+                )
+
+    def _handle_mqtt_message(self, topic, message, decision) -> None:
         with self.lock:
             result = self.core.receive_checked(
                 topic,
@@ -377,17 +421,9 @@ class UavProtocolGateway:
     def _publish_action(self, action: CoreAction) -> None:
         if not action.topic:
             return
-        try:
-            self.endpoint.publish(
-                action.topic,
-                action.message,
-                qos=action.qos,
-                retain=action.retain,
-            )
-        except Exception as exc:
-            self.fault_code = 1101
-            self.fault_text = "mqtt_publish_failed: " + str(exc)
-            rospy.logwarn_throttle(2.0, "[uav_protocol_gateway] publish failed: %s", exc)
+        self._mqtt_outbox.put(
+            (action.topic, action.message, action.qos, action.retain)
+        )
 
     def _publish_car_pose(self, message) -> None:
         payload = message.payload
@@ -606,6 +642,10 @@ class UavProtocolGateway:
                 "online": True,
                 "mqtt_connected": bool(self.bus.connected),
                 "localization_ok": odom_ok,
+                "positioning_ready": bool(
+                    self.core.positioning_ready
+                    and self.core.configured_mission_id == mission_id
+                ),
                 "camera_ok": bool(camera_ok),
                 "vision_ok": bool(vision_ok),
                 "fault_code": self.fault_code,
@@ -750,12 +790,7 @@ class UavProtocolGateway:
         self._safe_publish(Topics.SAFETY_FAULT, message, qos=1)
 
     def _safe_publish(self, topic: str, message, qos: int = 0) -> None:
-        try:
-            self.endpoint.publish(topic, message, qos=qos, retain=False)
-        except Exception as exc:
-            self.fault_code = 1101
-            self.fault_text = "mqtt_publish_failed: " + str(exc)
-            rospy.logwarn_throttle(2.0, "[uav_protocol_gateway] MQTT publish failed: %s", exc)
+        self._mqtt_outbox.put((topic, message, qos, False))
 
     def _age_ms(self, stamp: Optional[int]) -> Optional[int]:
         if stamp is None:

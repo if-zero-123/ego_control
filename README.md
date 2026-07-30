@@ -38,8 +38,9 @@
    ```
 
 `d_task_uav.launch` 不启动 MID360 驱动，也不重复直接启动 mapping launch。
-地面站选择任务并发送 `mission/config` 后，`fastlio_supervisor` 才会先停止
-自己管理的旧进程，再启动：
+实体短按或地面站 `SELECT` 都先交给小车，由小车生成 mission ID 并发送
+`mission_config(sender=car)`。无人机收到该配置后，`fastlio_supervisor`
+才会先停止自己管理的旧进程，再启动：
 
 ```bash
 roslaunch lidar_to_mavros fastlio_to_px4_mid360_direct.launch \
@@ -53,6 +54,10 @@ roslaunch lidar_to_mavros fastlio_to_px4_mid360_direct.launch \
 当 `/Odometry`、`/mavros/vision_pose/pose` 和 PX4 odom 连续稳定 3 秒后，
 系统记录 H 点并进入 `WAIT_START`。正式起飞只接受小车实体按键产生的
 `mission/start`，且 `start_reason` 必须为 `car_button`。
+UAV health 同时发布 `positioning_ready=true`，小车不会再把“旧 odom 仍新鲜”
+误判为本次任务已经准备完成。
+地面站 `START_CAR_ONLY` 只在小车侧打开调试任务，不会向无人机发布 start。
+无人机内置协议与车端共同实现版本均为 `1.1.0`。
 
 ## 任务流程
 
