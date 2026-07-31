@@ -236,17 +236,15 @@ TEST(MissionController, DropReturnsHomeWhenSearchEndpointHasNoDetection) {
     EXPECT_EQ(command.fault_text, "platform_not_found_on_search_path");
 }
 
-TEST(MissionController, DropReleasesAtConfiguredAprilTagDistance) {
+TEST(MissionController, DropReleasesAtCruiseHeightWithOuterTags) {
     MissionController controller(fastConfig());
     prepareAndStart(controller, MissionMode::DROP);
     MissionInput input = nominalInput();
     advanceToFollow(controller, input);
 
-    controller.update(input);
-    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
-    input.uav_z = input.platform_z + fastConfig().drop_height_m;
-    input.apriltag_plane_distance_m =
-        fastConfig().drop_apriltag_distance_m;
+    input.uav_z = fastConfig().cruise_height_m;
+    input.apriltag_range_valid = false;
+    input.apriltag_center_tag_visible = false;
     input.now_s += 0.1;
     controller.update(input);
     ASSERT_EQ(controller.state(), MissionState::RELEASE);
@@ -257,91 +255,93 @@ TEST(MissionController, DropReleasesAtConfiguredAprilTagDistance) {
     EXPECT_LT(input.distance_to_d_m, 10.0);
 }
 
-TEST(MissionController, DropDoesNotReleaseWithoutFreshAprilTagRange) {
+TEST(MissionController, DropDoesNotReleaseWithoutPlatformAlignment) {
     MissionController controller(fastConfig());
     prepareAndStart(controller, MissionMode::DROP);
     MissionInput input = nominalInput();
     advanceToFollow(controller, input);
 
+    input.platform_x += 0.20;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::FOLLOW_CAR);
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
+    EXPECT_FALSE(command.release_payload);
+}
+
+TEST(MissionController, DropDoesNotReleaseBeforeCruiseHeight) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+
+    input.uav_z = 1.20;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::FOLLOW_CAR);
+    EXPECT_FALSE(command.release_payload);
+}
+
+TEST(MissionController, DropDoesNotRequireCenterTagOrRange) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+
+    input.uav_z = fastConfig().cruise_height_m;
+    input.apriltag_range_valid = false;
+    input.apriltag_center_tag_visible = false;
+    input.now_s += 0.1;
     controller.update(input);
-    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
-    input.uav_z = input.platform_z + fastConfig().drop_height_m;
+
+    EXPECT_EQ(controller.state(), MissionState::RELEASE);
+}
+
+TEST(MissionController, DropKeepsCruiseHeightBeforeRelease) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+
+    input.uav_z = fastConfig().cruise_height_m;
+    input.apriltag_center_tag_visible = false;
     input.apriltag_range_valid = false;
     input.now_s += 0.1;
     const MissionCommand command = controller.update(input);
 
-    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
-    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_EQ(controller.state(), MissionState::RELEASE);
     EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
     EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
     EXPECT_FALSE(command.release_payload);
 }
 
-TEST(MissionController, DropDoesNotReleaseFromOuterTagRange) {
-    MissionController controller(fastConfig());
-    prepareAndStart(controller, MissionMode::DROP);
-    MissionInput input = nominalInput();
-    advanceToFollow(controller, input);
-
-    controller.update(input);
-    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
-    input.uav_z = input.platform_z + fastConfig().drop_height_m;
-    input.apriltag_plane_distance_m =
-        fastConfig().drop_apriltag_distance_m;
-    input.apriltag_center_tag_visible = false;
-    input.now_s += 0.1;
-    const MissionCommand command = controller.update(input);
-
-    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
-    EXPECT_FALSE(command.release_payload);
-    EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
-    EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
-}
-
-TEST(MissionController, DropDoesNotReleaseAboveAprilTagDistance) {
-    MissionController controller(fastConfig());
-    prepareAndStart(controller, MissionMode::DROP);
-    MissionInput input = nominalInput();
-    advanceToFollow(controller, input);
-
-    controller.update(input);
-    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
-    input.uav_z = input.platform_z + fastConfig().drop_height_m;
-    input.apriltag_plane_distance_m =
-        fastConfig().drop_apriltag_distance_m + 0.001;
-    input.now_s += 0.1;
-    const MissionCommand command = controller.update(input);
-
-    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
-    EXPECT_LT(command.target_vz, 0.0);
-    EXPECT_FALSE(command.release_payload);
-}
-
-TEST(MissionController, DropHoldsHeightWhileDistanceGateSettles) {
+TEST(MissionController, DropAlignmentStabilityUsesCruiseHeight) {
     MissionControllerConfig config = fastConfig();
-    config.phase_stable_time_s = 0.50;
+    config.follow_stable_time_s = 0.50;
     MissionController controller(config);
     prepareAndStart(controller, MissionMode::DROP);
     MissionInput input = nominalInput();
     advanceToFollow(controller, input);
 
-    controller.update(input);
-    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
-    input.uav_z = 0.82;
-    input.apriltag_plane_distance_m = config.drop_apriltag_distance_m;
+    input.uav_z = config.cruise_height_m;
+    input.apriltag_center_tag_visible = false;
+    input.apriltag_range_valid = false;
     input.now_s += 0.1;
     MissionCommand command = controller.update(input);
 
     ASSERT_TRUE(command.setpoint_valid);
     EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
     EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
-    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    EXPECT_EQ(controller.state(), MissionState::FOLLOW_CAR);
 
     input.now_s += 0.49;
     command = controller.update(input);
     EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
     EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
-    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    EXPECT_EQ(controller.state(), MissionState::FOLLOW_CAR);
 
     input.now_s += 0.01;
     controller.update(input);
@@ -638,12 +638,6 @@ TEST(MissionController, ReleaseKeepsPixelCorrectionWhileVisible) {
     prepareAndStart(controller, MissionMode::DROP);
     MissionInput input = nominalInput();
     advanceToFollow(controller, input);
-    controller.update(input);
-    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
-    input.uav_z = input.platform_z + fastConfig().drop_height_m;
-    input.apriltag_plane_distance_m =
-        fastConfig().drop_apriltag_distance_m;
-    input.now_s += 0.1;
     controller.update(input);
     ASSERT_EQ(controller.state(), MissionState::RELEASE);
     input.pixel_world_vx = 0.10;

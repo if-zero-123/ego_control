@@ -504,18 +504,24 @@ MissionCommand MissionController::update(const MissionInput& input) {
             tracking_loss_start_s_ = -1.0;
             commandFollowOverride(
                 input, cruiseZ(), 0.0, input.pixel_valid, output);
+            const bool at_cruise_height =
+                std::abs(input.uav_z - cruiseZ())
+                    <= config_.height_tolerance_m;
             const bool force_drop = mode_ == MissionMode::DROP
                 && input.pixel_valid && input.pixel_aligned
                 && aligned(input)
+                && at_cruise_height
                 && input.distance_to_d_m
                     <= config_.drop_force_descent_distance_to_d_m;
             if (conditionHeld(input.pixel_valid && input.pixel_aligned
-                                  && aligned(input),
+                                  && aligned(input)
+                                  && (mode_ != MissionMode::DROP
+                                      || at_cruise_height),
                               input.now_s,
                               config_.follow_stable_time_s)
                 || force_drop) {
                 transition(mode_ == MissionMode::DROP
-                               ? MissionState::DROP_DESCEND
+                               ? MissionState::RELEASE
                                : MissionState::DESCEND_HIGH,
                            input.now_s);
             }
@@ -575,7 +581,7 @@ MissionCommand MissionController::update(const MissionInput& input) {
             }
             if (input.platform_valid && input.pixel_valid) {
                 commandFollowOverride(
-                    input, input.platform_z + config_.drop_height_m,
+                    input, cruiseZ(),
                     0.0, true, output);
             } else {
                 resetFollowCommand();

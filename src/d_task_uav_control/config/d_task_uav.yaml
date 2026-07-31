@@ -167,7 +167,7 @@ mission:
   search_start_y_m: -0.379
   search_forward_distance_m: 1.50
 
-  # DROP_DESCEND 下降至 ID 0 码面距离 0.30m，稳定对中后投递。
+  # DROP 在 1.50m 巡航伴飞高度直接投递；以下旧参数保留用于兼容配置。
   drop_height_m: 0.30
   drop_apriltag_distance_m: 0.30
   high_descent_height_m: 0.80

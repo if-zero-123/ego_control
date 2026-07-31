@@ -55,7 +55,8 @@ std::vector<int> layoutIds(const std::vector<AprilTagLayoutEntry>& layout) {
 
 bool closeRangeState(const std::string& state) {
     static const std::set<std::string> states{
-        "DROP_DESCEND", "RELEASE", "DESCEND_HIGH", "DESCEND_LOW",
+        "FOLLOW_CAR", "DROP_DESCEND", "RELEASE", "DESCEND_HIGH",
+        "DESCEND_LOW",
         "LAND_ON_PLATFORM"};
     return states.count(state) != 0U;
 }

@@ -179,7 +179,7 @@ TEST(AprilTagBoardPose, RejectsOneGeometricallyInconsistentOuterTag) {
     EXPECT_NEAR(estimate.translation_m[2], expected_translation[2], 1e-3);
 }
 
-TEST(AprilTagImagePipeline, FiltersCenterTagOutOfCruiseMeasurements) {
+TEST(AprilTagImagePipeline, FiltersCenterTagOnlyForOuterPolicy) {
     std::vector<AprilTagDetection> detections(3);
     detections[0].found = true;
     detections[0].id = 0;
