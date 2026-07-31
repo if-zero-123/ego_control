@@ -85,7 +85,8 @@ private:
     }
 
     void detectionCallback(const PlatformDetection::ConstPtr& message) {
-        if (!message->found) {
+        last_input_predicted_ = message->found && message->predicted;
+        if (!message->found || message->predicted) {
             return;
         }
         servo_.update(PixelMeasurement{
@@ -117,6 +118,7 @@ private:
         Json::Value debug;
         debug["valid"] = state.valid;
         debug["yaw_valid"] = has_odom_;
+        debug["input_predicted"] = last_input_predicted_;
         debug["error"]["u"] = state.error_u;
         debug["error"]["v"] = state.error_v;
         debug["body_velocity"]["x"] = state.body_vx;
@@ -142,6 +144,7 @@ private:
     ros::Publisher status_publisher_;
     ros::Timer timer_;
     bool has_odom_ = false;
+    bool last_input_predicted_ = false;
     double yaw_rad_ = 0.0;
 };
 

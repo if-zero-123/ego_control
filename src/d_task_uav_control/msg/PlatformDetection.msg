@@ -1,5 +1,7 @@
 std_msgs/Header header
 bool found
+bool predicted
+float32 measurement_age_s
 int32 class_id
 float32 confidence
 float32 center_u

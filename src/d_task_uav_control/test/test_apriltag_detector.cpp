@@ -25,6 +25,8 @@ TEST(AprilTagDetector, DetectsConfigured36h11IdZero) {
     const AprilTagDetection detection = detector.detect(markerCanvas(0));
 
     ASSERT_TRUE(detection.found);
+    EXPECT_FALSE(detection.predicted);
+    EXPECT_DOUBLE_EQ(detection.measurement_age_s, 0.0);
     EXPECT_EQ(detection.id, 0);
     EXPECT_NEAR(detection.center.x, 159.5, 1.0);
     EXPECT_NEAR(detection.center.y, 159.5, 1.0);

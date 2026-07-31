@@ -548,7 +548,7 @@ private:
     }
 
     void platformDetectionCallback(const PlatformDetection::ConstPtr& message) {
-        if (!message->found) {
+        if (!message->found || message->predicted) {
             return;
         }
         pixel_servo_.update(PixelMeasurement{

@@ -80,3 +80,21 @@ def test_measured_intrinsics_match_half_meter_tag_sample():
     assert matrix[2] == 319.5
     assert matrix[5] == 239.5
     assert distortion == [0.0, 0.0, 0.0, 0.0, 0.0]
+
+
+def test_apriltag_prediction_is_bounded_and_explicitly_marked():
+    config = yaml.safe_load(
+        (PACKAGE_ROOT / 'config' / 'd_task_uav.yaml').read_text()
+    )
+    apriltag = config['apriltag']
+    message_definition = (
+        PACKAGE_ROOT / 'msg' / 'PlatformDetection.msg'
+    ).read_text()
+
+    assert 0.0 < apriltag['prediction_timeout_s'] <= 0.20
+    assert 0.0 < apriltag['track_filter_alpha'] <= 1.0
+    assert 0.0 <= apriltag['track_filter_beta'] <= 1.0
+    assert apriltag['max_velocity_px_s'] > 0.0
+    assert apriltag['reacquire_distance_px'] > 0.0
+    assert 'bool predicted' in message_definition
+    assert 'float32 measurement_age_s' in message_definition

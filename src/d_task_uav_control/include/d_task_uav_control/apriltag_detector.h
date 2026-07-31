@@ -10,6 +10,8 @@ namespace d_task_uav_control {
 
 struct AprilTagDetection {
     bool found = false;
+    bool predicted = false;
+    double measurement_age_s = 0.0;
     int id = -1;
     float confidence = 0.0F;
     cv::Point2f center;

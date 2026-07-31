@@ -41,6 +41,7 @@ include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${Open
 
 add_library(d_task_apriltag_detector
   src/apriltag_detector.cpp
+  src/apriltag_track_filter.cpp
 )
 target_link_libraries(d_task_apriltag_detector ${OpenCV_LIBRARIES})
 
@@ -175,6 +176,13 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(test_apriltag_detector test/test_apriltag_detector.cpp)
   if(TARGET test_apriltag_detector)
     target_link_libraries(test_apriltag_detector
+      d_task_apriltag_detector
+      ${OpenCV_LIBRARIES})
+  endif()
+  catkin_add_gtest(test_apriltag_track_filter
+    test/test_apriltag_track_filter.cpp)
+  if(TARGET test_apriltag_track_filter)
+    target_link_libraries(test_apriltag_track_filter
       d_task_apriltag_detector
       ${OpenCV_LIBRARIES})
   endif()

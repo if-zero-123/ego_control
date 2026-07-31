@@ -86,7 +86,8 @@ AprilTagPoseEstimate estimateAprilTagPose(
     const cv::Mat& camera_matrix,
     const cv::Mat& distortion_coefficients) {
     AprilTagPoseEstimate output;
-    if (!detection.found || detection.corners.size() != 4U
+    if (!detection.found || detection.predicted
+        || detection.corners.size() != 4U
         || !std::isfinite(tag_size_m) || tag_size_m <= 0.0
         || camera_matrix.rows != 3 || camera_matrix.cols != 3) {
         return output;

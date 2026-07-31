@@ -213,6 +213,7 @@ private:
         last_vision_accepted_s_ = -1.0;
         last_detection_received_s_ = -1.0;
         last_detection_found_ = false;
+        last_detection_predicted_ = false;
         ROS_INFO("[platform_tracking] tracker reset for mission configuration");
     }
 
@@ -251,9 +252,10 @@ private:
         const double now_s = ros::Time::now().toSec();
         last_detection_received_s_ = now_s;
         last_detection_found_ = message->found;
+        last_detection_predicted_ = message->found && message->predicted;
         last_center_u_ = message->center_u;
         last_center_v_ = message->center_v;
-        if (!message->found || !use_visual_projection_
+        if (!message->found || message->predicted || !use_visual_projection_
             || !has_uav_odom_ || !projector_) {
             return;
         }
@@ -297,6 +299,7 @@ private:
         const bool odom_fresh = has_uav_odom_
             && now_s - last_uav_odom_received_s_ <= uav_odom_timeout_s_;
         const bool vision_detected = last_detection_found_
+            && !last_detection_predicted_
             && last_detection_received_s_ >= 0.0
             && now_s - last_detection_received_s_ <= sourceTimeout();
 
@@ -345,6 +348,7 @@ private:
             ? "INVALID"
             : (vision_detected ? "LOCKED" : "PREDICTED");
         tracking["detected"] = vision_detected;
+        tracking["detection_predicted"] = last_detection_predicted_;
         tracking["confidence"] = state.confidence;
         tracking["pixel_center"]["u"] = last_center_u_;
         tracking["pixel_center"]["v"] = last_center_v_;
@@ -406,6 +410,7 @@ private:
     bool use_camera_info_ = true;
     bool use_visual_projection_ = false;
     bool last_detection_found_ = false;
+    bool last_detection_predicted_ = false;
     double last_uav_odom_received_s_ = -1.0;
     double last_detection_received_s_ = -1.0;
     double last_vision_accepted_s_ = -1.0;

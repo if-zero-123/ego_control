@@ -59,6 +59,14 @@ apriltag:
   tag_size_m: 0.080
   min_side_px: 8.0
   publish_debug_image: true
+  # Filter real centre/bbox measurements, then bridge only brief decode gaps.
+  # 0.18 s is about 5 frames at 30 Hz. Predicted frames are pixel-only:
+  # they never update AprilTag range and can never authorize payload release.
+  track_filter_alpha: 0.75
+  track_filter_beta: 0.10
+  prediction_timeout_s: 0.18
+  max_velocity_px_s: 800.0
+  reacquire_distance_px: 120.0
 
 detection_mux:
   yolo_topic: /d_task/vision/platform_detection/yolo

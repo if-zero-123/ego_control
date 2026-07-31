@@ -20,6 +20,7 @@
 #include "d_task_uav_control/AprilTagRange.h"
 #include "d_task_uav_control/PlatformDetection.h"
 #include "d_task_uav_control/apriltag_detector.h"
+#include "d_task_uav_control/apriltag_track_filter.h"
 
 namespace d_task_uav_control {
 namespace {
@@ -29,7 +30,8 @@ public:
     AprilTagDetectorNode()
         : private_node_("~"),
           image_transport_(node_),
-          detector_(loadTargetId(), loadMinSidePx()) {
+          detector_(loadTargetId(), loadMinSidePx()),
+          track_filter_(loadTrackFilterConfig()) {
         private_node_.param<std::string>(
             "apriltag/image_topic", image_topic_,
             "/usb_camera_vision/usb_cam/image_raw");
@@ -67,10 +69,12 @@ public:
             image_topic_, 1, &AprilTagDetectorNode::imageCallback, this);
         ROS_INFO(
             "[apriltag_detector] family=36h11 id=%d size=%.3fm image=%s "
-            "output=%s range=%s camera_info=%s intrinsics=%s",
+            "output=%s range=%s camera_info=%s intrinsics=%s "
+            "prediction=%.3fs",
             target_id_, tag_size_m_, image_topic_.c_str(),
             detection_topic_.c_str(), range_topic_.c_str(),
-            camera_info_topic_.c_str(), intrinsics_source_.c_str());
+            camera_info_topic_.c_str(), intrinsics_source_.c_str(),
+            track_filter_config_.prediction_timeout_s);
     }
 
 private:
@@ -85,6 +89,30 @@ private:
     double loadMinSidePx() {
         private_node_.param("apriltag/min_side_px", min_side_px_, 8.0);
         return min_side_px_;
+    }
+
+    AprilTagTrackFilterConfig loadTrackFilterConfig() {
+        private_node_.param(
+            "apriltag/track_filter_alpha",
+            track_filter_config_.filter_alpha,
+            track_filter_config_.filter_alpha);
+        private_node_.param(
+            "apriltag/track_filter_beta",
+            track_filter_config_.filter_beta,
+            track_filter_config_.filter_beta);
+        private_node_.param(
+            "apriltag/prediction_timeout_s",
+            track_filter_config_.prediction_timeout_s,
+            track_filter_config_.prediction_timeout_s);
+        private_node_.param(
+            "apriltag/max_velocity_px_s",
+            track_filter_config_.max_velocity_px_s,
+            track_filter_config_.max_velocity_px_s);
+        private_node_.param(
+            "apriltag/reacquire_distance_px",
+            track_filter_config_.reacquire_distance_px,
+            track_filter_config_.reacquire_distance_px);
+        return track_filter_config_;
     }
 
     void loadFallbackIntrinsics() {
@@ -146,8 +174,13 @@ private:
     }
 
     static double meanSidePixels(const AprilTagDetection& detection) {
-        if (!detection.found || detection.corners.size() != 4U) {
+        if (!detection.found) {
             return 0.0;
+        }
+        if (detection.corners.size() != 4U) {
+            return 0.5 * (
+                static_cast<double>(detection.bbox.width)
+                + static_cast<double>(detection.bbox.height));
         }
         double total = 0.0;
         for (std::size_t index = 0; index < 4U; ++index) {
@@ -221,15 +254,22 @@ private:
         try {
             const cv_bridge::CvImageConstPtr image = cv_bridge::toCvShare(
                 message, sensor_msgs::image_encodings::BGR8);
-            const AprilTagDetection detection =
+            const AprilTagDetection raw_detection =
                 detector_.detect(image->image);
             const AprilTagPoseEstimate pose = estimateAprilTagPose(
-                detection, tag_size_m_, camera_matrix_,
+                raw_detection, tag_size_m_, camera_matrix_,
                 distortion_coefficients_);
+            const double stamp_s = message->header.stamp.isZero()
+                ? ros::Time::now().toSec()
+                : message->header.stamp.toSec();
+            const AprilTagDetection detection = track_filter_.update(
+                raw_detection, stamp_s, message->width, message->height);
 
             PlatformDetection output;
             output.header = message->header;
             output.found = detection.found;
+            output.predicted = detection.predicted;
+            output.measurement_age_s = detection.measurement_age_s;
             output.class_id = target_id_;
             output.image_width = message->width;
             output.image_height = message->height;
@@ -244,7 +284,7 @@ private:
                 output.bbox_height = detection.bbox.height;
             }
             detection_publisher_.publish(output);
-            publishRange(message->header, detection, pose);
+            publishRange(message->header, raw_detection, pose);
 
             if (publish_debug_image_) {
                 publishDebug(message->header, image->image, detection, pose);
@@ -265,24 +305,33 @@ private:
         const AprilTagPoseEstimate& pose) {
         cv::Mat annotated = input.clone();
         if (detection.found) {
-            std::vector<std::vector<cv::Point2f>> corners{detection.corners};
-            std::vector<int> ids{detection.id};
-            cv::aruco::drawDetectedMarkers(annotated, corners, ids);
+            const cv::Scalar track_color = detection.predicted
+                ? cv::Scalar(0, 165, 255)
+                : cv::Scalar(0, 255, 255);
+            if (!detection.predicted && detection.corners.size() == 4U) {
+                std::vector<std::vector<cv::Point2f>> corners{
+                    detection.corners};
+                std::vector<int> ids{detection.id};
+                cv::aruco::drawDetectedMarkers(annotated, corners, ids);
+            } else {
+                cv::rectangle(
+                    annotated, detection.bbox, track_color, 2, cv::LINE_AA);
+            }
             const cv::Point center(
                 cvRound(detection.center.x), cvRound(detection.center.y));
             cv::line(
                 annotated, center + cv::Point(-10, 0),
-                center + cv::Point(10, 0), cv::Scalar(0, 255, 255),
+                center + cv::Point(10, 0), track_color,
                 2, cv::LINE_AA);
             cv::line(
                 annotated, center + cv::Point(0, -10),
-                center + cv::Point(0, 10), cv::Scalar(0, 255, 255),
+                center + cv::Point(0, 10), track_color,
                 2, cv::LINE_AA);
             cv::circle(
-                annotated, center, 4, cv::Scalar(0, 255, 255), -1,
+                annotated, center, 4, track_color, -1,
                 cv::LINE_AA);
 
-            if (pose.valid) {
+            if (pose.valid && !detection.predicted) {
                 cv::drawFrameAxes(
                     annotated, camera_matrix_, distortion_coefficients_,
                     pose.rotation_vector, pose.translation_m,
@@ -303,8 +352,8 @@ private:
                 "pixel u=" + fixed(detection.center.x, 1)
                     + " v=" + fixed(detection.center.y, 1),
                 cv::Point(label_left, label_top),
-                cv::Scalar(0, 255, 255));
-            if (pose.valid) {
+                track_color);
+            if (pose.valid && !detection.predicted) {
                 putDebugLabel(
                     annotated,
                     "cam X=" + fixed(pose.translation_m[0], 3)
@@ -330,16 +379,24 @@ private:
                     cv::Scalar(0, 165, 255));
             }
         }
-        const std::string label = detection.found
-            ? "APRILTAG 36h11 ID " + std::to_string(detection.id)
-                + " side=" + fixed(meanSidePixels(detection), 1) + "px"
-            : "APRILTAG SEARCH";
+        const std::string label = !detection.found
+            ? "APRILTAG SEARCH"
+            : (detection.predicted
+                ? "APRILTAG PREDICT ID " + std::to_string(detection.id)
+                    + " age="
+                    + fixed(detection.measurement_age_s * 1000.0, 0)
+                    + "ms conf=" + fixed(detection.confidence, 2)
+                : "APRILTAG FILTER ID " + std::to_string(detection.id)
+                    + " side=" + fixed(meanSidePixels(detection), 1) + "px");
+        const cv::Scalar state_color = detection.predicted
+            ? cv::Scalar(0, 165, 255)
+            : (detection.found ? cv::Scalar(0, 255, 0)
+                               : cv::Scalar(0, 165, 255));
         cv::putText(
             annotated, label, cv::Point(8, 24), cv::FONT_HERSHEY_SIMPLEX,
-            0.65, detection.found ? cv::Scalar(0, 255, 0)
-                                  : cv::Scalar(0, 165, 255),
-            2, cv::LINE_AA);
-        const std::string range_label = pose.valid
+            0.65, state_color, 2, cv::LINE_AA);
+        const std::string range_label =
+            pose.valid && !detection.predicted
             ? "z=" + fixed(pose.optical_axis_distance_m, 3)
                 + "m range=" + fixed(pose.slant_range_m, 3)
                 + "m plane=" + fixed(pose.plane_distance_m, 3) + "m"
@@ -347,14 +404,21 @@ private:
         cv::putText(
             annotated, range_label, cv::Point(8, 50),
             cv::FONT_HERSHEY_SIMPLEX, 0.58,
-            pose.valid ? cv::Scalar(255, 255, 0)
-                       : cv::Scalar(0, 165, 255),
+            pose.valid && !detection.predicted
+                ? cv::Scalar(255, 255, 0)
+                : cv::Scalar(0, 165, 255),
             2, cv::LINE_AA);
-        const std::string quality_label = pose.valid
-            ? "tilt=" + fixed(pose.tag_tilt_deg, 1)
-                + "deg reproj=" + fixed(pose.reprojection_error_px, 2)
-                + "px K=" + intrinsics_source_
-            : "K=" + intrinsics_source_;
+        const std::string quality_label = detection.predicted
+            ? "prediction age="
+                + fixed(detection.measurement_age_s * 1000.0, 0)
+                + "ms conf=" + fixed(detection.confidence, 2)
+                + " K=" + intrinsics_source_
+            : (pose.valid
+                ? "tilt=" + fixed(pose.tag_tilt_deg, 1)
+                    + "deg reproj=" + fixed(
+                        pose.reprojection_error_px, 2)
+                    + "px K=" + intrinsics_source_
+                : "K=" + intrinsics_source_);
         cv::putText(
             annotated, quality_label, cv::Point(8, 76),
             cv::FONT_HERSHEY_SIMPLEX, 0.52,
@@ -386,6 +450,8 @@ private:
     std::string range_topic_;
     std::string debug_image_topic_;
     AprilTagDetector detector_;
+    AprilTagTrackFilterConfig track_filter_config_;
+    AprilTagTrackFilter track_filter_;
 };
 
 }  // namespace
