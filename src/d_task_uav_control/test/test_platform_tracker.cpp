@@ -64,6 +64,27 @@ TEST(PlatformTracker, RejectsVisualOutlierAndEventuallyBecomesStale) {
     EXPECT_FALSE(tracker.stateAt(1.2).valid);
 }
 
+TEST(PlatformTracker, RotatesAndTranslatesCarPositionVelocityAndHeading) {
+    TrackerConfig config;
+    config.frame_offset_x_m = 10.0;
+    config.frame_offset_y_m = -2.0;
+    config.frame_yaw_offset_rad = 1.5707963267948966;
+    config.platform_offset_body_x_m = 1.0;
+    PlatformTracker tracker(config);
+
+    tracker.updateCar(CarMeasurement{
+        0.0, 2.0, 3.0, 0.0, 1.0, 0.0, 1.0});
+    const PlatformState state = tracker.stateAt(0.0);
+
+    // Base: R(90deg)*(2,3)+(10,-2)=(7,0). The 1 m platform
+    // offset follows the transformed car yaw, giving platform=(7,1).
+    EXPECT_TRUE(state.valid);
+    EXPECT_NEAR(state.x, 7.0, 1e-9);
+    EXPECT_NEAR(state.y, 1.0, 1e-9);
+    EXPECT_NEAR(state.vx, 0.0, 1e-9);
+    EXPECT_NEAR(state.vy, 1.0, 1e-9);
+}
+
 }  // namespace d_task_uav_control
 
 int main(int argc, char** argv) {

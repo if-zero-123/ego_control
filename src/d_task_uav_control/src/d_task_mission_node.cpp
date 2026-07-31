@@ -279,6 +279,18 @@ private:
         LOAD_MISSION_PARAM("low_descent_height_m", low_descent_height_m);
         LOAD_MISSION_PARAM("platform_press_depth_m", platform_press_depth_m);
         LOAD_MISSION_PARAM("follow_lead_time_s", follow_lead_time_s);
+        LOAD_MISSION_PARAM("follow_xy_kp", follow_xy_kp);
+        LOAD_MISSION_PARAM("follow_xy_kd", follow_xy_kd);
+        LOAD_MISSION_PARAM("follow_position_deadband_m",
+                           follow_position_deadband_m);
+        LOAD_MISSION_PARAM("follow_max_correction_mps",
+                           follow_max_correction_mps);
+        LOAD_MISSION_PARAM("follow_max_total_speed_mps",
+                           follow_max_total_speed_mps);
+        LOAD_MISSION_PARAM("follow_max_accel_mps2",
+                           follow_max_accel_mps2);
+        LOAD_MISSION_PARAM("vision_trim_max_speed_mps",
+                           vision_trim_max_speed_mps);
         LOAD_MISSION_PARAM("xy_tolerance_m", xy_tolerance_m);
         LOAD_MISSION_PARAM("relative_speed_tolerance_mps",
                            relative_speed_tolerance_mps);
@@ -322,8 +334,16 @@ private:
             || config.low_descent_height_m <= 0.0
             || config.drop_height_m <= 0.0
             || config.platform_hold_time_s < 0.0
+            || config.follow_xy_kp < 0.0
+            || config.follow_xy_kd < 0.0
+            || config.follow_position_deadband_m < 0.0
+            || config.follow_max_correction_mps <= 0.0
+            || config.follow_max_total_speed_mps <= 0.0
+            || config.follow_max_accel_mps2 < 0.0
+            || config.vision_trim_max_speed_mps < 0.0
             || config.max_dynamic_landing_retries < 0) {
-            throw std::runtime_error("invalid mission height, hold, or retry parameters");
+            throw std::runtime_error(
+                "invalid mission height, follow-control, hold, or retry parameters");
         }
     }
 

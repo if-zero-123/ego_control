@@ -89,15 +89,29 @@ UAV health 同时发布 `positioning_ready=true`，小车不会再把“旧 odom
 
 ## 任务流程
 
-`DROP`：起飞至相对 H 点 1.50m，悬停 3 秒，按小车位姿接近，YOLO
-锁定标靶并伴飞，稳定后立即下降到默认 0.80m 投放高度并触发投放流程，
+`DROP`：起飞至相对 H 点 1.50m，悬停 3 秒，将小车位姿从车端坐标系转换到
+无人机世界系，再按卡尔曼估计的位置和速度直接接近；YOLO 锁定标靶后参与精确
+伴飞，稳定后立即下降到默认 0.80m 投放高度并触发投放流程，
 随后爬升、返回 H 点和普通降落。`distance_to_d_m` 仅作 D 点截止保护，
 不会等到 D 点附近才开始投放。
 
 任务1的视觉源按状态严格分段。`SEARCH_CAR/LOCK_CAR/FOLLOW_CAR` 在 1.50m
 巡航高度只使用 YOLO 检测，公共检测结果继续进入已有的四状态
 `[x,y,vx,vy]` 卡尔曼平台跟踪器；即使高空能看到 AprilTag，也不会抢占 YOLO。
-无人机像素对中连续稳定 1 秒并进入 `DROP_DESCEND` 后，网关把本任务的
+`SEARCH_CAR` 只要收到新鲜的小车坐标，就会先按坐标估计飞向小车，不会在原地等
+YOLO 出框；YOLO 可见后，其像素误差仅作为限幅后的细调量叠加到坐标控制上。
+
+高空水平伴飞采用外环 PD 速度控制：
+
+```text
+v_cmd = v_car + Kp * (p_car - p_uav) + Kd * (v_car - v_uav) + vision_trim
+```
+
+其中 `p_car/v_car` 均来自坐标转换后的卡尔曼平台状态。速度指令以 30Hz 通过
+`/ego_bridge/override_cmd` 发送，始终使用 `control_mode=1`；水平目标位置填入
+无人机当前位置，避免桥接层位置环与外部 PD 重复控制，Z 方向仍使用任务目标高度。
+全流程不接入 EGO-Planner，也不启用避障。无人机像素对中连续稳定 1 秒并进入
+`DROP_DESCEND` 后，网关把本任务的
 `follow_established=true` 持续回传给小车，小车据此从低速切到正常速度。投放状态机
 同时开放 AprilTag 检测；`DROP_DESCEND/RELEASE` 中优先采用新鲜且识别成功的
 AprilTag，码暂时未识别时回退到新鲜的 YOLO。离开这两个状态后自动回到仅 YOLO。
@@ -116,11 +130,20 @@ AprilTag，码暂时未识别时回退到新鲜的 YOLO。离开这两个状态�
 无人机任务常调参数集中在
 `src/d_task_uav_control/config/d_task_uav.yaml`：
 
-- `tracking.car_frame_offset_x_m/y_m`：小车 ROS 坐标起点到无人机坐标起点的平移。
+- `tracking.car_frame_offset_x_m/y_m`：小车 ROS 坐标系到无人机世界系的 X/Y 平移。
+- `tracking.car_frame_yaw_offset_rad`：两个坐标系之间的平面航向旋转。
+- 上述三个坐标转换参数当前均为 `0.0` 占位，等现场给出实测偏移后再填写；未完成
+  标定和方向核对前不能直接进行完整实飞。
 - `tracking.use_visual_projection`：默认 `false`，避免未标定视觉投影影响小车世界坐标；仅保留旧方案时才开启。
 - `tracking.platform_height_m`：平台中心在无人机世界系中的高度。
 - `pixel_servo.*`：像素滤波、死区、最大横移速度及图像轴到机体系轴的映射；必须先完成台架四方向确认。
 - `mission.cruise_height_m`、`drop_height_m`、两段下降高度和速度。
+- `mission.follow_xy_kp/kd`：高空伴飞外环 PD 增益，默认 `0.80/0.25`。
+- `mission.follow_position_deadband_m`：水平位置死区，默认 `0.04m`。
+- `mission.follow_max_correction_mps`、`follow_max_total_speed_mps`：
+  PD 修正和总水平速度上限，默认 `0.30m/s`、`0.50m/s`。
+- `mission.follow_max_accel_mps2`：水平速度指令加速度上限，默认 `0.50m/s²`。
+- `mission.vision_trim_max_speed_mps`：YOLO/AprilTag 像素细调速度上限，默认 `0.12m/s`。
 - 对中误差、相对速度、稳定时间、超时、5.20 秒停留和重试次数。
 - `payload.*`：投放执行器预留配置。
 
@@ -129,8 +152,9 @@ AprilTag，码暂时未识别时回退到新鲜的 YOLO。离开这两个状态�
 
 YOLO 使用单类别平台标靶模型 `model_2_yolo_target_yolov8n_640_rk3588_i8.rknn`，标靶固定在
 降落平台中心。检测节点每帧发布结构化检测，即使未发现目标也发布
-`found=false`。小车世界坐标仍由四状态卡尔曼滤波输出平台位置和速度；视觉锁定后的
-伴飞与下降使用像素伺服，不依赖相机内参。
+`found=false`。小车世界坐标由四状态卡尔曼滤波输出平台位置和速度；伴飞主控制使用
+该状态做 XY 方向 PD，视觉只做有界细调。近距离下降时切换到 AprilTag，以处理 YOLO
+无法完整框出平台的情况。
 
 下降近距离跟踪使用平台中心的 AprilTag：
 
@@ -242,3 +266,11 @@ AprilTag 检测、检测源门控和协议伴飞锁存均有独立测试。
 `roslaunch --nodes d_task_uav_control d_task_uav.launch` 已确认实际启动链包含
 `metal_ball_detector`、`apriltag_detector`、`platform_detection_mux`、
 `platform_tracking_fusion` 和 `d_task_mission`。这些验证未启动飞行或投放动作。
+
+2026-07-31 坐标伴飞 PD 验证记录：完整 `catkin_make` 再次成功；
+`d_task_uav_control` 单包汇总为 `88 tests, 0 errors, 0 failures`，
+`d_task_uav_control` 与 `uav_protocol_gateway` 相关测试合计为
+`107 tests, 0 errors, 0 failures`。新增测试覆盖坐标系旋转和平移、无 YOLO 时
+按坐标接近、PD 总速度限幅、加速度限幅，以及投递前坐标/相对速度/像素三重对齐。
+`roslaunch --nodes d_task_uav_control d_task_uav.launch` 已通过启动链解析。
+验证仅包含编译、自动测试与 launch 解析，未启动飞行、解锁或投放硬件。

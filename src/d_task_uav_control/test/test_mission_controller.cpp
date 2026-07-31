@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "d_task_uav_control/mission_controller.h"
 
 namespace d_task_uav_control {
@@ -20,6 +22,7 @@ MissionControllerConfig fastConfig() {
     config.xy_tolerance_m = 0.12;
     config.relative_speed_tolerance_mps = 0.20;
     config.height_tolerance_m = 0.06;
+    config.follow_max_accel_mps2 = 0.0;
     return config;
 }
 
@@ -179,21 +182,21 @@ TEST(MissionController, PixelFollowAddsCorrectionToCarVelocity) {
     MissionController controller(fastConfig());
     prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
     MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
     input.platform_vx = 0.20;
     input.platform_vy = -0.10;
     input.pixel_world_vx = 0.10;
     input.pixel_world_vy = 0.05;
-    advanceToFollow(controller, input);
 
     const MissionCommand command = controller.update(input);
 
     ASSERT_TRUE(command.setpoint_valid);
-    EXPECT_NEAR(command.target_vx, 0.30, 1e-9);
-    EXPECT_NEAR(command.target_vy, -0.05, 1e-9);
-    EXPECT_NEAR(command.target_x, input.uav_x + 0.30 * fastConfig().follow_lead_time_s,
-                1e-9);
-    EXPECT_NEAR(command.target_y, input.uav_y - 0.05 * fastConfig().follow_lead_time_s,
-                1e-9);
+    // 0.20 car feed-forward + 0.25*0.20 velocity D + 0.10 visual trim.
+    // The lead position error remains inside the 0.04 m deadband.
+    EXPECT_NEAR(command.target_vx, 0.35, 1e-9);
+    EXPECT_NEAR(command.target_vy, -0.075, 1e-9);
+    EXPECT_NEAR(command.target_x, input.uav_x, 1e-9);
+    EXPECT_NEAR(command.target_y, input.uav_y, 1e-9);
 }
 
 TEST(MissionController, LockUsesPixelCorrectionBeforePixelAlignment) {
@@ -211,6 +214,98 @@ TEST(MissionController, LockUsesPixelCorrectionBeforePixelAlignment) {
     EXPECT_NEAR(command.target_vx, 0.10, 1e-9);
     EXPECT_NEAR(command.target_vy, -0.05, 1e-9);
     EXPECT_EQ(controller.state(), MissionState::LOCK_CAR);
+}
+
+TEST(MissionController, SearchUsesCoordinatePdBeforeYoloIsVisible) {
+    MissionControllerConfig config = fastConfig();
+    config.follow_position_deadband_m = 0.0;
+    config.follow_max_correction_mps = 10.0;
+    config.follow_max_total_speed_mps = 10.0;
+    MissionController controller(config);
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    input.pixel_valid = false;
+    input.pixel_aligned = false;
+    input.platform_x = 1.50;
+    input.platform_vx = 0.20;
+
+    MissionCommand command;
+    for (int index = 0; index < 5; ++index) {
+        input.now_s += 0.01;
+        command = controller.update(input);
+    }
+
+    ASSERT_EQ(controller.state(), MissionState::SEARCH_CAR);
+    ASSERT_TRUE(command.setpoint_valid);
+    // lead error = 0.50 + 0.20*0.15 = 0.53
+    // v = 0.20 + 0.80*0.53 + 0.25*(0.20 - 0.0) = 0.674
+    EXPECT_NEAR(command.target_vx, 0.674, 1e-9);
+    EXPECT_NEAR(command.target_vy, 0.0, 1e-9);
+    EXPECT_NEAR(command.target_x, input.uav_x, 1e-9);
+    EXPECT_NEAR(command.target_y, input.uav_y, 1e-9);
+    EXPECT_NEAR(command.target_z, config.cruise_height_m, 1e-9);
+}
+
+TEST(MissionController, FollowPdClampsTotalHorizontalSpeed) {
+    MissionControllerConfig config = fastConfig();
+    config.follow_position_deadband_m = 0.0;
+    config.follow_max_correction_mps = 0.30;
+    config.follow_max_total_speed_mps = 0.50;
+    MissionController controller(config);
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    input.pixel_valid = false;
+    input.pixel_aligned = false;
+    input.platform_x = 4.0;
+    input.platform_vx = 0.40;
+
+    MissionCommand command;
+    for (int index = 0; index < 5; ++index) {
+        input.now_s += 0.01;
+        command = controller.update(input);
+    }
+
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_NEAR(std::hypot(command.target_vx, command.target_vy), 0.50, 1e-9);
+}
+
+TEST(MissionController, FollowPdLimitsAccelerationBetweenCommands) {
+    MissionControllerConfig config = fastConfig();
+    config.follow_position_deadband_m = 0.0;
+    config.follow_max_correction_mps = 10.0;
+    config.follow_max_total_speed_mps = 10.0;
+    config.follow_max_accel_mps2 = 0.50;
+    MissionController controller(config);
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    input.pixel_valid = false;
+    input.pixel_aligned = false;
+
+    MissionCommand command;
+    for (int index = 0; index < 5; ++index) {
+        input.now_s += 0.01;
+        command = controller.update(input);
+    }
+    ASSERT_NEAR(command.target_vx, 0.0, 1e-9);
+
+    input.platform_x = 3.0;
+    input.now_s += 0.10;
+    command = controller.update(input);
+
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_NEAR(std::hypot(command.target_vx, command.target_vy), 0.05, 1e-9);
+}
+
+TEST(MissionController, DropWaitsForCoordinateAndVelocityAlignment) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+    input.platform_x += 0.30;
+
+    controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::FOLLOW_CAR);
 }
 
 TEST(MissionController, ForceDropDoesNotBypassPixelLock) {

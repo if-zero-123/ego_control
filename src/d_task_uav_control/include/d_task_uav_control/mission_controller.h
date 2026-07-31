@@ -59,6 +59,13 @@ struct MissionControllerConfig {
     double low_descent_height_m = 0.30;
     double platform_press_depth_m = 0.10;
     double follow_lead_time_s = 0.15;
+    double follow_xy_kp = 0.80;
+    double follow_xy_kd = 0.25;
+    double follow_position_deadband_m = 0.04;
+    double follow_max_correction_mps = 0.30;
+    double follow_max_total_speed_mps = 0.50;
+    double follow_max_accel_mps2 = 0.50;
+    double vision_trim_max_speed_mps = 0.12;
 
     double xy_tolerance_m = 0.12;
     double relative_speed_tolerance_mps = 0.20;
@@ -171,6 +178,13 @@ private:
                          double target_vz, MissionCommand& output) const;
     void commandPixelPlatform(const MissionInput& input, double target_z,
                               double target_vz, MissionCommand& output) const;
+    void commandFollowOverride(const MissionInput& input, double target_z,
+                               double target_vz, bool apply_pixel_trim,
+                               MissionCommand& output);
+    void computeFollowVelocity(const MissionInput& input,
+                               bool apply_pixel_trim,
+                               double& target_vx, double& target_vy);
+    void resetFollowCommand();
     void commandPosition(double x, double y, double z,
                          double vx, double vy, double vz,
                          MissionCommand& output) const;
@@ -204,6 +218,9 @@ private:
     double release_started_s_ = -1.0;
     double climb_anchor_x_ = 0.0;
     double climb_anchor_y_ = 0.0;
+    double last_follow_cmd_vx_ = 0.0;
+    double last_follow_cmd_vy_ = 0.0;
+    double last_follow_cmd_s_ = -1.0;
 
     double last_takeoff_request_s_ = -1e9;
     double last_override_request_s_ = -1e9;

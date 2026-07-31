@@ -24,6 +24,7 @@ struct TrackerConfig {
     double prediction_timeout_s = 1.00;
     double frame_offset_x_m = 0.0;
     double frame_offset_y_m = 0.0;
+    double frame_yaw_offset_rad = 0.0;
     double platform_offset_body_x_m = 0.0;
     double platform_offset_body_y_m = 0.0;
 };
@@ -73,6 +74,9 @@ private:
     void updatePosition(double x, double y, double variance);
     void updateFull(double x, double y, double vx, double vy,
                     double position_variance, double velocity_variance);
+    Eigen::Vector2d carWorldPosition(const CarMeasurement& measurement) const;
+    Eigen::Vector2d carWorldVelocity(const CarMeasurement& measurement) const;
+    double carWorldYaw(const CarMeasurement& measurement) const;
     Eigen::Vector2d carPlatformPosition(const CarMeasurement& measurement) const;
 
     TrackerConfig config_;

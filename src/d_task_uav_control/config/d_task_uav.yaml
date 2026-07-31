@@ -88,9 +88,11 @@ tracking:
   # 像素伺服主链路不依赖内参；默认不允许视觉投影改变小车世界坐标滤波。
   use_visual_projection: false
 
-  # 小车 ROS2 地图系到无人机本地系的固定平移偏移。
+  # 小车 ROS2 地图系到无人机本地系的二维刚体变换。本轮先保留全零占位；
+  # 后续拿到现场标定值后只修改这三个参数，无需再改控制代码。
   car_frame_offset_x_m: 0.0
   car_frame_offset_y_m: 0.0
+  car_frame_yaw_offset_rad: 0.0
   # 小车 base_link 到平台中心的机体系偏移；标靶在中心时通常为 0。
   platform_offset_body_x_m: 0.0
   platform_offset_body_y_m: 0.0
@@ -145,6 +147,17 @@ mission:
   low_descent_height_m: 0.30
   platform_press_depth_m: 0.10
   follow_lead_time_s: 0.15
+
+  # SEARCH/LOCK/FOLLOW/DROP use direct ego_bridge OVERRIDE commands.
+  # v_cmd = filtered_car_v + Kp*position_error + Kd*relative_velocity
+  #         + bounded visual trim. No EGO-Planner or obstacle avoidance.
+  follow_xy_kp: 0.80
+  follow_xy_kd: 0.25
+  follow_position_deadband_m: 0.04
+  follow_max_correction_mps: 0.30
+  follow_max_total_speed_mps: 0.50
+  follow_max_accel_mps2: 0.50
+  vision_trim_max_speed_mps: 0.12
 
   xy_tolerance_m: 0.12
   relative_speed_tolerance_mps: 0.20

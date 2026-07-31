@@ -74,27 +74,45 @@ void PlatformTracker::predictTo(double stamp_s) {
     filter_stamp_s_ = stamp_s;
 }
 
+Eigen::Vector2d PlatformTracker::carWorldPosition(
+    const CarMeasurement& measurement) const {
+    return yawRotation(config_.frame_yaw_offset_rad)
+        * Eigen::Vector2d(measurement.x, measurement.y)
+        + Eigen::Vector2d(config_.frame_offset_x_m,
+                          config_.frame_offset_y_m);
+}
+
+Eigen::Vector2d PlatformTracker::carWorldVelocity(
+    const CarMeasurement& measurement) const {
+    return yawRotation(config_.frame_yaw_offset_rad)
+        * Eigen::Vector2d(measurement.vx, measurement.vy);
+}
+
+double PlatformTracker::carWorldYaw(
+    const CarMeasurement& measurement) const {
+    return measurement.yaw + config_.frame_yaw_offset_rad;
+}
+
 Eigen::Vector2d PlatformTracker::carPlatformPosition(
     const CarMeasurement& measurement) const {
-    const Eigen::Vector2d car_world(
-        measurement.x + config_.frame_offset_x_m,
-        measurement.y + config_.frame_offset_y_m);
+    const Eigen::Vector2d car_world = carWorldPosition(measurement);
     const Eigen::Vector2d offset = has_visual_offset_
         ? visual_offset_body_
         : Eigen::Vector2d(config_.platform_offset_body_x_m,
                           config_.platform_offset_body_y_m);
-    return car_world + yawRotation(measurement.yaw) * offset;
+    return car_world + yawRotation(carWorldYaw(measurement)) * offset;
 }
 
 void PlatformTracker::updateCar(const CarMeasurement& measurement) {
     const Eigen::Vector2d position = carPlatformPosition(measurement);
+    const Eigen::Vector2d velocity = carWorldVelocity(measurement);
     if (!initialised_) {
         initialise(measurement.stamp_s, position.x(), position.y(),
-                   measurement.vx, measurement.vy);
+                   velocity.x(), velocity.y());
     } else {
         predictTo(measurement.stamp_s);
         updateFull(
-            position.x(), position.y(), measurement.vx, measurement.vy,
+            position.x(), position.y(), velocity.x(), velocity.y(),
             safeVariance(config_.car_position_noise, measurement.confidence),
             safeVariance(config_.car_velocity_noise, measurement.confidence));
     }
@@ -120,12 +138,11 @@ bool PlatformTracker::updateVision(const VisionMeasurement& measurement) {
             safeVariance(config_.vision_position_noise, measurement.confidence));
     }
     if (has_car_) {
-        const Eigen::Vector2d car_world(
-            last_car_.x + config_.frame_offset_x_m,
-            last_car_.y + config_.frame_offset_y_m);
+        const Eigen::Vector2d car_world = carWorldPosition(last_car_);
         const Eigen::Vector2d world_offset =
             Eigen::Vector2d(measurement.x, measurement.y) - car_world;
-        visual_offset_body_ = yawRotation(-last_car_.yaw) * world_offset;
+        visual_offset_body_ =
+            yawRotation(-carWorldYaw(last_car_)) * world_offset;
         has_visual_offset_ = true;
     }
     last_vision_stamp_s_ = measurement.stamp_s;

@@ -188,6 +188,9 @@ private:
         private_node_.param("tracking/car_frame_offset_y_m",
                             config.frame_offset_y_m,
                             config.frame_offset_y_m);
+        private_node_.param("tracking/car_frame_yaw_offset_rad",
+                            config.frame_yaw_offset_rad,
+                            config.frame_yaw_offset_rad);
         private_node_.param("tracking/platform_offset_body_x_m",
                             config.platform_offset_body_x_m,
                             config.platform_offset_body_x_m);
