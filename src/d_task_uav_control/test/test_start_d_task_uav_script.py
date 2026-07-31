@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import shlex
 import signal
 import subprocess
 import tempfile
@@ -32,6 +33,8 @@ class StartDTaskUavScriptTest(unittest.TestCase):
         self.assertIn("--video-device", result.stdout)
         self.assertIn("--mavros-fcu-url", result.stdout)
         self.assertIn("--dry-run", result.stdout)
+        self.assertIn("mission_topics", result.stdout)
+        self.assertIn("轻量 rosbag", result.stdout)
 
     def test_script_is_executable_and_installed_by_catkin(self):
         self.assertTrue(os.access(str(SCRIPT_PATH), os.X_OK))
@@ -73,11 +76,44 @@ class StartDTaskUavScriptTest(unittest.TestCase):
             "roslaunch livox_ros_driver2 msg_MID360s.launch",
             "roslaunch d_task_uav_control d_task_uav.launch "
             "mqtt_host:=10.0.0.8 mqtt_port:=2883 video_device:=/dev/video9",
+            "rosbag record",
         ]
         offsets = [result.stdout.index(command) for command in expected_commands]
         self.assertEqual(offsets, sorted(offsets), result.stdout)
-        self.assertNotIn("mission_start", result.stdout)
         self.assertNotIn("rostopic pub", result.stdout)
+        self.assertIn("mission_topics.bag", result.stdout)
+        expected_topics = {
+            "/uav_protocol/mission_config",
+            "/uav_protocol/mission_start",
+            "/uav_protocol/task_state",
+            "/uav_protocol/local_event",
+            "/uav_protocol/local_fault",
+            "/uav_protocol/local_health",
+            "/uav_protocol/dynamic_descent_allowed",
+            "/uav_protocol/safety_hold",
+            "/d_task/positioning/status",
+            "/mavros/state",
+            "/mavros/local_position/odom",
+            "/ego_bridge/flight_state",
+            "/ego_bridge/control_mode",
+            "/ego_bridge/override_cmd",
+            "/d_task/vision/platform_detection",
+            "/d_task/vision/apriltag_range",
+            "/d_task/tracking/platform_estimate",
+            "/uav_protocol/car/pose",
+            "/uav_protocol/car/pose_meta",
+        }
+        rosbag_line = next(
+            line for line in result.stdout.splitlines() if "rosbag record" in line
+        )
+        rosbag_args = shlex.split(rosbag_line)[3:]
+        self.assertIn("--split", rosbag_args)
+        self.assertIn("--size=256", rosbag_args)
+        output_index = rosbag_args.index("-O")
+        recorded_topics = set(rosbag_args[output_index + 2 :])
+        self.assertEqual(recorded_topics, expected_topics)
+        for excluded_topic in ("image_raw", "apriltag_debug", "cloud_registered"):
+            self.assertNotIn(excluded_topic, result.stdout)
 
     def test_starts_stack_and_cleans_up_owned_processes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -166,6 +202,22 @@ test "${@: -1}" = /mavros/state || exit 1
 echo 'connected: True'
 """,
             )
+            self.write_executable(
+                bin_dir / "rosbag",
+                """#!/usr/bin/env bash
+test "$1" = record || exit 64
+shift
+echo "$*" > "$FAKE_ROS_STATE/rosbag_command"
+touch "$FAKE_ROS_STATE/rosbag"
+if test "${FAKE_EXIT_ROSBAG:-}" = true; then
+  rm -f "$FAKE_ROS_STATE/rosbag"
+  exit 9
+fi
+cleanup() { rm -f "$FAKE_ROS_STATE/rosbag"; exit 0; }
+trap cleanup INT TERM
+while true; do sleep 0.05; done
+""",
+            )
 
             env = os.environ.copy()
             env.update(
@@ -195,6 +247,12 @@ echo 'connected: True'
 
             self.assertIsNone(process.poll())
             self.assertTrue((state_dir / "backend").exists())
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not (state_dir / "rosbag").exists():
+                if process.poll() is not None:
+                    break
+                time.sleep(0.05)
+            self.assertTrue((state_dir / "rosbag").exists())
             process.send_signal(signal.SIGTERM)
             output, _ = process.communicate(timeout=5)
 
@@ -208,10 +266,42 @@ echo 'connected: True'
             self.assertFalse((state_dir / "mavros").exists())
             self.assertFalse((state_dir / "livox").exists())
             self.assertFalse((state_dir / "backend").exists())
+            self.assertFalse((state_dir / "rosbag").exists())
+            rosbag_command = (state_dir / "rosbag_command").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("mission_topics.bag", rosbag_command)
+            self.assertNotIn("image_raw", rosbag_command)
             self.assertEqual(
                 (state_dir / "catkin_setup_args").read_text(encoding="utf-8").strip(),
                 "--extend",
             )
+
+            optional_env = env.copy()
+            optional_env["FAKE_EXIT_ROSBAG"] = "true"
+            optional = subprocess.Popen(
+                ["bash", str(SCRIPT_PATH), "--video-device", str(camera)],
+                env=optional_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and not (state_dir / "backend").exists():
+                if optional.poll() is not None:
+                    break
+                time.sleep(0.05)
+            time.sleep(0.35)
+            if optional.poll() is not None:
+                optional_output, _ = optional.communicate(timeout=5)
+                self.fail(
+                    "rosbag failure stopped flight stack:\n" + optional_output
+                )
+            self.assertTrue((state_dir / "backend").exists())
+            optional.send_signal(signal.SIGTERM)
+            optional_output, _ = optional.communicate(timeout=5)
+            self.assertEqual(optional.returncode, 0, optional_output)
+            self.assertIn("警告：mission_topics 已退出", optional_output)
 
             (state_dir / "commands").write_text("", encoding="utf-8")
             failed_env = env.copy()

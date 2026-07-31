@@ -55,9 +55,25 @@ MID360 驱动，然后启动 D 题无人机完整后端：
 飞控不是 `mavros/px4.launch` 默认连接方式时，再按实际串口或 UDP 配置附加
 `--mavros-fcu-url URL`，不要直接套用未经确认的设备名和波特率。
 
-先用 `--dry-run` 可查看启动顺序而不启动进程。脚本前台常驻，日志写入
-`~/.ros/d_task_uav/<启动时间>_<PID>/`；按 `Ctrl+C` 时只停止脚本自己启动的
-进程，不停止启动前已经存在的 ROS Master、MAVROS 或 MID360 驱动。脚本不会
+先用 `--dry-run` 可查看启动顺序而不启动进程。脚本前台常驻，每次启动的记录写入
+`~/.ros/d_task_uav/<启动时间>_<PID>/`。其中 `d_task_uav.log` 包含任务节点日志，
+`mission_topics*.bag` 自动按 256MB 分片录制任务状态、MAVROS 里程计、ego_bridge
+状态和指令、AprilTag 检测、平台融合及小车位姿；不录相机图像、AprilTag 调试图和
+点云。脚本启动完成时会打印本次目录。现场复盘可执行：
+
+```bash
+grep -E '\[d_task_mission\]\[(STATE|FAULT|DIAG)\]' \
+  ~/.ros/d_task_uav/<本次启动目录>/d_task_uav.log
+rosbag info ~/.ros/d_task_uav/<本次启动目录>/mission_topics*.bag
+```
+
+`[STATE]` 在状态切换时立即记录；`[FAULT]` 记录去重后的任务故障；`[DIAG]` 默认
+每秒记录一次控制器状态、飞行器位置速度、实际目标位置速度、A 点与搜索终点误差、
+桥接模式、平台融合、像素对齐、AprilTag 可见/参与融合 ID、下降安全门和 D 点距离。
+各输入源同时记录接收年龄和新鲜标志，默认超过 `diagnostics.source_timeout_s=1.0s`
+即标为旧数据。频率由 `diagnostics.log_rate_hz` 配置，设为 `0` 可关闭周期快照。
+rosbag 异常退出只会输出醒目警告，不会停止飞行任务主流程。按 `Ctrl+C` 时只停止
+脚本自己启动的进程，不停止启动前已经存在的 ROS Master、MAVROS 或 MID360 驱动。脚本不会
 发布起飞消息，后端仍会停在准备流程并等待小车合法指令。注意合法
 `mission/start` 到达后，当前 `ego_bridge` 配置会自动切换 OFFBOARD 并解锁，
 投放任务也会按 `payload.enabled` 配置驱动真实 GPIO。
@@ -427,3 +443,10 @@ alpha-beta 滤波，距离使用低通和跳变剔除。DROP 投递在 `1.50m` �
 低段准入保持不变。完整 `catkin_make` 成功；`catkin_test_results
 build/test_results/d_task_uav_control` 汇总为 `164 tests, 0 errors, 0 failures,
 0 skipped`，其中任务控制器 `31/31` 通过；未启动真实相机、飞控、解锁或投放硬件。
+
+2026-07-31 实飞诊断记录更新：任务节点新增状态切换、故障和默认 1Hz 的结构化
+诊断快照；一键启动脚本在任务后端就绪后自动录制关键任务话题，并随脚本退出统一
+停止和收尾，单包按 256MB 分片且排除图像与点云。完整 `catkin_make` 成功，
+`d_task_uav_control` 汇总为 `168 tests, 0 errors, 0 failures, 0 skipped`。测试覆盖
+录包命令白名单、启动顺序、录包进程清理及诊断字段契约；未启动真实飞行、相机、
+解锁或投放硬件。

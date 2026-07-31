@@ -7,6 +7,7 @@ usage() {
 
 依次启动 ROS Master、MAVROS、MID360 驱动和 D 题无人机后端。
 脚本不会发布起飞消息；后端启动后等待小车合法指令。
+任务话题自动录制为轻量 rosbag：mission_topics.bag（不含图像和点云）。
 
 选项：
   --mqtt-host HOST        MQTT Broker 地址（默认：192.168.0.198）
@@ -87,12 +88,36 @@ backend_command=(
   "mqtt_port:=$mqtt_port"
   "video_device:=$video_device"
 )
+rosbag_topics=(
+  /uav_protocol/mission_config
+  /uav_protocol/mission_start
+  /uav_protocol/task_state
+  /uav_protocol/local_event
+  /uav_protocol/local_fault
+  /uav_protocol/local_health
+  /uav_protocol/dynamic_descent_allowed
+  /uav_protocol/safety_hold
+  /d_task/positioning/status
+  /mavros/state
+  /mavros/local_position/odom
+  /ego_bridge/flight_state
+  /ego_bridge/control_mode
+  /ego_bridge/override_cmd
+  /d_task/vision/platform_detection
+  /d_task/vision/apriltag_range
+  /d_task/tracking/platform_estimate
+  /uav_protocol/car/pose
+  /uav_protocol/car/pose_meta
+)
 
 if [[ "$dry_run" == true ]]; then
   print_command roscore
   print_command "${mavros_command[@]}"
   print_command roslaunch livox_ros_driver2 msg_MID360s.launch
   print_command "${backend_command[@]}"
+  print_command rosbag record --split --size=256 \
+    -O "${D_TASK_LOG_ROOT:-${HOME}/.ros/d_task_uav}/<run>/mission_topics.bag" \
+    "${rosbag_topics[@]}"
   exit 0
 fi
 
@@ -119,7 +144,7 @@ source "$positioning_setup"
 # shellcheck disable=SC1090
 source "$catkin_setup" --extend
 
-for required_command in roscore roslaunch rosnode rostopic setsid timeout; do
+for required_command in roscore roslaunch rosnode rostopic rosbag setsid timeout; do
   command -v "$required_command" >/dev/null 2>&1 \
     || die "找不到命令：$required_command"
 done
@@ -127,9 +152,11 @@ done
 run_id="$(date +%Y%m%d_%H%M%S)_$$"
 log_dir="$log_root/$run_id"
 mkdir -p "$log_dir"
+shutdown_marker="$log_dir/.shutdown"
 
 pids=()
-process_names=()
+critical_pids=()
+critical_process_names=()
 cleanup_started=false
 
 log() {
@@ -142,6 +169,7 @@ cleanup() {
     return
   fi
   cleanup_started=true
+  touch "$shutdown_marker"
   trap - INT TERM
 
   if ((${#pids[@]} == 0)); then
@@ -178,14 +206,42 @@ handle_signal() {
 trap handle_signal INT TERM
 trap cleanup EXIT
 
-start_component() {
+start_process() {
   local name="$1"
-  shift
+  local critical="$2"
+  shift 2
   local log_file="$log_dir/$name.log"
   log "启动 $name，日志：$log_file"
   setsid "$@" >"$log_file" 2>&1 &
-  pids+=("$!")
-  process_names+=("$name")
+  last_started_pid="$!"
+  pids+=("$last_started_pid")
+  if [[ "$critical" == true ]]; then
+    critical_pids+=("$last_started_pid")
+    critical_process_names+=("$name")
+  fi
+}
+
+start_component() {
+  local name="$1"
+  shift
+  start_process "$name" true "$@"
+}
+
+start_optional_component() {
+  local name="$1"
+  shift
+  start_process "$name" false "$@"
+  local optional_pid="$last_started_pid"
+  disown "$optional_pid" 2>/dev/null || true
+  (
+    while kill -0 "$optional_pid" 2>/dev/null; do
+      sleep 0.05
+    done
+    if [[ ! -e "$shutdown_marker" ]]; then
+      log "警告：$name 已退出；飞行任务继续运行，但诊断记录可能不完整，请检查 $log_dir/$name.log"
+    fi
+  ) &
+  disown "$!" 2>/dev/null || true
 }
 
 node_exists() {
@@ -269,24 +325,27 @@ fi
 start_component d_task_uav "${backend_command[@]}"
 wait_for_node /d_task_mission \
   || die "D 题任务节点在 ${startup_timeout_s}s 内未就绪"
+start_optional_component mission_topics rosbag record --split --size=256 \
+  -O "$log_dir/mission_topics.bag" "${rosbag_topics[@]}"
 
 log "全部软件已启动，当前不会自动起飞"
 log "请通过小车发送合法 mission_config，定位就绪后等待小车 mission_start"
 log "状态检查：rostopic echo /d_task/positioning/status"
 log "任务检查：rostopic echo /uav_protocol/task_state"
 log "全部日志：$log_dir"
+log "任务话题包：$log_dir/mission_topics*.bag"
 log "按 Ctrl+C 停止本脚本启动的进程"
 
-if wait -n "${pids[@]}"; then
+if wait -n "${critical_pids[@]}"; then
   status=0
 else
   status=$?
 fi
 
 exited_name="某个受管 ROS 进程"
-for index in "${!pids[@]}"; do
-  if ! kill -0 "${pids[$index]}" 2>/dev/null; then
-    exited_name="${process_names[$index]}"
+for index in "${!critical_pids[@]}"; do
+  if ! kill -0 "${critical_pids[$index]}" 2>/dev/null; then
+    exited_name="${critical_process_names[$index]}"
     break
   fi
 done

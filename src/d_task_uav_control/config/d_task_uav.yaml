@@ -147,6 +147,11 @@ pixel_servo:
   body_y_from_v: 0.0
   debug_publish_rate_hz: 20.0
 
+# 任务节点输出结构化状态切换、故障和周期诊断日志；设为 0 可关闭周期快照。
+diagnostics:
+  log_rate_hz: 1.0
+  source_timeout_s: 1.0
+
 mission:
   bridge_namespace: /ego_bridge
   control_rate_hz: 30.0

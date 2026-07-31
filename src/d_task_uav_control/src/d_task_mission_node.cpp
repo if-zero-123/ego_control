@@ -5,6 +5,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -252,11 +253,19 @@ public:
         private_node_.param("mission/apriltag_range_timeout_s",
                             apriltag_range_timeout_s_, 0.35);
         private_node_.param("mission/control_rate_hz", control_rate_hz_, 30.0);
+        private_node_.param("diagnostics/log_rate_hz", diagnostic_log_rate_hz_,
+                            1.0);
+        private_node_.param("diagnostics/source_timeout_s",
+                            diagnostic_source_timeout_s_, 1.0);
         if (control_rate_hz_ < 10.0 || !std::isfinite(control_rate_hz_)
             || apriltag_range_timeout_s_ <= 0.0
-            || !std::isfinite(apriltag_range_timeout_s_)) {
+            || !std::isfinite(apriltag_range_timeout_s_)
+            || diagnostic_log_rate_hz_ < 0.0
+            || !std::isfinite(diagnostic_log_rate_hz_)
+            || diagnostic_source_timeout_s_ <= 0.0
+            || !std::isfinite(diagnostic_source_timeout_s_)) {
             throw std::runtime_error(
-                "mission control rate or AprilTag range timeout is invalid");
+                "mission control rate, AprilTag timeout, or diagnostic rate is invalid");
         }
 
         subscribeTopics();
@@ -486,6 +495,7 @@ private:
             return;
         }
         const std::string mission_id = root.get("mission_id", "").asString();
+        const MissionState previous_state = controller_.state();
         controller_.reset();
         pixel_servo_.reset();
         payload_actuator_.reset();
@@ -495,6 +505,7 @@ private:
             publishFault(2301, "mission_config_rejected_by_controller", "");
             return;
         }
+        logStateTransition(previous_state, "mission_config");
         publishEvent("MISSION_CONTROLLER_CONFIGURED");
         publishTaskState();
     }
@@ -514,7 +525,9 @@ private:
         if (has_odom_) {
             home.yaw = yawFromQuaternion(latest_odom_.pose.pose.orientation);
         }
+        const MissionState previous_state = controller_.state();
         if (controller_.markPositioningReady(mission_id, home)) {
+            logStateTransition(previous_state, "positioning_ready");
             publishEvent("MISSION_CONTROLLER_READY");
             publishTaskState();
         }
@@ -538,6 +551,7 @@ private:
             publishFault(2302, "invalid_local_start_mode", "");
             return;
         }
+        const MissionState previous_state = controller_.state();
         if (!controller_.start(
                 root.get("mission_id", "").asString(), mode,
                 root["payload"].get("start_reason", "").asString(),
@@ -545,6 +559,7 @@ private:
             publishFault(2303, "mission_start_rejected_by_controller", "");
             return;
         }
+        logStateTransition(previous_state, "mission_start");
         publishEvent("MISSION_CONTROLLER_STARTED");
         publishTaskState();
     }
@@ -562,6 +577,11 @@ private:
     }
 
     void platformDetectionCallback(const PlatformDetection::ConstPtr& message) {
+        latest_detection_found_ = message->found;
+        latest_detection_predicted_ = message->predicted;
+        latest_detection_confidence_ = message->confidence;
+        latest_detection_measurement_age_s_ = message->measurement_age_s;
+        last_detection_received_s_ = ros::Time::now().toSec();
         if (!message->found || message->predicted) {
             return;
         }
@@ -571,6 +591,11 @@ private:
     }
 
     void aprilTagRangeCallback(const AprilTagRange::ConstPtr& message) {
+        latest_apriltag_detected_ = message->detected;
+        latest_apriltag_pose_valid_ = message->pose_valid;
+        latest_apriltag_visible_ids_ = message->visible_tag_ids;
+        latest_apriltag_used_ids_ = message->used_tag_ids;
+        last_apriltag_message_received_s_ = ros::Time::now().toSec();
         has_apriltag_range_ = message->detected && message->pose_valid
             && std::isfinite(message->plane_distance_m)
             && message->plane_distance_m > 0.0;
@@ -585,18 +610,22 @@ private:
 
     void bridgeStateCallback(const std_msgs::String::ConstPtr& message) {
         bridge_state_ = message->data;
+        last_bridge_state_received_s_ = ros::Time::now().toSec();
     }
 
     void controlModeCallback(const std_msgs::UInt8::ConstPtr& message) {
         control_mode_ = message->data;
+        last_control_mode_received_s_ = ros::Time::now().toSec();
     }
 
     void descentAllowedCallback(const std_msgs::Bool::ConstPtr& message) {
         descent_allowed_ = message->data;
+        last_descent_allowed_received_s_ = ros::Time::now().toSec();
     }
 
     void safetyHoldCallback(const std_msgs::Bool::ConstPtr& message) {
         safety_hold_ = message->data;
+        last_safety_hold_received_s_ = ros::Time::now().toSec();
     }
 
     void carPoseMetaCallback(const std_msgs::String::ConstPtr& message) {
@@ -611,6 +640,7 @@ private:
         if (distance.isNumeric()) {
             distance_to_d_m_ = distance.asDouble();
         }
+        last_car_pose_meta_received_s_ = ros::Time::now().toSec();
     }
 
     MissionInput buildInput(double now_s) const {
@@ -663,7 +693,11 @@ private:
     void controlTimerCallback(const ros::TimerEvent&) {
         const double now_s = ros::Time::now().toSec();
         const MissionState previous_state = controller_.state();
-        const MissionCommand command = controller_.update(buildInput(now_s));
+        const MissionInput input = buildInput(now_s);
+        const MissionCommand command = controller_.update(input);
+        if (command.fault_code == 0) {
+            last_fault_key_.clear();
+        }
         executeCommand(command, now_s);
         payload_actuator_.update(now_s);
 
@@ -673,7 +707,9 @@ private:
             details["state"] = missionStateName(controller_.state());
             details["retry_count"] = controller_.retryCount();
             publishEvent("MISSION_STATE_CHANGED", details);
+            logStateTransition(previous_state, "control_update");
         }
+        logDiagnosticSnapshot(input, command, now_s);
         publishTaskState();
         if (now_s - last_health_publish_s_ >= 1.0) {
             publishHealth(now_s);
@@ -725,6 +761,169 @@ private:
         }
     }
 
+    static const char* targetName(MissionState state) {
+        switch (state) {
+            case MissionState::MOVE_TO_SEARCH_START: return "SEARCH_START_A";
+            case MissionState::FORWARD_SEARCH: return "SEARCH_END";
+            case MissionState::LOCK_CAR:
+            case MissionState::FOLLOW_CAR:
+            case MissionState::DROP_DESCEND:
+            case MissionState::DESCEND_HIGH:
+            case MissionState::DESCEND_LOW:
+            case MissionState::LAND_ON_PLATFORM: return "PLATFORM";
+            case MissionState::RETURN_HOME:
+            case MissionState::LAND_HOME: return "HOME";
+            default: return "NONE";
+        }
+    }
+
+    void logStateTransition(MissionState previous_state, const char* reason) {
+        if (controller_.state() == previous_state) {
+            return;
+        }
+        ROS_INFO("[d_task_mission][STATE] mission=%s mode=%s %s -> %s retry=%d reason=%s",
+                 controller_.missionId().c_str(),
+                 missionModeName(controller_.mode()),
+                 missionStateName(previous_state),
+                 missionStateName(controller_.state()),
+                 controller_.retryCount(), reason);
+    }
+
+    static double diagnosticNumber(double value) {
+        return std::isfinite(value) ? value : -1.0;
+    }
+
+    static double sourceAge(double now_s, double last_received_s) {
+        return last_received_s >= 0.0 ? now_s - last_received_s : -1.0;
+    }
+
+    bool sourceFresh(double now_s, double last_received_s) const {
+        const double age_s = sourceAge(now_s, last_received_s);
+        return age_s >= 0.0 && age_s <= diagnostic_source_timeout_s_;
+    }
+
+    static Json::Value idArray(const std::vector<int32_t>& ids) {
+        Json::Value value(Json::arrayValue);
+        for (const int32_t id : ids) {
+            value.append(id);
+        }
+        return value;
+    }
+
+    void logDiagnosticSnapshot(const MissionInput& input,
+                               const MissionCommand& command,
+                               double now_s) {
+        if (diagnostic_log_rate_hz_ <= 0.0
+            || now_s - last_diagnostic_log_s_
+                < 1.0 / diagnostic_log_rate_hz_) {
+            return;
+        }
+        last_diagnostic_log_s_ = now_s;
+
+        Json::Value value;
+        value["mission_id"] = controller_.missionId();
+        value["mode"] = missionModeName(controller_.mode());
+        value["state"] = missionStateName(controller_.state());
+        value["state_before"] = missionStateName(command.state);
+        value["state_after"] = missionStateName(controller_.state());
+        value["state_target"] = targetName(command.state);
+        value["bridge_state"] = input.bridge_state;
+        value["bridge_state_age_s"] =
+            sourceAge(now_s, last_bridge_state_received_s_);
+        value["bridge_state_fresh"] =
+            sourceFresh(now_s, last_bridge_state_received_s_);
+        value["control_mode"] = static_cast<unsigned int>(input.control_mode);
+        value["control_mode_age_s"] =
+            sourceAge(now_s, last_control_mode_received_s_);
+        value["control_mode_fresh"] =
+            sourceFresh(now_s, last_control_mode_received_s_);
+
+        value["uav_valid"] = input.uav_valid;
+        value["uav_odom_age_s"] = sourceAge(now_s, last_odom_received_s_);
+        value["uav_x"] = input.uav_x;
+        value["uav_y"] = input.uav_y;
+        value["uav_z"] = input.uav_z;
+        value["uav_vx"] = input.uav_vx;
+        value["uav_vy"] = input.uav_vy;
+        value["uav_vz"] = input.uav_vz;
+
+        value["search_start_error_m"] = std::hypot(
+            input.uav_x - controller_config_.search_start_x_m,
+            input.uav_y - controller_config_.search_start_y_m);
+        value["search_end_error_m"] = std::hypot(
+            input.uav_x - controller_config_.search_start_x_m
+                - controller_config_.search_forward_distance_m,
+            input.uav_y - controller_config_.search_start_y_m);
+
+        value["platform_valid"] = input.platform_valid;
+        value["platform_receive_age_s"] =
+            sourceAge(now_s, last_platform_received_s_);
+        value["platform_filter_mode"] =
+            static_cast<unsigned int>(latest_platform_.filter_mode);
+        value["platform_measurement_age_s"] =
+            static_cast<double>(latest_platform_.measurement_age_ms) / 1000.0;
+        value["platform_confidence"] = latest_platform_.confidence;
+        value["platform_vision"] = input.platform_vision_detected;
+        value["platform_x"] = input.platform_x;
+        value["platform_y"] = input.platform_y;
+        value["platform_z"] = input.platform_z;
+        value["platform_vx"] = input.platform_vx;
+        value["platform_vy"] = input.platform_vy;
+        value["raw_detection_found"] = latest_detection_found_;
+        value["raw_detection_predicted"] = latest_detection_predicted_;
+        value["raw_detection_confidence"] = latest_detection_confidence_;
+        value["raw_detection_receive_age_s"] =
+            sourceAge(now_s, last_detection_received_s_);
+        value["raw_detection_measurement_age_s"] =
+            latest_detection_measurement_age_s_;
+        value["raw_detection_fresh"] =
+            sourceFresh(now_s, last_detection_received_s_);
+
+        value["pixel_valid"] = input.pixel_valid;
+        value["pixel_aligned"] = input.pixel_aligned;
+        value["pixel_world_vx"] = input.pixel_world_vx;
+        value["pixel_world_vy"] = input.pixel_world_vy;
+        value["apriltag_detected"] = latest_apriltag_detected_;
+        value["apriltag_age_s"] =
+            sourceAge(now_s, last_apriltag_message_received_s_);
+        value["apriltag_fresh"] =
+            sourceFresh(now_s, last_apriltag_message_received_s_);
+        value["apriltag_pose_valid"] = latest_apriltag_pose_valid_;
+        value["apriltag_range_valid"] = input.apriltag_range_valid;
+        value["apriltag_center"] = input.apriltag_center_tag_visible;
+        value["apriltag_plane_distance_m"] =
+            diagnosticNumber(input.apriltag_plane_distance_m);
+        value["apriltag_visible_ids"] = idArray(latest_apriltag_visible_ids_);
+        value["apriltag_used_ids"] = idArray(latest_apriltag_used_ids_);
+
+        value["descent_allowed"] = input.descent_allowed;
+        value["descent_allowed_age_s"] =
+            sourceAge(now_s, last_descent_allowed_received_s_);
+        value["descent_allowed_fresh"] =
+            sourceFresh(now_s, last_descent_allowed_received_s_);
+        value["safety_hold"] = input.safety_hold;
+        value["safety_hold_age_s"] =
+            sourceAge(now_s, last_safety_hold_received_s_);
+        value["safety_hold_fresh"] =
+            sourceFresh(now_s, last_safety_hold_received_s_);
+        value["distance_to_d_m"] = diagnosticNumber(input.distance_to_d_m);
+        value["car_pose_meta_age_s"] =
+            sourceAge(now_s, last_car_pose_meta_received_s_);
+        value["car_pose_meta_fresh"] =
+            sourceFresh(now_s, last_car_pose_meta_received_s_);
+        value["setpoint_valid"] = command.setpoint_valid;
+        value["target_x"] = command.target_x;
+        value["target_y"] = command.target_y;
+        value["target_z"] = command.target_z;
+        value["target_vx"] = command.target_vx;
+        value["target_vy"] = command.target_vy;
+        value["target_vz"] = command.target_vz;
+        value["override_request"] = command.override_mode_request;
+        value["fault_code"] = command.fault_code;
+        value["fault_text"] = command.fault_text;
+        ROS_INFO_STREAM("[d_task_mission][DIAG] " << writeJson(value));
+    }
+
     void publishTaskState() {
         Json::Value state;
         state["mission_id"] = controller_.missionId();
@@ -745,6 +944,7 @@ private:
         std_msgs::String message;
         message.data = writeJson(value);
         event_publisher_.publish(message);
+        ROS_INFO_STREAM("[d_task_mission][EVENT] " << message.data);
     }
 
     void publishFault(int code, const std::string& text,
@@ -764,6 +964,7 @@ private:
         std_msgs::String message;
         message.data = writeJson(value);
         fault_publisher_.publish(message);
+        ROS_ERROR_STREAM("[d_task_mission][FAULT] " << message.data);
     }
 
     void publishHealth(double now_s) {
@@ -831,6 +1032,16 @@ private:
     bool has_odom_ = false;
     bool has_platform_ = false;
     bool has_apriltag_range_ = false;
+    bool latest_detection_found_ = false;
+    bool latest_detection_predicted_ = false;
+    float latest_detection_confidence_ = 0.0F;
+    float latest_detection_measurement_age_s_ = 0.0F;
+    double last_detection_received_s_ = -1.0;
+    bool latest_apriltag_detected_ = false;
+    bool latest_apriltag_pose_valid_ = false;
+    std::vector<int32_t> latest_apriltag_visible_ids_;
+    std::vector<int32_t> latest_apriltag_used_ids_;
+    double last_apriltag_message_received_s_ = -1.0;
     double last_odom_received_s_ = -1.0;
     double last_platform_received_s_ = -1.0;
     double last_apriltag_range_received_s_ = -1.0;
@@ -839,14 +1050,22 @@ private:
         std::numeric_limits<double>::infinity();
     bool apriltag_center_tag_visible_ = false;
     std::string bridge_state_;
+    double last_bridge_state_received_s_ = -1.0;
     uint8_t control_mode_ = 0;
+    double last_control_mode_received_s_ = -1.0;
     bool descent_allowed_ = false;
+    double last_descent_allowed_received_s_ = -1.0;
     bool safety_hold_ = false;
+    double last_safety_hold_received_s_ = -1.0;
     double distance_to_d_m_ = std::numeric_limits<double>::infinity();
+    double last_car_pose_meta_received_s_ = -1.0;
     double odom_timeout_s_ = 0.30;
     double platform_estimate_timeout_s_ = 0.35;
     double apriltag_range_timeout_s_ = 0.35;
     double control_rate_hz_ = 30.0;
+    double diagnostic_log_rate_hz_ = 1.0;
+    double diagnostic_source_timeout_s_ = 1.0;
+    double last_diagnostic_log_s_ = -1e9;
     double last_health_publish_s_ = -1e9;
     bool terminal_published_ = false;
     std::string last_fault_key_;
