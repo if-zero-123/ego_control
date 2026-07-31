@@ -44,6 +44,9 @@ simple_follow:
   odom_timeout_s: 0.30
   tag_timeout_s: 0.20
   takeoff_retry_s: 0.50
+  # HOVER and fresh odometry must remain continuous for this long before
+  # starting the right-front search leg.
+  takeoff_hover_s: 3.0
   landing_retry_s: 0.50
   min_tag_side_px: 8.0
   tag_id: 0

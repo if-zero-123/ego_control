@@ -32,10 +32,12 @@ const char* fixedHeightDropStateName(FixedHeightDropState state) {
 FixedHeightDropFlow::FixedHeightDropFlow(
     const FixedHeightDropFlowConfig& config)
     : config_(config) {
-    if (!std::isfinite(config_.alignment_stable_s)
+    if (!std::isfinite(config_.takeoff_hover_s)
+        || !std::isfinite(config_.alignment_stable_s)
         || !std::isfinite(config_.release_duration_s)
         || !std::isfinite(config_.release_settle_s)
         || !std::isfinite(config_.home_stable_s)
+        || config_.takeoff_hover_s < 0.0
         || config_.alignment_stable_s < 0.0
         || config_.release_duration_s < 0.0
         || config_.release_settle_s < 0.0
@@ -140,7 +142,8 @@ FixedHeightDropFlowOutput FixedHeightDropFlow::update(
     } else {
         switch (state_) {
             case FixedHeightDropState::TAKEOFF:
-                if (input.takeoff_complete) {
+                if (conditionHeld(input.takeoff_complete, input.now_s,
+                                  config_.takeoff_hover_s)) {
                     transition(FixedHeightDropState::MOVE_TO_SEARCH_START,
                                input.now_s, output);
                 }

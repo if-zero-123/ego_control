@@ -813,7 +813,8 @@ class UavProtocolGateway:
     def _publish_event(self, event: str, **details: Any) -> None:
         with self.lock:
             message = build_event(self.factory, self._context_mission_id(), event, **details)
-            self._safe_publish(Topics.UAV_EVENT, message, qos=0)
+            qos = 1 if event == "PAYLOAD_RELEASED_SPEED_UP" else 0
+            self._safe_publish(Topics.UAV_EVENT, message, qos=qos)
 
     def _publish_fault(self, code: int, severity: str, text: str, **details: Any) -> None:
         self.fault_code = code

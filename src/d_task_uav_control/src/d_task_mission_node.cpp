@@ -249,6 +249,8 @@ public:
 private:
     FixedHeightDropFlowConfig loadFlowConfig() {
         FixedHeightDropFlowConfig config;
+        private_node_.param("simple_follow/takeoff_hover_s",
+                            config.takeoff_hover_s, 3.0);
         private_node_.param("simple_follow/drop_alignment_stable_s",
                             config.alignment_stable_s, 1.0);
         private_node_.param("payload/pulse_duration_s",
@@ -770,6 +772,7 @@ private:
                 } else if (output.previous_state
                            == FixedHeightDropState::RELEASE) {
                     publishEvent("PAYLOAD_RELEASE_COMPLETE");
+                    publishEvent("PAYLOAD_RELEASED_SPEED_UP");
                     publishEvent("CAR_SPEEDUP_REQUESTED");
                 }
                 publishEvent("RETURN_HOME_STARTED");
@@ -842,9 +845,12 @@ private:
 
         const FixedHeightDropState state = flow_.state();
         if (started_ && state == FixedHeightDropState::TAKEOFF) {
-            if (now_s - last_takeoff_request_s_ >= takeoff_retry_s_) {
+            if (bridge_state_ != "HOVER"
+                && now_s - last_takeoff_request_s_ >= takeoff_retry_s_) {
                 ego_api_->requestTakeoffTo(home_z_ + flight_height_m_);
                 last_takeoff_request_s_ = now_s;
+            } else if (bridge_state_ == "HOVER" && !odom_fresh) {
+                publishFault(2101, "uav_odometry_stale");
             }
         } else if (started_ && !odom_fresh
                    && state != FixedHeightDropState::LAND_HOME

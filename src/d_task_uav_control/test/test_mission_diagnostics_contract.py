@@ -43,6 +43,7 @@ class FixedHeightMissionContractTests(unittest.TestCase):
             self.assertNotIn(removed, self.node)
             self.assertNotIn(removed, self.config)
         self.assertIn("conditionHeld(input.aligned", self.flow)
+        self.assertIn("conditionHeld(input.takeoff_complete", self.flow)
         self.assertIn("config_.release_duration_s", self.flow)
         self.assertIn("conditionHeld(input.home_reached", self.flow)
 
@@ -50,6 +51,7 @@ class FixedHeightMissionContractTests(unittest.TestCase):
         for symbol in (
             '"PAYLOAD_RELEASE_TRIGGERED"',
             '"PAYLOAD_RELEASE_COMPLETE"',
+            '"PAYLOAD_RELEASED_SPEED_UP"',
             '"CAR_SPEEDUP_REQUESTED"',
             '"RETURN_HOME_STARTED"',
             '"MISSION_CONTROLLER_FINISHED"',
@@ -60,6 +62,7 @@ class FixedHeightMissionContractTests(unittest.TestCase):
 
     def test_payload_and_drop_gate_match_field_configuration(self):
         for setting in (
+            "takeoff_hover_s: 3.0",
             "drop_alignment_stable_s: 1.00",
             "enabled: true",
             "backend: gpio",

@@ -18,18 +18,49 @@ void advanceToFollow(FixedHeightDropFlow& flow,
     input.now_s = 1.1;
     input.takeoff_complete = true;
     flow.update(input);
+    ASSERT_EQ(flow.state(), FixedHeightDropState::TAKEOFF);
+    input.now_s = 4.1;
+    flow.update(input);
     ASSERT_EQ(flow.state(), FixedHeightDropState::MOVE_TO_SEARCH_START);
     input.takeoff_complete = false;
     input.offset_reached = true;
-    input.now_s = 1.2;
+    input.now_s = 4.2;
     flow.update(input);
     ASSERT_EQ(flow.state(), FixedHeightDropState::FORWARD_SEARCH);
     input.offset_reached = false;
     input.tag_detected = true;
-    input.now_s = 1.3;
+    input.now_s = 4.3;
     flow.update(input);
     ASSERT_EQ(flow.state(), FixedHeightDropState::FOLLOW_CAR);
     input.tag_detected = false;
+}
+
+TEST(FixedHeightDropFlow, TakeoffHoverRequiresThreeContinuousSeconds) {
+    FixedHeightDropFlowConfig config;
+    config.takeoff_hover_s = 3.0;
+    FixedHeightDropFlow flow = readyFlow(config);
+    FixedHeightDropFlowInput input;
+
+    input.takeoff_complete = true;
+    input.now_s = 1.1;
+    flow.update(input);
+    input.now_s = 3.0;
+    flow.update(input);
+    EXPECT_EQ(flow.state(), FixedHeightDropState::TAKEOFF);
+
+    input.takeoff_complete = false;
+    input.now_s = 3.1;
+    flow.update(input);
+    input.takeoff_complete = true;
+    input.now_s = 3.2;
+    flow.update(input);
+    input.now_s = 6.19;
+    flow.update(input);
+    EXPECT_EQ(flow.state(), FixedHeightDropState::TAKEOFF);
+
+    input.now_s = 6.2;
+    flow.update(input);
+    EXPECT_EQ(flow.state(), FixedHeightDropState::MOVE_TO_SEARCH_START);
 }
 
 TEST(FixedHeightDropFlow, CompletesEventDrivenDropReturnAndLanding) {
@@ -43,31 +74,31 @@ TEST(FixedHeightDropFlow, CompletesEventDrivenDropReturnAndLanding) {
     advanceToFollow(flow, input);
 
     input.aligned = true;
-    input.now_s = 2.0;
+    input.now_s = 5.0;
     EXPECT_FALSE(flow.update(input).trigger_payload);
-    input.now_s = 3.0;
+    input.now_s = 6.0;
     const FixedHeightDropFlowOutput release = flow.update(input);
     EXPECT_TRUE(release.trigger_payload);
     EXPECT_EQ(flow.state(), FixedHeightDropState::RELEASE);
 
     input.aligned = false;
-    input.now_s = 8.24;
+    input.now_s = 11.24;
     flow.update(input);
     EXPECT_EQ(flow.state(), FixedHeightDropState::RELEASE);
-    input.now_s = 8.25;
+    input.now_s = 11.25;
     flow.update(input);
     EXPECT_EQ(flow.state(), FixedHeightDropState::RETURN_HOME);
 
     input.home_reached = true;
-    input.now_s = 9.0;
+    input.now_s = 12.0;
     flow.update(input);
-    input.now_s = 9.5;
+    input.now_s = 12.5;
     flow.update(input);
     EXPECT_EQ(flow.state(), FixedHeightDropState::LAND_HOME);
 
     input.home_reached = false;
     input.landed = true;
-    input.now_s = 9.6;
+    input.now_s = 12.6;
     const FixedHeightDropFlowOutput complete = flow.update(input);
     EXPECT_TRUE(complete.terminal);
     EXPECT_FALSE(complete.aborted);
@@ -82,18 +113,18 @@ TEST(FixedHeightDropFlow, AlignmentLossRestartsStableWindow) {
     advanceToFollow(flow, input);
 
     input.aligned = true;
-    input.now_s = 2.0;
+    input.now_s = 5.0;
     flow.update(input);
     input.aligned = false;
-    input.now_s = 2.8;
+    input.now_s = 5.8;
     flow.update(input);
     input.aligned = true;
-    input.now_s = 3.0;
+    input.now_s = 6.0;
     flow.update(input);
-    input.now_s = 3.9;
+    input.now_s = 6.9;
     flow.update(input);
     EXPECT_EQ(flow.state(), FixedHeightDropState::FOLLOW_CAR);
-    input.now_s = 4.0;
+    input.now_s = 7.0;
     EXPECT_TRUE(flow.update(input).trigger_payload);
     EXPECT_EQ(flow.state(), FixedHeightDropState::RELEASE);
 }
@@ -106,13 +137,15 @@ TEST(FixedHeightDropFlow, MissingTagAtSearchEndReturnsAndAborts) {
     input.now_s = 1.1;
     input.takeoff_complete = true;
     flow.update(input);
+    input.now_s = 4.1;
+    flow.update(input);
     input.takeoff_complete = false;
     input.offset_reached = true;
-    input.now_s = 1.2;
+    input.now_s = 4.2;
     flow.update(input);
     input.offset_reached = false;
     input.search_endpoint_reached = true;
-    input.now_s = 1.3;
+    input.now_s = 4.3;
     const FixedHeightDropFlowOutput failed = flow.update(input);
 
     EXPECT_EQ(flow.state(), FixedHeightDropState::RETURN_HOME);
@@ -122,11 +155,11 @@ TEST(FixedHeightDropFlow, MissingTagAtSearchEndReturnsAndAborts) {
 
     input.search_endpoint_reached = false;
     input.home_reached = true;
-    input.now_s = 1.4;
+    input.now_s = 4.4;
     flow.update(input);
     EXPECT_EQ(flow.state(), FixedHeightDropState::LAND_HOME);
     input.landed = true;
-    input.now_s = 1.5;
+    input.now_s = 4.5;
     const FixedHeightDropFlowOutput terminal = flow.update(input);
     EXPECT_TRUE(terminal.terminal);
     EXPECT_TRUE(terminal.aborted);
@@ -139,7 +172,7 @@ TEST(FixedHeightDropFlow, AbortWhileAirborneReturnsHome) {
     FixedHeightDropFlowInput input;
     advanceToFollow(flow, input);
     input.abort_requested = true;
-    input.now_s = 2.0;
+    input.now_s = 5.0;
 
     const FixedHeightDropFlowOutput output = flow.update(input);
 
