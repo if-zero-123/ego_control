@@ -19,6 +19,8 @@ positioning:
 topics:
   mission_config: /uav_protocol/mission_config
   mission_start: /uav_protocol/mission_start
+  car_event: /uav_protocol/car/event
+  mission_reset: /uav_protocol/mission_reset
   positioning_status: /d_task/positioning/status
   px4_odom: /mavros/local_position/odom
   bridge_state: /ego_bridge/flight_state
@@ -31,6 +33,7 @@ topics:
   local_health: /uav_protocol/local_health
   vision_health: /d_task/vision/health
   tag_center: /d_task/vision/tag0_center
+  local_tracking: /uav_protocol/local_tracking
   debug: /d_task/simple_follow/debug
 
 # Minimal tuning surface.  Height is a fixed setpoint relative to the
@@ -61,16 +64,37 @@ simple_follow:
   forward_search_distance_m: 1.00
   forward_search_reach_radius_m: 0.08
 
-  # Abort the pre-follow path if the diagonal offset and forward search cannot
-  # finish within this window.  Once FOLLOW_TAG starts, use its own timer.
-  search_timeout_s: 20.0
-  follow_duration_s: 30.0
-  pre_land_hover_s: 7.0
+  # The payload gate is event-driven, not a fixed follow duration: Tag 0 must
+  # remain centred at cruise height for the stable window below.
+  drop_alignment_tolerance: 0.08
+  drop_alignment_stable_s: 1.00
+  height_tolerance_m: 0.10
+
+  # After the GPIO pulse returns neutral, hold briefly before signalling the
+  # car to speed up and returning directly to the positioning home.
+  release_settle_s: 0.25
+  home_xy_tolerance_m: 0.20
+  home_stable_s: 0.50
 
   pid:
-    kp: 0.35
+    kp: 0.65
     ki: 0.00
     kd: 0.00
     deadband: 0.04
     integral_limit: 0.50
     max_speed_mps: 0.35
+
+# Orange Pi 5 Ultra physical pin 16 (GPIO1_A3, WiringOP 9) drives the
+# delivery actuator.  The output is reset to neutral on every configuration,
+# abort, shutdown, and after the single release pulse.
+payload:
+  enabled: true
+  backend: gpio
+  gpio_wiringpi_pin: 9
+  gpio_active_high: true
+  topic: /mavros/actuator_control
+  group_mix: 2
+  channel: 0
+  release_value: 1.0
+  neutral_value: 0.0
+  pulse_duration_s: 5.0

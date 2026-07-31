@@ -98,14 +98,18 @@ UAV health 同时发布 `positioning_ready=true`，小车不会再把“旧 odom
 
 ## 任务流程
 
-`DROP`：起飞至相对 H 点 1.50m，悬停 3 秒后先飞到无人机世界坐标
-`(0.746, -0.379)`，再保持巡航高度沿世界坐标 `+X` 方向前进 1.50m，搜索终点为
-`(2.246, -0.379)`。前进过程中持续检查平台估计和外围 AprilTag 真实检测；一旦发现平台，
-立即退出固定搜索航迹并进入视觉锁定和伴飞。到达搜索终点仍未发现平台时，不再
-继续搜索，直接返回 H 点、降落并以任务失败结束。进入伴飞后按卡尔曼估计的位置和
-速度接近，多码融合平台中心参与精确伴飞；像素、XY 和相对速度稳定后在 1.50m
-巡航高度直接投递，随后爬升、返回 H 点和普通降落。`distance_to_d_m` 仅作 D 点
-截止保护，不会等到 D 点附近才开始投放。
+`DROP`：定位就绪时锁存 H 点和起飞航向，起飞至相对 H 点 1.50m。进入悬停后，先按
+起飞航向向右前方 30° 移动 0.50m，再沿锁定的起飞航向向前搜索 1.00m。搜索途中一旦
+真实识别 ID 0，立即进入现有图像中心 PID 伴飞；到达搜索终点仍未识别则直接返回 H、
+降落并以 `ABORT` 结束。
+
+伴飞没有固定时长。ID 0 在巡航高度持续对中 1.00s 后，状态进入 `RELEASE`，无人机保持
+当前水平位置和 1.50m 高度，物理16脚输出5.0s投递脉冲并自动恢复低电平。投递完成后才
+进入 `RETURN_HOME`；此状态通过 UAV `follow_established` 协议锁存通知小车提速。无人机
+同时直接返回 H 点，稳定到位后进入 `LAND_HOME`，落地后发布 `COMPLETE` 和 mission reset。
+mission reset 会释放 Orange 网关的当前任务上下文，使下一次地面站选任务能够重新触发
+Fast-LIO。地面站对同一 mission 执行“重新建立定位”时会使用新的配置 command_id，网关
+也会重新下发该配置，而不是当成传输重复包。
 
 任务视觉源按状态严格分段。`SEARCH_CAR/LOCK_CAR` 在 1.50m 巡航高度以 ID 1-4
 的 120mm 外围码为主；进入 `FOLLOW_CAR` 后如果 ID 0 中心码同时可见，也允许与外围码
@@ -123,22 +127,10 @@ v_cmd = v_tag + Kp * (p_tag - p_uav) + Kd * (v_tag - v_uav) + vision_trim
 其中 `p_tag/v_tag` 均来自 AprilTag 平台中心投影后的卡尔曼状态。速度指令以 30Hz 通过
 `/ego_bridge/override_cmd` 发送，始终使用 `control_mode=1`；水平目标位置填入
 无人机当前位置，避免桥接层位置环与外部 PD 重复控制，Z 方向仍使用任务目标高度。
-全流程不接入 EGO-Planner，也不启用避障。当前简化任务识别到 ID 0 并进入
-`FOLLOW_TAG` 后，网关立即把 `follow_established=true` 持续回传给小车，小车据此从
-低速切到正常速度；伴飞从进入 `FOLLOW_TAG` 时独立计时 30 秒。平台中心和
-检测范围先经过 α-β 滤波，码面距离另经低通和跳变门限；瞬间丢码时最多按像素速度
-预测 `0.18s`（30Hz 下约 5 帧），预测置信度随时间衰减。
-DROP 投递只要求外围码融合的平台中心有效、像素/XY/相对速度对准并稳定 `1.0s`；
-在 1.50m 巡航高度直接进入释放，不要求 ID 0 或 AprilTag 近距测距。中心码如果可见，
-会作为联合 PnP 的额外约束；测距失效不会阻止高空投递。
-预测帧只维持图像源和中心显示，不产生三维测距，也不会刷新控制层的真实观测或触发投递。
-
-`DYNAMIC_LANDING`：起飞、搜索和伴飞后分 0.80m、0.30m 两段下降，
-低段只有 ID 0 真实可见并稳定对中才进入平台接触。中心码因距离过近离开画面后，
-像素修正在 0.25s 内平滑衰减，控制器只使用最后 AprilTag 卡尔曼位置/速度继续随车
-下压，单次盲区预测最多 1.0s。桥接层确认下压误差和低垂速
-持续成立后锁桨，随车停留 5.20 秒，再预发 setpoint、切 OFFBOARD、解锁，
-恢复 1.50m 高度并返航。接触超时最多自动取消并重试一次。
+全流程不接入 EGO-Planner，也不启用避障。水平控制只读取下视相机 ID 0 的去畸变中心，
+小车上传的 X/Y/速度不进入无人机 PID。短时丢码时水平指令归零并保持固定高度；只有新鲜
+真实标签重新稳定对中才允许投递。`DYNAMIC_LANDING` 不由当前简化生产节点执行；选择该
+模式会被任务节点明确拒绝，避免把动态降落错误地当成 DROP 流程飞行。
 
 小车位姿超过 300ms 未更新时，网关仍会关闭动态下降安全门，但小车 X/Y/速度不进入
 水平控制。高空伴飞短时失视时只按最后 AprilTag 状态预测，最多 1.0s；进入动态下降后
@@ -168,7 +160,14 @@ X/Y/速度融合。
 无人机任务常调参数集中在
 `src/d_task_uav_control/config/d_task_uav.yaml`：
 
-- `tracking.use_car_measurements`：当前固定配置为 `false`，小车 X/Y/速度不进入平台滤波。
+- `simple_follow.initial_offset_distance_m/initial_offset_clockwise_deg`：起飞后右前搜索段，
+  当前为 `0.50m/30°`。
+- `simple_follow.forward_search_distance_m`：沿锁定起飞航向继续搜索，当前为 `1.00m`。
+- `simple_follow.pid.*`：ID 0 图像中心 PID；当前 `kp=0.65`，Z 始终保持任务固定高度。
+- `simple_follow.drop_alignment_tolerance/drop_alignment_stable_s`：投递前图像归一化误差
+  和连续稳定门，当前为 `0.08/1.00s`。
+- `simple_follow.home_xy_tolerance_m/home_stable_s`：返航到 H 的到位门，当前为
+  `0.20m/0.50s`。
 - `tracking.car_frame_offset_x_m/y_m`、`car_frame_yaw_offset_rad`：旧融合方案兼容参数；
   `use_car_measurements=false` 时不生效。
 - 现场把无人机中心放在小车坐标圆点时，无人机本地坐标测得
@@ -201,7 +200,7 @@ X/Y/速度融合。
 - `mission.landing_prediction_timeout_s`：最终接触阶段中心码盲区预测上限，默认 `1.0s`。
 - `mission.landing_visual_handoff_s`：视觉修正切换到坐标预测的平滑时间，默认 `0.25s`。
 - 对中误差、相对速度、稳定时间、超时、5.20 秒停留和重试次数。
-- `payload.*`：投放执行器预留配置。
+- `payload.*`：投放执行器配置；当前启用 WiringOP 9、高电平有效、单次脉冲5.0s。
 
 参数在启动时加载，飞行中不热更新。调整坐标偏移、像素轴映射和平台高度后，
 必须先做低高度、禁用自动解锁的实机验证。

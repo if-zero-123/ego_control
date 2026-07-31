@@ -8,6 +8,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   ego_api
   image_transport
+  mavros_msgs
   nav_msgs
   roscpp
   rospy
@@ -20,16 +21,30 @@ find_package(jsoncpp REQUIRED)
 catkin_python_setup()
 
 catkin_package(
-  CATKIN_DEPENDS cv_bridge ego_api image_transport nav_msgs roscpp rospy sensor_msgs std_msgs
+  INCLUDE_DIRS include
+  LIBRARIES d_task_fixed_height_drop_flow d_task_payload_pulse
+  CATKIN_DEPENDS cv_bridge ego_api image_transport mavros_msgs nav_msgs roscpp rospy sensor_msgs std_msgs
   DEPENDS OpenCV
 )
 
-include_directories(${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
+include_directories(include ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 
-# The competition path intentionally contains one flight-control executable:
-# raw AprilTag ID 0 centre -> horizontal PID -> fixed-height OVERRIDE setpoint.
+add_library(d_task_fixed_height_drop_flow
+  src/fixed_height_drop_flow.cpp
+)
+target_link_libraries(d_task_fixed_height_drop_flow ${catkin_LIBRARIES})
+
+add_library(d_task_payload_pulse
+  src/payload_pulse.cpp
+)
+target_link_libraries(d_task_payload_pulse ${catkin_LIBRARIES})
+
+# Competition DROP path: raw AprilTag ID 0 centre -> horizontal PID ->
+# fixed-height release -> return-home landing.
 add_executable(d_task_mission_node src/d_task_mission_node.cpp)
 target_link_libraries(d_task_mission_node
+  d_task_fixed_height_drop_flow
+  d_task_payload_pulse
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
   jsoncpp_lib
@@ -47,7 +62,10 @@ install(PROGRAMS
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-install(TARGETS d_task_mission_node
+install(TARGETS d_task_fixed_height_drop_flow d_task_payload_pulse
+                d_task_mission_node
+  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -56,6 +74,21 @@ install(DIRECTORY config launch
 )
 
 if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_fixed_height_drop_flow
+    test/test_fixed_height_drop_flow.cpp)
+  if(TARGET test_fixed_height_drop_flow)
+    target_link_libraries(test_fixed_height_drop_flow
+      d_task_fixed_height_drop_flow ${catkin_LIBRARIES})
+  endif()
+
+  catkin_add_gtest(test_payload_pulse test/test_payload_pulse.cpp)
+  if(TARGET test_payload_pulse)
+    target_link_libraries(test_payload_pulse
+      d_task_payload_pulse ${catkin_LIBRARIES})
+  endif()
+
   catkin_add_nosetests(test/test_tag0_offset_calibration.py)
   catkin_add_nosetests(test/test_tag0_offset_calibration_launch.py)
+  catkin_add_nosetests(test/test_mission_diagnostics_contract.py)
+  catkin_add_nosetests(test/test_mission_config_sender_contract.py)
 endif()

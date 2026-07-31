@@ -37,45 +37,34 @@ class MissionConfigSenderContractTests(unittest.TestCase):
             PACKAGE_ROOT / "config" / "d_task_uav.yaml"
         ).read_text(encoding="utf-8")
 
-    def test_gateway_authorizes_car_mission_config(self):
+    def test_all_local_consumers_authorize_car_mission_config(self):
         self.assertIn(
             'Topics.MISSION_CONFIG: ("mission_config", "car")',
             self.gateway_source,
         )
-
-    def test_fastlio_supervisor_uses_gateway_sender_contract(self):
-        callback = self.supervisor_source.split(
-            "def _mission_config_cb", 1
-        )[1].split("def _start_launch", 1)[0]
-
-        self.assertIn('message.sender != "car"', callback)
-        self.assertNotIn('message.sender != "ground"', callback)
-
-    def test_mission_node_uses_gateway_sender_contract(self):
-        callback = self.mission_node_source.split(
-            "void missionConfigCallback", 1
-        )[1].split("void missionStartCallback", 1)[0]
-
-        self.assertIn('root.get("sender", "").asString() != "car"', callback)
-        self.assertNotIn('root.get("sender", "").asString() != "ground"', callback)
-
-    def test_fixed_drop_search_path_is_loaded_from_yaml(self):
-        self.assertIn("search_start_x_m: 0.746", self.mission_config_source)
-        self.assertIn("search_start_y_m: -0.379", self.mission_config_source)
-        self.assertIn("search_forward_distance_m: 1.50", self.mission_config_source)
+        self.assertIn('message.sender != "car"', self.supervisor_source)
         self.assertIn(
-            'LOAD_MISSION_PARAM("search_start_x_m", search_start_x_m)',
+            'root.get("sender", "").asString() != "car"',
             self.mission_node_source,
         )
-        self.assertIn(
-            'LOAD_MISSION_PARAM("search_start_y_m", search_start_y_m)',
-            self.mission_node_source,
-        )
-        self.assertRegex(
-            self.mission_node_source,
-            r'LOAD_MISSION_PARAM\("search_forward_distance_m",\s*'
-            r"search_forward_distance_m\)",
-        )
+
+    def test_same_mission_new_command_restarts_positioning(self):
+        branch = self.gateway_source.split(
+            "if self.configured_mission_id == message.mission_id:", 1
+        )[1].split("self.configured_mission_id = message.mission_id", 1)[0]
+        self.assertIn("self.positioning_ready = False", branch)
+        self.assertIn('CoreAction(kind="mission_config"', branch)
+
+    def test_drop_search_path_is_takeoff_relative(self):
+        for setting in (
+            "initial_offset_distance_m: 0.50",
+            "initial_offset_clockwise_deg: 30.0",
+            "forward_search_distance_m: 1.00",
+        ):
+            self.assertIn(setting, self.mission_config_source)
+        self.assertIn("home_yaw_", self.mission_node_source)
+        self.assertIn("offset_target_x_", self.mission_node_source)
+        self.assertIn("forward_target_x_", self.mission_node_source)
 
     def test_gateway_preserves_fixed_search_states(self):
         self.assertIn('"MOVE_TO_SEARCH_START"', self.gateway_node_source)

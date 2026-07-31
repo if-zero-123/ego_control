@@ -108,6 +108,31 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertEqual(self.core.configured_mission_id, "mission-0001")
         self.assertFalse(self.core.positioning_ready)
 
+    def test_new_same_mission_config_restarts_positioning(self):
+        first = self.mission_config(command_id="config-initial")
+        self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(first),
+            now_ms=self.clock[0],
+        )
+        self.assertTrue(self.core.set_positioning_ready("mission-0001", True))
+        reset = self.mission_config(command_id="config-localization-reset")
+
+        result = self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(reset),
+            now_ms=self.clock[0],
+        )
+
+        self.assertEqual(
+            [action.kind for action in result.actions],
+            ["ack", "mission_config"],
+        )
+        self.assertEqual(
+            result.actions[0].message.payload["result"], "accepted"
+        )
+        self.assertFalse(self.core.positioning_ready)
+
     def test_rejects_ground_as_the_mission_config_authority(self):
         message = build_mission_config(
             self.ground_factory,
@@ -164,12 +189,16 @@ class GatewayCoreTests(unittest.TestCase):
     def test_follow_established_latches_only_after_stable_follow_states(self):
         self.assertFalse(
             follow_established_after_state(False, "DROP", "FOLLOW_CAR"))
-        self.assertTrue(
+        self.assertFalse(
             follow_established_after_state(False, "DROP", "FOLLOW_TAG"))
-        self.assertTrue(
+        self.assertFalse(
             follow_established_after_state(False, "DROP", "DROP_DESCEND"))
+        self.assertFalse(
+            follow_established_after_state(False, "DROP", "RELEASE"))
         self.assertTrue(
             follow_established_after_state(True, "DROP", "RETURN_HOME"))
+        self.assertTrue(
+            follow_established_after_state(False, "DROP", "RETURN_HOME"))
         self.assertTrue(
             follow_established_after_state(
                 False, "DYNAMIC_LANDING", "DESCEND_HIGH"))

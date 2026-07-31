@@ -57,7 +57,7 @@
     </node>
   </group>
 
-  <!-- No PnP, prediction, target fusion, landing, or payload state machine. -->
+  <!-- DROP mission: fixed-height Tag 0 follow, payload release, return and land. -->
   <node pkg="d_task_uav_control" type="d_task_mission_node"
         name="d_task_mission" output="screen">
     <rosparam command="load" file="$(arg config_file)"/>

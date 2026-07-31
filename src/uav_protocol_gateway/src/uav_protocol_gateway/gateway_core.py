@@ -28,7 +28,9 @@ from d_task_protocol.topics import Topics, topic_accepts_message
 
 
 _FOLLOW_ESTABLISHED_STATES = {
-    "DROP": {"FOLLOW_TAG", "DROP_DESCEND", "RELEASE"},
+    # DROP speed-up is deliberately delayed until the payload pulse has
+    # completed and the UAV has started returning home.
+    "DROP": {"RETURN_HOME", "LAND_HOME", "COMPLETE"},
     "DYNAMIC_LANDING": {
         "FOLLOW_TAG",
         "DESCEND_HIGH",
@@ -290,8 +292,15 @@ class UavGatewayCore:
                 result.reason = "mission_id_mode_conflict"
                 result.actions.append(self._ack(message, AckResult.REJECTED, result.reason))
             else:
+                # A QoS retry with the same command_id is filtered by
+                # MessageGuard before reaching this branch.  Reaching here
+                # means the car issued a new configuration command for the
+                # same mission (RESET_LOCALIZATION), so positioning must be
+                # restarted instead of treating it as a transport duplicate.
+                self.positioning_ready = False
+                result.actions.append(self._ack(message, AckResult.ACCEPTED, ""))
                 result.actions.append(
-                    self._ack(message, AckResult.DUPLICATE, "mission_already_configured")
+                    CoreAction(kind="mission_config", topic="", message=message)
                 )
             return
 
