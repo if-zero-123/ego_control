@@ -80,6 +80,29 @@ class Tag0OffsetCalibrationTests(unittest.TestCase):
 
             self.assertEqual(config_path.read_text(encoding="utf-8"), original)
 
+    def test_accepts_offsets_rounded_to_config_precision(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config_path = root / "d_task_uav.yaml"
+            config_path.write_text(
+                "simple_follow:\n"
+                "  target_offset_u_px: 0.0\n"
+                "  target_offset_v_px: 0.0\n",
+                encoding="utf-8",
+            )
+
+            update_offset_config(
+                config_path,
+                offset_u_px=37.01484351,
+                offset_v_px=180.54268049,
+                backup_root=root / "backups",
+                timestamp="20260801-120000",
+            )
+
+            updated = config_path.read_text(encoding="utf-8")
+            self.assertIn("target_offset_u_px: 37.014844", updated)
+            self.assertIn("target_offset_v_px: 180.54268", updated)
+
 
 if __name__ == "__main__":
     unittest.main()

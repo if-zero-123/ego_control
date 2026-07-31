@@ -112,9 +112,11 @@ def update_offset_config(
     updated = _replace_scalar(updated, "target_offset_v_px", offset_v_px)
     verified = yaml.safe_load(updated)
     verified_follow = verified["simple_follow"]
-    if not math.isclose(float(verified_follow["target_offset_u_px"]), offset_u_px):
+    serialized_u = float(_format_float(offset_u_px))
+    serialized_v = float(_format_float(offset_v_px))
+    if float(verified_follow["target_offset_u_px"]) != serialized_u:
         raise ValueError("failed to verify target_offset_u_px")
-    if not math.isclose(float(verified_follow["target_offset_v_px"]), offset_v_px):
+    if float(verified_follow["target_offset_v_px"]) != serialized_v:
         raise ValueError("failed to verify target_offset_v_px")
 
     backup_root.mkdir(parents=True, exist_ok=True)
