@@ -101,10 +101,11 @@ tracking:
   # 像素伺服主链路不依赖内参；默认不允许视觉投影改变小车世界坐标滤波。
   use_visual_projection: false
 
-  # 小车 ROS2 地图系到无人机本地系的二维刚体变换。本轮先保留全零占位；
-  # 后续拿到现场标定值后只修改这三个参数，无需再改控制代码。
-  car_frame_offset_x_m: 0.0
-  car_frame_offset_y_m: 0.0
+  # 小车 ROS2 地图系到无人机本地系的二维刚体变换。标定时小车圆点为
+  # (0, 0)，无人机放在圆点中心时本地坐标为下列 X/Y；两坐标系均为
+  # X 向前、Y 向左，因此不取反，航向偏移保持 0。
+  car_frame_offset_x_m: 0.7139167116197679
+  car_frame_offset_y_m: -0.38704493464013184
   car_frame_yaw_offset_rad: 0.0
   # 小车 base_link 到平台中心的机体系偏移；标靶在中心时通常为 0。
   platform_offset_body_x_m: 0.0

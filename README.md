@@ -139,8 +139,9 @@ YOLO。离开这两个状态后自动回到仅 YOLO。
 
 - `tracking.car_frame_offset_x_m/y_m`：小车 ROS 坐标系到无人机世界系的 X/Y 平移。
 - `tracking.car_frame_yaw_offset_rad`：两个坐标系之间的平面航向旋转。
-- 上述三个坐标转换参数当前均为 `0.0` 占位，等现场给出实测偏移后再填写；未完成
-  标定和方向核对前不能直接进行完整实飞。
+- 现场把无人机中心放在小车坐标圆点时，无人机本地坐标测得
+  `(0.7139167116, -0.3870449346)m`，因此当前平移参数已按原符号写入；
+  两边均采用 X 向前、Y 向左，`car_frame_yaw_offset_rad` 保持 `0.0`。
 - `tracking.use_visual_projection`：默认 `false`，避免未标定视觉投影影响小车世界坐标；仅保留旧方案时才开启。
 - `tracking.platform_height_m`：平台中心在无人机世界系中的高度。
 - `apriltag.track_filter_alpha/beta`：AprilTag 中心和框的 α-β 滤波权重。
@@ -379,3 +380,10 @@ AprilTag 距离仍只由当前真实四角 PnP 产生，预测帧距离为无效
 `0.40m` 投递。完整 `catkin_make` 成功，预测器 `6/6` 测试和
 `d_task_uav_control` 全包 `116 tests, 0 errors, 0 failures` 通过；完整 launch
 参数和节点链解析通过，未启动相机、飞控、解锁或投放硬件。
+
+2026-07-31 车机坐标平移标定记录：小车圆点取小车坐标 `(0,0)`，无人机中心放在
+圆点时本地坐标为 `x=0.7139167116197679m`、`y=-0.38704493464013184m`。
+按实现 `p_uav=R(yaw_offset)·p_car+offset` 将这两个数原符号写入
+`tracking.car_frame_offset_x_m/y_m`；两边坐标轴均为 X 向前、Y 向左，
+故 `car_frame_yaw_offset_rad=0.0`。完整 launch 参数导出已确认融合节点加载精确值，
+坐标变换专项 `4/4` 通过；未启动或重启飞行节点。
