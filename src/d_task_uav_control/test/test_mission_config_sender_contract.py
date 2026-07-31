@@ -57,7 +57,7 @@ class MissionConfigSenderContractTests(unittest.TestCase):
 
     def test_drop_search_path_is_takeoff_relative(self):
         for setting in (
-            "initial_offset_distance_m: 1.50",
+            "initial_offset_distance_m: 1.00",
             "initial_offset_clockwise_deg: 20.0",
             "forward_search_distance_m: 0.00",
         ):

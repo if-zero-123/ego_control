@@ -62,7 +62,7 @@ class FixedHeightMissionContractTests(unittest.TestCase):
 
     def test_payload_and_drop_gate_match_field_configuration(self):
         for setting in (
-            "initial_offset_distance_m: 1.50",
+            "initial_offset_distance_m: 1.00",
             "initial_offset_clockwise_deg: 20.0",
             "forward_search_distance_m: 0.00",
             "drop_alignment_stable_s: 1.00",

@@ -53,15 +53,15 @@ simple_follow:
   target_offset_u_px: 37.023901
   target_offset_v_px: 180.624102
 
-  # From the HOVER point, perform the only search leg: 1.5 m at 20 degrees
+  # From the HOVER point, perform the only search leg: 1.0 m at 20 degrees
   # right-front relative to the locked takeoff heading (12 o'clock is forward;
   # clockwise is right).  A real tag observation on this leg immediately
   # switches to follow.
-  initial_offset_distance_m: 1.50
+  initial_offset_distance_m: 1.00
   initial_offset_clockwise_deg: 20.0
   initial_offset_reach_radius_m: 0.08
 
-  # No second forward leg: after the 1.5 m right-front leg reaches its end,
+  # No second forward leg: after the 1.0 m right-front leg reaches its end,
   # the flow reports no tag and returns home.
   forward_search_distance_m: 0.00
   forward_search_reach_radius_m: 0.08
