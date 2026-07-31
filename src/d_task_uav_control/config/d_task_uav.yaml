@@ -40,8 +40,21 @@ simple_follow:
   odom_timeout_s: 0.30
   tag_timeout_s: 0.20
   takeoff_retry_s: 0.50
+  landing_retry_s: 0.50
   min_tag_side_px: 8.0
   tag_id: 0
+
+  # After takeoff, first move 0.5 m at 1 o'clock relative to the locked
+  # takeoff heading (12 o'clock is forward; clockwise is right).
+  initial_offset_distance_m: 0.50
+  initial_offset_clockwise_deg: 30.0
+  initial_offset_reach_radius_m: 0.08
+
+  # The 20-second airborne window includes the initial offset.  On expiry,
+  # hold the current pose for seven seconds, then request the bridge's
+  # built-in slow landing (default 0.18 m/s).
+  flight_duration_s: 20.0
+  pre_land_hover_s: 7.0
 
   pid:
     kp: 0.35

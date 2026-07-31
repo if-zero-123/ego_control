@@ -28,6 +28,8 @@ double clamp(double value, double lower, double upper) {
     return std::max(lower, std::min(upper, value));
 }
 
+constexpr double kPi = 3.14159265358979323846;
+
 double yawFromQuaternion(const geometry_msgs::Quaternion& quaternion) {
     return std::atan2(
         2.0 * (quaternion.w * quaternion.z
@@ -82,8 +84,17 @@ private:
         private_node_.param("simple_follow/odom_timeout_s", odom_timeout_s_, 0.30);
         private_node_.param("simple_follow/tag_timeout_s", tag_timeout_s_, 0.20);
         private_node_.param("simple_follow/takeoff_retry_s", takeoff_retry_s_, 0.50);
+        private_node_.param("simple_follow/landing_retry_s", landing_retry_s_, 0.50);
         private_node_.param("simple_follow/min_tag_side_px", min_tag_side_px_, 8.0);
         private_node_.param("simple_follow/tag_id", tag_id_, 0);
+        private_node_.param("simple_follow/initial_offset_distance_m",
+                            initial_offset_distance_m_, 0.50);
+        private_node_.param("simple_follow/initial_offset_clockwise_deg",
+                            initial_offset_clockwise_deg_, 30.0);
+        private_node_.param("simple_follow/initial_offset_reach_radius_m",
+                            initial_offset_reach_radius_m_, 0.08);
+        private_node_.param("simple_follow/flight_duration_s", flight_duration_s_, 20.0);
+        private_node_.param("simple_follow/pre_land_hover_s", pre_land_hover_s_, 7.0);
         private_node_.param("simple_follow/pid/kp", kp_, 0.35);
         private_node_.param("simple_follow/pid/ki", ki_, 0.0);
         private_node_.param("simple_follow/pid/kd", kd_, 0.0);
@@ -92,7 +103,10 @@ private:
         private_node_.param("simple_follow/pid/max_speed_mps", max_speed_mps_, 0.35);
         if (flight_height_m_ <= 0.0 || control_rate_hz_ < 2.0
             || odom_timeout_s_ <= 0.0 || tag_timeout_s_ <= 0.0
-            || takeoff_retry_s_ <= 0.0 || min_tag_side_px_ <= 0.0
+            || takeoff_retry_s_ <= 0.0 || landing_retry_s_ <= 0.0
+            || min_tag_side_px_ <= 0.0 || initial_offset_distance_m_ < 0.0
+            || initial_offset_reach_radius_m_ <= 0.0 || flight_duration_s_ <= 0.0
+            || pre_land_hover_s_ < 0.0
             || tag_id_ < 0 || kp_ < 0.0 || ki_ < 0.0 || kd_ < 0.0
             || deadband_ < 0.0 || integral_limit_ < 0.0
             || max_speed_mps_ <= 0.0) {
@@ -159,6 +173,9 @@ private:
         state_ = "POSITIONING_INIT";
         positioning_ready_ = false;
         started_ = false;
+        airborne_start_s_ = -1.0;
+        hold_start_s_ = -1.0;
+        last_land_request_s_ = -1e9;
         resetPid();
         publishEvent("SIMPLE_FOLLOW_CONFIGURED");
         publishTaskState();
@@ -336,6 +353,57 @@ private:
         previous_pid_s_ = now_s;
     }
 
+    bool requestOverrideIfNeeded() {
+        if (control_mode_ == 1U) {
+            return true;
+        }
+        ego_api_->requestOverrideMode(true);
+        return false;
+    }
+
+    void sendFixedHeightCommand(double x, double y, double yaw,
+                                double vx = 0.0, double vy = 0.0) {
+        ego_api_->sendPositionVelocityCmd(
+            x, y, home_z_ + flight_height_m_, vx, vy, 0.0, yaw);
+    }
+
+    void beginInitialOffset(double now_s) {
+        home_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
+        const double heading = home_yaw_
+            - initial_offset_clockwise_deg_ * kPi / 180.0;
+        offset_target_x_ = latest_odom_.pose.pose.position.x
+            + initial_offset_distance_m_ * std::cos(heading);
+        offset_target_y_ = latest_odom_.pose.pose.position.y
+            + initial_offset_distance_m_ * std::sin(heading);
+        airborne_start_s_ = now_s;
+        state_ = "INITIAL_OFFSET";
+        resetPid();
+        publishEvent("INITIAL_OFFSET_STARTED");
+    }
+
+    void beginFollowTag(double now_s) {
+        state_ = "FOLLOW_TAG";
+        resetPid();
+        publishEvent("TAG_FOLLOW_STARTED");
+        ROS_INFO("[tag0_follow] initial offset complete in %.2fs",
+                 now_s - airborne_start_s_);
+    }
+
+    void beginPreLandHover(double now_s) {
+        hold_x_ = latest_odom_.pose.pose.position.x;
+        hold_y_ = latest_odom_.pose.pose.position.y;
+        hold_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
+        hold_start_s_ = now_s;
+        state_ = "HOLD_BEFORE_LAND";
+        resetPid();
+        publishEvent("PRE_LAND_HOVER_STARTED");
+    }
+
+    void requestLanding(double now_s) {
+        ego_api_->requestLand();
+        last_land_request_s_ = now_s;
+    }
+
     void controlTimerCallback(const ros::TimerEvent&) {
         const double now_s = ros::Time::now().toSec();
         if (started_ && state_ == "TAKEOFF") {
@@ -345,8 +413,11 @@ private:
             }
             if (bridge_state_ == "HOVER") {
                 ego_api_->requestOverrideMode(true);
-                state_ = "FOLLOW_CAR";
-                publishEvent("SIMPLE_FOLLOW_ACTIVE");
+                if (!odomFresh(now_s)) {
+                    publishFault(2101, "uav_odometry_stale");
+                } else {
+                    beginInitialOffset(now_s);
+                }
             }
         }
 
@@ -354,21 +425,52 @@ private:
         double command_vy = 0.0;
         double forward_error = 0.0;
         double left_error = 0.0;
-        if (started_ && state_ == "FOLLOW_CAR") {
+        if (started_ && state_ == "INITIAL_OFFSET") {
             if (!odomFresh(now_s)) {
                 publishFault(2101, "uav_odometry_stale");
-            } else {
-                if (control_mode_ != 1U) {
-                    ego_api_->requestOverrideMode(true);
+            } else if (now_s - airborne_start_s_ >= flight_duration_s_) {
+                beginPreLandHover(now_s);
+            } else if (requestOverrideIfNeeded()) {
+                const double dx = offset_target_x_ - latest_odom_.pose.pose.position.x;
+                const double dy = offset_target_y_ - latest_odom_.pose.pose.position.y;
+                sendFixedHeightCommand(offset_target_x_, offset_target_y_, home_yaw_);
+                if (std::hypot(dx, dy) <= initial_offset_reach_radius_m_) {
+                    beginFollowTag(now_s);
                 }
-                const double yaw = yawFromQuaternion(latest_odom_.pose.pose.orientation);
-                computeVelocity(now_s, yaw, command_vx, command_vy,
-                                forward_error, left_error);
-                ego_api_->sendPositionVelocityCmd(
-                    latest_odom_.pose.pose.position.x,
-                    latest_odom_.pose.pose.position.y,
-                    home_z_ + flight_height_m_,
-                    command_vx, command_vy, 0.0, yaw);
+            }
+        } else if (started_ && state_ == "FOLLOW_TAG") {
+            if (!odomFresh(now_s)) {
+                publishFault(2101, "uav_odometry_stale");
+            } else if (now_s - airborne_start_s_ >= flight_duration_s_) {
+                beginPreLandHover(now_s);
+            } else {
+                if (requestOverrideIfNeeded()) {
+                    const double yaw = yawFromQuaternion(latest_odom_.pose.pose.orientation);
+                    computeVelocity(now_s, yaw, command_vx, command_vy,
+                                    forward_error, left_error);
+                    sendFixedHeightCommand(
+                        latest_odom_.pose.pose.position.x,
+                        latest_odom_.pose.pose.position.y,
+                        yaw, command_vx, command_vy);
+                }
+            }
+        } else if (started_ && state_ == "HOLD_BEFORE_LAND") {
+            if (!odomFresh(now_s)) {
+                publishFault(2101, "uav_odometry_stale");
+            } else if (now_s - hold_start_s_ >= pre_land_hover_s_) {
+                state_ = "LANDING";
+                publishEvent("LANDING_REQUESTED");
+                requestLanding(now_s);
+            } else if (requestOverrideIfNeeded()) {
+                sendFixedHeightCommand(hold_x_, hold_y_, hold_yaw_);
+            }
+        } else if (started_ && state_ == "LANDING") {
+            if (bridge_state_ == "IDLE") {
+                state_ = "COMPLETE";
+                publishEvent("SIMPLE_FOLLOW_COMPLETE");
+            } else if (bridge_state_ == "HOVER"
+                       && now_s - last_land_request_s_ >= landing_retry_s_) {
+                requestLanding(now_s);
             }
         }
 
@@ -439,6 +541,10 @@ private:
         value["command_vx"] = command_vx;
         value["command_vy"] = command_vy;
         value["fixed_height_m"] = home_z_ + flight_height_m_;
+        value["initial_offset_target_x"] = offset_target_x_;
+        value["initial_offset_target_y"] = offset_target_y_;
+        value["airborne_elapsed_s"] = airborne_start_s_ < 0.0
+            ? 0.0 : now_s - airborne_start_s_;
         std_msgs::String message;
         message.data = writeJson(value);
         debug_publisher_.publish(message);
@@ -486,8 +592,16 @@ private:
     double last_odom_s_ = -1.0;
     double last_tag_s_ = -1.0;
     double last_takeoff_request_s_ = -1e9;
+    double last_land_request_s_ = -1e9;
+    double airborne_start_s_ = -1.0;
+    double hold_start_s_ = -1.0;
     double home_z_ = 0.0;
     double home_yaw_ = 0.0;
+    double offset_target_x_ = 0.0;
+    double offset_target_y_ = 0.0;
+    double hold_x_ = 0.0;
+    double hold_y_ = 0.0;
+    double hold_yaw_ = 0.0;
     double tag_confidence_ = 0.0;
 
     double flight_height_m_ = 1.50;
@@ -495,7 +609,13 @@ private:
     double odom_timeout_s_ = 0.30;
     double tag_timeout_s_ = 0.20;
     double takeoff_retry_s_ = 0.50;
+    double landing_retry_s_ = 0.50;
     double min_tag_side_px_ = 8.0;
+    double initial_offset_distance_m_ = 0.50;
+    double initial_offset_clockwise_deg_ = 30.0;
+    double initial_offset_reach_radius_m_ = 0.08;
+    double flight_duration_s_ = 20.0;
+    double pre_land_hover_s_ = 7.0;
     double kp_ = 0.35;
     double ki_ = 0.0;
     double kd_ = 0.0;
