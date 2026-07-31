@@ -98,8 +98,8 @@ UAV health 同时发布 `positioning_ready=true`，小车不会再把“旧 odom
 
 ## 任务流程
 
-`DROP`：定位就绪时锁存 H 点和起飞航向，起飞至相对 H 点 1.50m。进入悬停并连续保持
-3.0s 后，先按起飞航向向右前方 30° 移动 0.50m，再沿锁定的起飞航向向前搜索 1.00m。搜索途中一旦
+`DROP`：定位就绪时锁存 H 点和起飞航向，起飞至相对 H 点 1.50m。进入悬停后，先按
+起飞航向向右前方 30° 移动 0.50m，再沿锁定的起飞航向向前搜索 1.00m。搜索途中一旦
 真实识别 ID 0，立即进入现有图像中心 PID 伴飞；到达搜索终点仍未识别则直接返回 H、
 降落并以 `ABORT` 结束。
 
@@ -162,8 +162,6 @@ X/Y/速度融合。
 
 - `simple_follow.initial_offset_distance_m/initial_offset_clockwise_deg`：起飞后右前搜索段，
   当前为 `0.50m/30°`。
-- `simple_follow.takeoff_hover_s`：飞控进入 HOVER 且里程计持续新鲜后的起飞悬停门，
-  当前为 `3.0s`；中途退出 HOVER 或里程计过期会重新计时。
 - `simple_follow.forward_search_distance_m`：沿锁定起飞航向继续搜索，当前为 `1.00m`。
 - `simple_follow.pid.*`：ID 0 图像中心 PID；当前 `kp=0.65`，Z 始终保持任务固定高度。
 - `simple_follow.drop_alignment_tolerance/drop_alignment_stable_s`：投递前图像归一化误差

@@ -23,7 +23,6 @@ enum class FixedHeightDropState : uint8_t {
 const char* fixedHeightDropStateName(FixedHeightDropState state);
 
 struct FixedHeightDropFlowConfig {
-    double takeoff_hover_s = 3.0;
     double alignment_stable_s = 1.0;
     double release_duration_s = 5.0;
     double release_settle_s = 0.25;

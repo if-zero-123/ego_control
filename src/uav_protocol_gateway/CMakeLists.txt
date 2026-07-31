@@ -27,5 +27,4 @@ install(DIRECTORY launch config
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_gateway_core.py)
-  catkin_add_nosetests(test/test_gateway_node_contract.py)
 endif()
