@@ -47,7 +47,7 @@ simple_follow:
 
   # Rectified-image target relative to the calibrated principal point.
   # Positive u is image-right; positive v is image-down.
-  target_offset_u_px: 0.0
+  target_offset_u_px: 22.21
   target_offset_v_px: 0.0
 
   # After takeoff, first move 0.5 m at 1 o'clock relative to the locked
