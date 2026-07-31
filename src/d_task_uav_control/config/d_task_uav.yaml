@@ -19,25 +19,25 @@ positioning:
 topics:
   mission_config: /uav_protocol/mission_config
   mission_start: /uav_protocol/mission_start
-  car_event: /uav_protocol/car/event
-  mission_reset: /uav_protocol/mission_reset
   positioning_status: /d_task/positioning/status
   px4_odom: /mavros/local_position/odom
   bridge_state: /ego_bridge/flight_state
   control_mode: /ego_bridge/control_mode
   image: /usb_camera_vision/usb_cam/image_raw
-  camera_info: /usb_camera_vision/usb_cam/camera_info
   task_state: /uav_protocol/task_state
   local_event: /uav_protocol/local_event
   local_fault: /uav_protocol/local_fault
   local_health: /uav_protocol/local_health
+  local_tracking: /uav_protocol/local_tracking
   vision_health: /d_task/vision/health
   tag_center: /d_task/vision/tag0_center
-  local_tracking: /uav_protocol/local_tracking
+  payload_release: /d_task/payload/release
   debug: /d_task/simple_follow/debug
 
-# Minimal tuning surface.  Height is a fixed setpoint relative to the
-# positioning home; the PID only controls horizontal image-centre error.
+# The competition mission deliberately keeps the field-proven visual loop:
+# AprilTag centre -> horizontal PID -> fixed-height OVERRIDE command.  The
+# state machine below only decides when that loop may release the payload or
+# descend; it does not replace it with PnP or a model-based tracker.
 simple_follow:
   flight_height_m: 1.50
   control_rate_hz: 30.0
@@ -45,56 +45,52 @@ simple_follow:
   tag_timeout_s: 0.20
   takeoff_retry_s: 0.50
   landing_retry_s: 0.50
+  platform_request_retry_s: 0.50
   min_tag_side_px: 8.0
   tag_id: 0
 
-  # Rectified-image target relative to the calibrated principal point.
-  # Positive u is image-right; positive v is image-down.
-  target_offset_u_px: 37.023901
-  target_offset_v_px: 180.624102
-
-  # After takeoff, first move 0.5 m at 1 o'clock relative to the locked
+  # After takeoff, first move 1.0 m at 1 o'clock relative to the locked
   # takeoff heading (12 o'clock is forward; clockwise is right).
-  initial_offset_distance_m: 0.50
+  initial_offset_distance_m: 1.00
   initial_offset_clockwise_deg: 30.0
   initial_offset_reach_radius_m: 0.08
 
-  # After the diagonal offset, search one metre along the locked takeoff
-  # heading.  A real tag observation immediately hands control to follow.
-  forward_search_distance_m: 1.00
-  forward_search_reach_radius_m: 0.08
+  # Competition flow: rise to the cruise height, remain stable for three
+  # seconds, then search/follow.  A task that cannot complete safely returns
+  # home before the car's 90-second deadline.
+  hover_time_s: 3.0
+  mission_timeout_s: 80.0
+  vision_acquire_timeout_s: 20.0
+  home_reach_radius_m: 0.15
+  state_settle_time_s: 0.50
 
-  # The payload gate is event-driven, not a fixed follow duration: Tag 0 must
-  # remain centred at cruise height for the stable window below.
-  drop_alignment_tolerance: 0.08
-  drop_alignment_stable_s: 1.00
-  height_tolerance_m: 0.10
+  # A release is allowed only after the centred tag has remained stable while
+  # following.  The output is a single active pulse on topics.payload_release.
+  alignment_tolerance_norm: 0.10
+  alignment_hold_s: 0.50
+  drop_min_follow_s: 3.0
+  payload_release_pulse_s: 0.70
 
-  # After the GPIO pulse returns neutral, hold briefly before signalling the
-  # car to speed up and returning directly to the positioning home.
-  release_settle_s: 0.25
-  home_xy_tolerance_m: 0.20
-  home_stable_s: 0.50
+  # Simple visual dynamic landing.  There is intentionally no range/PnP
+  # estimate: these three values must be measured on the real vehicle before
+  # a flight.  All heights are offsets from the Fast-LIO positioning home.
+  platform_height_offset_m: 0.00
+  landing_approach_height_m: 0.25
+  landing_press_depth_m: 0.07
+  landing_vertical_speed_mps: 0.12
+  landing_height_tolerance_m: 0.05
+  platform_hold_s: 5.0
+  platform_contact_timeout_s: 12.0
+  platform_takeoff_timeout_s: 12.0
 
   pid:
-    kp: 0.65
+    kp: 0.35
     ki: 0.00
     kd: 0.00
     deadband: 0.04
     integral_limit: 0.50
     max_speed_mps: 0.35
 
-# Orange Pi 5 Ultra physical pin 16 (GPIO1_A3, WiringOP 9) drives the
-# delivery actuator.  The output is reset to neutral on every configuration,
-# abort, shutdown, and after the single release pulse.
 payload:
-  enabled: true
-  backend: gpio
-  gpio_wiringpi_pin: 9
-  gpio_active_high: true
-  topic: /mavros/actuator_control
-  group_mix: 2
-  channel: 0
-  release_value: 1.0
-  neutral_value: 0.0
-  pulse_duration_s: 5.0
+  wiringpi_pin: 9
+  active_high: true

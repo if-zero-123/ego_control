@@ -1,34 +1,25 @@
 #include <algorithm>
-#include <cerrno>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
 #include <vector>
 
 #include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/PointStamped.h>
 #include <image_transport/image_transport.h>
 #include <json/json.h>
-#include <mavros_msgs/ActuatorControl.h>
 #include <nav_msgs/Odometry.h>
 #include <opencv2/aruco.hpp>
-#include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
 #include <sensor_msgs/image_encodings.h>
-#include <sensor_msgs/CameraInfo.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/String.h>
 #include <std_msgs/UInt8.h>
 
 #include "ego_api/ego_api.h"
-#include "d_task_uav_control/fixed_height_drop_flow.h"
-#include "d_task_uav_control/payload_pulse.h"
 
 namespace d_task_uav_control {
 namespace {
@@ -61,172 +52,10 @@ std::string writeJson(const Json::Value& value) {
     return Json::writeString(builder, value);
 }
 
-class PayloadActuator {
-public:
-    PayloadActuator(ros::NodeHandle& node, ros::NodeHandle& private_node)
-        : pulse_(loadPulseDuration(private_node)) {
-        private_node.param("payload/enabled", enabled_, false);
-        private_node.param("payload/backend", backend_, std::string("gpio"));
-        private_node.param("payload/group_mix", group_mix_, 2);
-        private_node.param("payload/channel", channel_, 0);
-        private_node.param("payload/release_value", release_value_, 1.0);
-        private_node.param("payload/neutral_value", neutral_value_, 0.0);
-        private_node.param("payload/gpio_wiringpi_pin", gpio_wiringpi_pin_, 9);
-        private_node.param("payload/gpio_active_high", gpio_active_high_, true);
-        const std::string topic = private_node.param<std::string>(
-            "payload/topic", "/mavros/actuator_control");
-        if (backend_ == "mavros") {
-            if (channel_ < 0 || channel_ >= 8) {
-                throw std::runtime_error("payload/channel must be in [0, 7]");
-            }
-            publisher_ = node.advertise<mavros_msgs::ActuatorControl>(topic, 5);
-        } else if (backend_ == "gpio") {
-            if (gpio_wiringpi_pin_ < 0) {
-                throw std::runtime_error(
-                    "payload/gpio_wiringpi_pin must be non-negative");
-            }
-            if (!setGpioOutputMode() || !writeGpio(false, true)) {
-                throw std::runtime_error(
-                    "failed to initialize payload GPIO through /usr/bin/gpio");
-            }
-        } else {
-            throw std::runtime_error("payload/backend must be mavros or gpio");
-        }
-    }
-
-    ~PayloadActuator() {
-        if (backend_ == "gpio") {
-            writeGpio(false, true);
-        }
-    }
-
-    bool trigger(double now_s) { return pulse_.trigger(now_s); }
-
-    void update(double now_s) {
-        const PayloadPulseCommand command = pulse_.update(now_s);
-        if (!enabled_ || command == PayloadPulseCommand::NONE) {
-            return;
-        }
-        if (command == PayloadPulseCommand::RELEASE) {
-            writeRelease();
-        } else if (command == PayloadPulseCommand::NEUTRAL) {
-            writeNeutral();
-        }
-    }
-
-    void reset() {
-        const PayloadPulseCommand command = pulse_.reset();
-        if (backend_ == "gpio") {
-            if (!writeGpio(false, true)) {
-                ROS_ERROR("[tag0_follow] failed to reset payload GPIO");
-            }
-        } else if (enabled_ && command == PayloadPulseCommand::NEUTRAL) {
-            publish(neutral_value_);
-        }
-    }
-
-    bool enabled() const { return enabled_; }
-
-private:
-    static double loadPulseDuration(ros::NodeHandle& private_node) {
-        double duration_s = 5.0;
-        private_node.param("payload/pulse_duration_s", duration_s, 5.0);
-        if (!std::isfinite(duration_s) || duration_s < 0.0) {
-            throw std::runtime_error(
-                "payload/pulse_duration_s must be finite and non-negative");
-        }
-        return duration_s;
-    }
-
-    void writeRelease() {
-        if (backend_ == "gpio") {
-            if (!writeGpio(true)) {
-                ROS_ERROR("[tag0_follow] failed to set payload GPIO high");
-            }
-        } else {
-            publish(release_value_);
-        }
-    }
-
-    void writeNeutral() {
-        if (backend_ == "gpio") {
-            if (!writeGpio(false)) {
-                ROS_ERROR("[tag0_follow] failed to set payload GPIO low");
-            }
-        } else {
-            publish(neutral_value_);
-        }
-    }
-
-    bool setGpioOutputMode() const {
-        return runGpioCommand(
-            "mode", std::to_string(gpio_wiringpi_pin_), "out");
-    }
-
-    bool writeGpio(bool release, bool force = false) {
-        const bool high_level = gpio_active_high_ ? release : !release;
-        if (!force && gpio_level_known_ && gpio_level_high_ == high_level) {
-            return true;
-        }
-        if (!runGpioCommand("write", std::to_string(gpio_wiringpi_pin_),
-                            high_level ? "1" : "0")) {
-            return false;
-        }
-        gpio_level_known_ = true;
-        gpio_level_high_ = high_level;
-        return true;
-    }
-
-    static bool runGpioCommand(const char* command, const std::string& pin,
-                               const char* value) {
-        const pid_t child = fork();
-        if (child < 0) {
-            return false;
-        }
-        if (child == 0) {
-            execl("/usr/bin/gpio", "gpio", command, pin.c_str(), value,
-                  static_cast<char*>(nullptr));
-            _exit(127);
-        }
-        int status = 0;
-        pid_t result = -1;
-        do {
-            result = waitpid(child, &status, 0);
-        } while (result == -1 && errno == EINTR);
-        return result == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    }
-
-    void publish(double channel_value) {
-        mavros_msgs::ActuatorControl message;
-        message.header.stamp = ros::Time::now();
-        message.group_mix = static_cast<uint8_t>(group_mix_);
-        for (std::size_t index = 0; index < message.controls.size(); ++index) {
-            message.controls[index] = static_cast<float>(neutral_value_);
-        }
-        message.controls[static_cast<std::size_t>(channel_)] =
-            static_cast<float>(channel_value);
-        publisher_.publish(message);
-    }
-
-    ros::Publisher publisher_;
-    PayloadPulse pulse_;
-    bool enabled_ = false;
-    std::string backend_ = "gpio";
-    int group_mix_ = 2;
-    int channel_ = 0;
-    double release_value_ = 1.0;
-    double neutral_value_ = 0.0;
-    int gpio_wiringpi_pin_ = 9;
-    bool gpio_active_high_ = true;
-    bool gpio_level_known_ = false;
-    bool gpio_level_high_ = false;
-};
-
 class Tag0FixedHeightFollowNode {
 public:
     Tag0FixedHeightFollowNode()
-        : private_node_("~"), image_transport_(node_),
-          flow_(loadFlowConfig()), payload_actuator_(node_, private_node_) {
+        : private_node_("~"), image_transport_(node_) {
         loadParameters();
         dictionary_ = cv::aruco::getPredefinedDictionary(
             cv::aruco::DICT_APRILTAG_36h11);
@@ -247,19 +76,6 @@ public:
     }
 
 private:
-    FixedHeightDropFlowConfig loadFlowConfig() {
-        FixedHeightDropFlowConfig config;
-        private_node_.param("simple_follow/drop_alignment_stable_s",
-                            config.alignment_stable_s, 1.0);
-        private_node_.param("payload/pulse_duration_s",
-                            config.release_duration_s, 5.0);
-        private_node_.param("simple_follow/release_settle_s",
-                            config.release_settle_s, 0.25);
-        private_node_.param("simple_follow/home_stable_s",
-                            config.home_stable_s, 0.50);
-        return config;
-    }
-
     void loadParameters() {
         private_node_.param<std::string>("mission/bridge_namespace",
                                          bridge_namespace_, "/ego_bridge");
@@ -269,28 +85,47 @@ private:
         private_node_.param("simple_follow/tag_timeout_s", tag_timeout_s_, 0.20);
         private_node_.param("simple_follow/takeoff_retry_s", takeoff_retry_s_, 0.50);
         private_node_.param("simple_follow/landing_retry_s", landing_retry_s_, 0.50);
+        private_node_.param("simple_follow/platform_request_retry_s",
+                            platform_request_retry_s_, 0.50);
         private_node_.param("simple_follow/min_tag_side_px", min_tag_side_px_, 8.0);
         private_node_.param("simple_follow/tag_id", tag_id_, 0);
-        private_node_.param("simple_follow/target_offset_u_px",
-                            target_offset_u_px_, 0.0);
-        private_node_.param("simple_follow/target_offset_v_px",
-                            target_offset_v_px_, 0.0);
         private_node_.param("simple_follow/initial_offset_distance_m",
                             initial_offset_distance_m_, 0.50);
         private_node_.param("simple_follow/initial_offset_clockwise_deg",
                             initial_offset_clockwise_deg_, 30.0);
         private_node_.param("simple_follow/initial_offset_reach_radius_m",
                             initial_offset_reach_radius_m_, 0.08);
-        private_node_.param("simple_follow/forward_search_distance_m",
-                            forward_search_distance_m_, 1.00);
-        private_node_.param("simple_follow/forward_search_reach_radius_m",
-                            forward_search_reach_radius_m_, 0.08);
-        private_node_.param("simple_follow/drop_alignment_tolerance",
-                            drop_alignment_tolerance_, 0.08);
-        private_node_.param("simple_follow/height_tolerance_m",
-                            height_tolerance_m_, 0.10);
-        private_node_.param("simple_follow/home_xy_tolerance_m",
-                            home_xy_tolerance_m_, 0.20);
+        private_node_.param("simple_follow/hover_time_s", hover_time_s_, 3.0);
+        private_node_.param("simple_follow/mission_timeout_s", mission_timeout_s_, 80.0);
+        private_node_.param("simple_follow/vision_acquire_timeout_s",
+                            vision_acquire_timeout_s_, 20.0);
+        private_node_.param("simple_follow/home_reach_radius_m",
+                            home_reach_radius_m_, 0.15);
+        private_node_.param("simple_follow/state_settle_time_s",
+                            state_settle_time_s_, 0.50);
+        private_node_.param("simple_follow/alignment_tolerance_norm",
+                            alignment_tolerance_norm_, 0.10);
+        private_node_.param("simple_follow/alignment_hold_s",
+                            alignment_hold_s_, 0.50);
+        private_node_.param("simple_follow/drop_min_follow_s",
+                            drop_min_follow_s_, 3.0);
+        private_node_.param("simple_follow/payload_release_pulse_s",
+                            payload_release_pulse_s_, 0.70);
+        private_node_.param("simple_follow/platform_height_offset_m",
+                            platform_height_offset_m_, 0.0);
+        private_node_.param("simple_follow/landing_approach_height_m",
+                            landing_approach_height_m_, 0.25);
+        private_node_.param("simple_follow/landing_press_depth_m",
+                            landing_press_depth_m_, 0.07);
+        private_node_.param("simple_follow/landing_vertical_speed_mps",
+                            landing_vertical_speed_mps_, 0.12);
+        private_node_.param("simple_follow/landing_height_tolerance_m",
+                            landing_height_tolerance_m_, 0.05);
+        private_node_.param("simple_follow/platform_hold_s", platform_hold_s_, 5.0);
+        private_node_.param("simple_follow/platform_contact_timeout_s",
+                            platform_contact_timeout_s_, 12.0);
+        private_node_.param("simple_follow/platform_takeoff_timeout_s",
+                            platform_takeoff_timeout_s_, 12.0);
         private_node_.param("simple_follow/pid/kp", kp_, 0.35);
         private_node_.param("simple_follow/pid/ki", ki_, 0.0);
         private_node_.param("simple_follow/pid/kd", kd_, 0.0);
@@ -300,15 +135,17 @@ private:
         if (flight_height_m_ <= 0.0 || control_rate_hz_ < 2.0
             || odom_timeout_s_ <= 0.0 || tag_timeout_s_ <= 0.0
             || takeoff_retry_s_ <= 0.0 || landing_retry_s_ <= 0.0
+            || platform_request_retry_s_ <= 0.0
             || min_tag_side_px_ <= 0.0 || initial_offset_distance_m_ < 0.0
-            || initial_offset_reach_radius_m_ <= 0.0
-            || forward_search_distance_m_ < 0.0
-            || forward_search_reach_radius_m_ <= 0.0
-            || drop_alignment_tolerance_ < 0.0
-            || height_tolerance_m_ <= 0.0
-            || home_xy_tolerance_m_ <= 0.0
-            || !std::isfinite(target_offset_u_px_)
-            || !std::isfinite(target_offset_v_px_)
+            || initial_offset_reach_radius_m_ <= 0.0 || hover_time_s_ < 3.0
+            || mission_timeout_s_ <= hover_time_s_ || vision_acquire_timeout_s_ <= 0.0
+            || home_reach_radius_m_ <= 0.0 || state_settle_time_s_ < 0.0
+            || alignment_tolerance_norm_ <= 0.0 || alignment_tolerance_norm_ > 1.0
+            || alignment_hold_s_ < 0.0 || drop_min_follow_s_ < 0.0
+            || payload_release_pulse_s_ <= 0.0 || landing_approach_height_m_ <= 0.0
+            || landing_press_depth_m_ < 0.0 || landing_vertical_speed_mps_ <= 0.0
+            || landing_height_tolerance_m_ <= 0.0 || platform_hold_s_ < 5.0
+            || platform_contact_timeout_s_ <= 0.0 || platform_takeoff_timeout_s_ <= 0.0
             || tag_id_ < 0 || kp_ < 0.0 || ki_ < 0.0 || kd_ < 0.0
             || deadband_ < 0.0 || integral_limit_ < 0.0
             || max_speed_mps_ <= 0.0) {
@@ -327,9 +164,6 @@ private:
         mission_start_subscriber_ = node_.subscribe(
             topic("mission_start", "/uav_protocol/mission_start"), 2,
             &Tag0FixedHeightFollowNode::missionStartCallback, this);
-        car_event_subscriber_ = node_.subscribe(
-            topic("car_event", "/uav_protocol/car/event"), 5,
-            &Tag0FixedHeightFollowNode::carEventCallback, this);
         positioning_subscriber_ = node_.subscribe(
             topic("positioning_status", "/d_task/positioning/status"), 2,
             &Tag0FixedHeightFollowNode::positioningStatusCallback, this);
@@ -345,67 +179,60 @@ private:
         image_subscriber_ = image_transport_.subscribe(
             topic("image", "/usb_camera_vision/usb_cam/image_raw"), 1,
             &Tag0FixedHeightFollowNode::imageCallback, this);
-        camera_info_subscriber_ = node_.subscribe(
-            topic("camera_info", "/usb_camera_vision/usb_cam/camera_info"), 1,
-            &Tag0FixedHeightFollowNode::cameraInfoCallback, this);
     }
 
     void advertiseTopics() {
         task_state_publisher_ = node_.advertise<std_msgs::String>(
             topic("task_state", "/uav_protocol/task_state"), 2, true);
-        mission_reset_publisher_ = node_.advertise<std_msgs::String>(
-            topic("mission_reset", "/uav_protocol/mission_reset"), 2);
         event_publisher_ = node_.advertise<std_msgs::String>(
             topic("local_event", "/uav_protocol/local_event"), 5);
         fault_publisher_ = node_.advertise<std_msgs::String>(
             topic("local_fault", "/uav_protocol/local_fault"), 5);
         health_publisher_ = node_.advertise<std_msgs::String>(
             topic("local_health", "/uav_protocol/local_health"), 2);
+        tracking_publisher_ = node_.advertise<std_msgs::String>(
+            topic("local_tracking", "/uav_protocol/local_tracking"), 2);
         vision_health_publisher_ = node_.advertise<std_msgs::Bool>(
             topic("vision_health", "/d_task/vision/health"), 1, true);
         tag_center_publisher_ = node_.advertise<geometry_msgs::PointStamped>(
             topic("tag_center", "/d_task/vision/tag0_center"), 2);
+        payload_release_publisher_ = node_.advertise<std_msgs::Bool>(
+            topic("payload_release", "/d_task/payload/release"), 1, true);
         debug_publisher_ = node_.advertise<std_msgs::String>(
             topic("debug", "/d_task/simple_follow/debug"), 2);
-        tracking_publisher_ = node_.advertise<std_msgs::String>(
-            topic("local_tracking", "/uav_protocol/local_tracking"), 2);
     }
 
     void missionConfigCallback(const std_msgs::String::ConstPtr& message) {
-        if (message->data.empty()) {
-            mission_id_.clear();
-            mode_ = "DROP";
-            positioning_ready_ = false;
-            started_ = false;
-            abort_requested_ = false;
-            terminal_published_ = false;
-            flow_.reset();
-            payload_actuator_.reset();
-            resetPid();
-            publishTaskState();
-            return;
-        }
         Json::Value root;
         if (!parseJson(message->data, root)
             || root.get("type", "").asString() != "mission_config"
             || root.get("sender", "").asString() != "car"
-            || root.get("mission_id", "").asString().empty()
-            || !root["payload"].isObject()
-            || root["payload"].get("mode", "").asString() != "DROP") {
+            || !root["payload"].isObject()) {
             publishFault(2301, "invalid_mission_config");
             return;
         }
         mission_id_ = root.get("mission_id", "").asString();
-        mode_ = "DROP";
+        mode_ = root["payload"].get("mode", "DROP").asString();
+        state_ = "POSITIONING_INIT";
         positioning_ready_ = false;
         started_ = false;
-        abort_requested_ = false;
-        terminal_published_ = false;
+        mission_start_s_ = -1.0;
+        state_enter_s_ = -1.0;
+        follow_start_s_ = -1.0;
+        aligned_since_s_ = -1.0;
+        release_start_s_ = -1.0;
+        platform_hold_start_s_ = -1.0;
+        platform_landing_start_s_ = -1.0;
+        platform_takeoff_start_s_ = -1.0;
         last_land_request_s_ = -1e9;
-        flow_.configure();
-        payload_actuator_.reset();
+        last_platform_request_s_ = -1e9;
+        payload_released_ = false;
+        payload_release_active_ = false;
+        initial_offset_pending_ = true;
+        mission_failed_ = false;
         resetPid();
-        publishEvent("MISSION_CONTROLLER_CONFIGURED");
+        publishPayloadRelease(false);
+        publishEvent("MISSION_CONFIGURED");
         publishTaskState();
     }
 
@@ -416,17 +243,13 @@ private:
             || root.get("mission_id", "").asString() != mission_id_) {
             return;
         }
-        home_x_ = root.get("home_x", 0.0).asDouble();
-        home_y_ = root.get("home_y", 0.0).asDouble();
         home_z_ = root.get("home_z", 0.0).asDouble();
         if (has_odom_) {
             home_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
         }
-        if (!flow_.markPositioningReady()) {
-            return;
-        }
         positioning_ready_ = true;
-        publishEvent("MISSION_CONTROLLER_READY");
+        state_ = "WAIT_START";
+        publishEvent("MISSION_READY");
         publishTaskState();
     }
 
@@ -444,32 +267,13 @@ private:
             publishFault(2302, "mission_start_rejected");
             return;
         }
-        const double now_s = ros::Time::now().toSec();
-        if (!flow_.start(now_s)) {
-            publishFault(2302, "mission_start_rejected");
-            return;
-        }
         started_ = true;
-        abort_requested_ = false;
-        terminal_published_ = false;
+        state_ = "TAKEOFF";
+        mission_start_s_ = ros::Time::now().toSec();
+        state_enter_s_ = mission_start_s_;
         last_takeoff_request_s_ = -1e9;
-        publishEvent("MISSION_CONTROLLER_STARTED");
+        publishEvent("MISSION_STARTED");
         publishTaskState();
-    }
-
-    void carEventCallback(const std_msgs::String::ConstPtr& message) {
-        Json::Value root;
-        if (!parseJson(message->data, root)
-            || root.get("type", "").asString() != "event"
-            || root.get("sender", "").asString() != "car"
-            || root.get("mission_id", "").asString() != mission_id_
-            || !root["payload"].isObject()
-            || root["payload"].get("event", "").asString()
-                != "MISSION_ABORT") {
-            return;
-        }
-        abort_requested_ = true;
-        publishEvent("MISSION_ABORT_RECEIVED");
     }
 
     void odomCallback(const nav_msgs::Odometry::ConstPtr& message) {
@@ -484,31 +288,6 @@ private:
 
     void controlModeCallback(const std_msgs::UInt8::ConstPtr& message) {
         control_mode_ = message->data;
-    }
-
-    void cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& message) {
-        const double fx = message->K[0];
-        const double fy = message->K[4];
-        const double cx = message->K[2];
-        const double cy = message->K[5];
-        if (!std::isfinite(fx) || !std::isfinite(fy)
-            || !std::isfinite(cx) || !std::isfinite(cy)
-            || fx <= 0.0 || fy <= 0.0
-            || message->width == 0U || message->height == 0U
-            || !std::all_of(message->D.begin(), message->D.end(),
-                            [](double value) { return std::isfinite(value); })) {
-            ROS_WARN_THROTTLE(2.0, "[tag0_follow] invalid CameraInfo; using image centre");
-            return;
-        }
-        camera_matrix_ = (cv::Mat_<double>(3, 3)
-            << fx, 0.0, cx,
-               0.0, fy, cy,
-               0.0, 0.0, 1.0);
-        distortion_coefficients_ = message->D.empty()
-            ? cv::Mat() : cv::Mat(message->D).clone();
-        camera_info_width_ = message->width;
-        camera_info_height_ = message->height;
-        camera_info_ready_ = true;
     }
 
     void imageCallback(const sensor_msgs::ImageConstPtr& message) {
@@ -544,8 +323,6 @@ private:
                 tag_center_ = centre * 0.25F;
                 image_width_ = message->width;
                 image_height_ = message->height;
-                servoPixels(servo_observed_u_, servo_observed_v_,
-                            servo_target_u_, servo_target_v_);
                 tag_confidence_ = std::min(1.0, minimum_side / 40.0);
                 last_tag_s_ = ros::Time::now().toSec();
                 geometry_msgs::PointStamped output;
@@ -575,45 +352,6 @@ private:
         return std::abs(value) <= width ? 0.0 : value;
     }
 
-    void servoPixels(double& observed_u, double& observed_v,
-                     double& target_u, double& target_v) const {
-        observed_u = tag_center_.x;
-        observed_v = tag_center_.y;
-        target_u = 0.5 * static_cast<double>(image_width_) + target_offset_u_px_;
-        target_v = 0.5 * static_cast<double>(image_height_) + target_offset_v_px_;
-        if (!camera_info_ready_ || camera_info_width_ == 0U
-            || camera_info_height_ == 0U) {
-            return;
-        }
-
-        const double scale_x = static_cast<double>(image_width_)
-            / static_cast<double>(camera_info_width_);
-        const double scale_y = static_cast<double>(image_height_)
-            / static_cast<double>(camera_info_height_);
-        cv::Mat scaled_camera_matrix = camera_matrix_.clone();
-        scaled_camera_matrix.at<double>(0, 0) *= scale_x;
-        scaled_camera_matrix.at<double>(0, 2) *= scale_x;
-        scaled_camera_matrix.at<double>(1, 1) *= scale_y;
-        scaled_camera_matrix.at<double>(1, 2) *= scale_y;
-
-        std::vector<cv::Point2f> source{tag_center_};
-        std::vector<cv::Point2f> rectified;
-        try {
-            cv::undistortPoints(source, rectified, scaled_camera_matrix,
-                                distortion_coefficients_, cv::noArray(),
-                                scaled_camera_matrix);
-        } catch (const cv::Exception& error) {
-            ROS_WARN_THROTTLE(2.0, "[tag0_follow] undistort failed: %s", error.what());
-            return;
-        }
-        if (rectified.size() == 1U) {
-            observed_u = rectified.front().x;
-            observed_v = rectified.front().y;
-            target_u = scaled_camera_matrix.at<double>(0, 2) + target_offset_u_px_;
-            target_v = scaled_camera_matrix.at<double>(1, 2) + target_offset_v_px_;
-        }
-    }
-
     void resetPid() {
         integral_forward_ = 0.0;
         integral_left_ = 0.0;
@@ -634,12 +372,10 @@ private:
             return;
         }
 
-        servoPixels(servo_observed_u_, servo_observed_v_,
-                    servo_target_u_, servo_target_v_);
-        const double normal_u = 2.0 * (servo_observed_u_ - servo_target_u_)
-            / static_cast<double>(image_width_);
-        const double normal_v = 2.0 * (servo_observed_v_ - servo_target_v_)
-            / static_cast<double>(image_height_);
+        const double normal_u = 2.0 * tag_center_.x
+            / static_cast<double>(image_width_) - 1.0;
+        const double normal_v = 2.0 * tag_center_.y
+            / static_cast<double>(image_height_) - 1.0;
         forward_error = deadband(-normal_v, deadband_);
         left_error = deadband(-normal_u, deadband_);
         const double dt = previous_pid_s_ < 0.0
@@ -682,36 +418,104 @@ private:
         return false;
     }
 
-    void sendFixedHeightCommand(double x, double y, double yaw,
-                                double vx = 0.0, double vy = 0.0) {
-        ego_api_->sendPositionVelocityCmd(
-            x, y, home_z_ + flight_height_m_, vx, vy, 0.0, yaw);
+    double cruiseZ() const { return home_z_ + flight_height_m_; }
+
+    double platformZ() const { return home_z_ + platform_height_offset_m_; }
+
+    bool isDropMode() const { return mode_ == "DROP"; }
+
+    void setState(const std::string& next, double now_s,
+                  const std::string& event) {
+        state_ = next;
+        state_enter_s_ = now_s;
+        aligned_since_s_ = -1.0;
+        if (!event.empty()) {
+            publishEvent(event);
+        }
     }
 
-    void prepareInitialOffset() {
+    void sendPositionCommand(double x, double y, double z, double yaw,
+                             double vx = 0.0, double vy = 0.0,
+                             double vz = 0.0) {
+        ego_api_->sendPositionVelocityCmd(x, y, z, vx, vy, vz, yaw);
+    }
+
+    void holdAtCurrent(double z) {
+        sendPositionCommand(
+            latest_odom_.pose.pose.position.x,
+            latest_odom_.pose.pose.position.y,
+            z,
+            yawFromQuaternion(latest_odom_.pose.pose.orientation));
+    }
+
+    bool tagAligned() const {
+        if (!tag_found_ || image_width_ == 0U || image_height_ == 0U) {
+            return false;
+        }
+        const double normal_u = 2.0 * tag_center_.x
+            / static_cast<double>(image_width_) - 1.0;
+        const double normal_v = 2.0 * tag_center_.y
+            / static_cast<double>(image_height_) - 1.0;
+        return std::abs(normal_u) <= alignment_tolerance_norm_
+            && std::abs(normal_v) <= alignment_tolerance_norm_;
+    }
+
+    bool alignedFor(double now_s, double duration_s) {
+        if (!tagFresh(now_s) || !tagAligned()) {
+            aligned_since_s_ = -1.0;
+            return false;
+        }
+        if (aligned_since_s_ < 0.0) {
+            aligned_since_s_ = now_s;
+        }
+        return now_s - aligned_since_s_ + 1e-6 >= duration_s;
+    }
+
+    bool followTagAtHeight(double now_s, double z, double vz,
+                           double& command_vx, double& command_vy,
+                           double& forward_error, double& left_error) {
+        if (!tagFresh(now_s)) {
+            resetPid();
+            return false;
+        }
+        const double yaw = yawFromQuaternion(latest_odom_.pose.pose.orientation);
+        computeVelocity(now_s, yaw, command_vx, command_vy,
+                        forward_error, left_error);
+        sendPositionCommand(
+            latest_odom_.pose.pose.position.x,
+            latest_odom_.pose.pose.position.y,
+            z, yaw, command_vx, command_vy, vz);
+        return true;
+    }
+
+    void beginSearch(double now_s) {
+        home_x_ = latest_odom_.pose.pose.position.x;
+        home_y_ = latest_odom_.pose.pose.position.y;
         home_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
         const double heading = home_yaw_
             - initial_offset_clockwise_deg_ * kPi / 180.0;
-        offset_target_x_ = latest_odom_.pose.pose.position.x
+        offset_target_x_ = home_x_
             + initial_offset_distance_m_ * std::cos(heading);
-        offset_target_y_ = latest_odom_.pose.pose.position.y
+        offset_target_y_ = home_y_
             + initial_offset_distance_m_ * std::sin(heading);
+        initial_offset_pending_ = true;
         resetPid();
+        setState("SEARCH_CAR", now_s, "SEARCH_CAR_STARTED");
     }
 
-    void prepareForwardSearch() {
-        forward_target_x_ = offset_target_x_
-            + forward_search_distance_m_ * std::cos(home_yaw_);
-        forward_target_y_ = offset_target_y_
-            + forward_search_distance_m_ * std::sin(home_yaw_);
+    void beginReturnHome(double now_s, const std::string& event,
+                         bool failed = false) {
+        mission_failed_ = mission_failed_ || failed;
         resetPid();
+        setState("RETURN_HOME", now_s, event);
     }
 
-    void prepareReleaseHold() {
-        release_x_ = latest_odom_.pose.pose.position.x;
-        release_y_ = latest_odom_.pose.pose.position.y;
-        release_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
+    void beginRecoveryClimb(double now_s, const std::string& event) {
+        recovery_x_ = latest_odom_.pose.pose.position.x;
+        recovery_y_ = latest_odom_.pose.pose.position.y;
+        recovery_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
         resetPid();
+        setState("CLIMB_TO_CRUISE", now_s, event);
     }
 
     void requestLanding(double now_s) {
@@ -719,77 +523,39 @@ private:
         last_land_request_s_ = now_s;
     }
 
-    bool alignedForDrop(double now_s, double forward_error,
-                        double left_error) const {
-        return tagFresh(now_s)
-            && std::abs(forward_error) <= drop_alignment_tolerance_
-            && std::abs(left_error) <= drop_alignment_tolerance_
-            && std::abs(latest_odom_.pose.pose.position.z
-                        - (home_z_ + flight_height_m_))
-                <= height_tolerance_m_;
-    }
-
-    void handleStateChange(const FixedHeightDropFlowOutput& output,
-                           double now_s) {
-        if (!output.state_changed) {
+    void requestPlatformLanding(double now_s) {
+        if (now_s - last_platform_request_s_ < platform_request_retry_s_) {
             return;
         }
-        Json::Value details;
-        details["previous_state"] = fixedHeightDropStateName(output.previous_state);
-        details["state"] = fixedHeightDropStateName(output.state);
-        publishEvent("MISSION_STATE_CHANGED", details);
-        switch (output.state) {
-            case FixedHeightDropState::MOVE_TO_SEARCH_START:
-                prepareInitialOffset();
-                publishEvent("INITIAL_OFFSET_STARTED");
-                break;
-            case FixedHeightDropState::FORWARD_SEARCH:
-                prepareForwardSearch();
-                publishEvent("FORWARD_SEARCH_STARTED");
-                break;
-            case FixedHeightDropState::FOLLOW_CAR:
-                resetPid();
-                publishEvent("TAG_FOLLOW_STARTED");
-                break;
-            case FixedHeightDropState::RELEASE: {
-                prepareReleaseHold();
-                Json::Value release;
-                release["hardware_enabled"] = payload_actuator_.enabled();
-                if (output.trigger_payload && payload_actuator_.trigger(now_s)) {
-                    publishEvent(payload_actuator_.enabled()
-                                     ? "PAYLOAD_RELEASE_TRIGGERED"
-                                     : "PAYLOAD_RELEASE_DRY_RUN",
-                                 release);
-                }
-                break;
-            }
-            case FixedHeightDropState::RETURN_HOME:
-                resetPid();
-                if (flow_.finalAbort()) {
-                    payload_actuator_.reset();
-                } else if (output.previous_state
-                           == FixedHeightDropState::RELEASE) {
-                    publishEvent("PAYLOAD_RELEASE_COMPLETE");
-                    publishEvent("CAR_SPEEDUP_REQUESTED");
-                }
-                publishEvent("RETURN_HOME_STARTED");
-                break;
-            case FixedHeightDropState::LAND_HOME:
-                publishEvent("LAND_HOME_REQUESTED");
-                requestLanding(now_s);
-                break;
-            case FixedHeightDropState::COMPLETE:
-                publishEvent("MISSION_CONTROLLER_COMPLETE");
-                break;
-            case FixedHeightDropState::ABORT:
-                publishEvent("MISSION_CONTROLLER_ABORT");
-                break;
-            case FixedHeightDropState::NOT_READY:
-            case FixedHeightDropState::POSITIONING_INIT:
-            case FixedHeightDropState::WAIT_START:
-            case FixedHeightDropState::TAKEOFF:
-                break;
+        ego_api_->requestPlatformDisarm();
+        last_platform_request_s_ = now_s;
+    }
+
+    void requestPlatformTakeoff(double now_s) {
+        if (now_s - last_platform_request_s_ < platform_request_retry_s_) {
+            return;
         }
+        ego_api_->requestPlatformTakeoff(
+            latest_odom_.pose.pose.position.x,
+            latest_odom_.pose.pose.position.y,
+            cruiseZ(),
+            yawFromQuaternion(latest_odom_.pose.pose.orientation));
+        last_platform_request_s_ = now_s;
+    }
+
+    void publishPayloadRelease(bool release) {
+        std_msgs::Bool message;
+        message.data = release;
+        payload_release_publisher_.publish(message);
+        payload_release_active_ = release;
+    }
+
+    void abortOnStaleOdom(double now_s) {
+        publishFault(2101, "uav_odometry_stale");
+        if (state_ == "LAND_ON_PLATFORM") {
+            ego_api_->requestPlatformLandingCancel();
+        }
+        beginReturnHome(now_s, "UAV_ODOMETRY_STALE_RETURN", true);
     }
 
     void controlTimerCallback(const ros::TimerEvent&) {
@@ -798,133 +564,242 @@ private:
         double command_vy = 0.0;
         double forward_error = 0.0;
         double left_error = 0.0;
-        const bool odom_fresh = odomFresh(now_s);
-        const FixedHeightDropState previous_state = flow_.state();
-        if (started_ && previous_state == FixedHeightDropState::FOLLOW_CAR
-            && odom_fresh) {
-            const double yaw = yawFromQuaternion(latest_odom_.pose.pose.orientation);
-            computeVelocity(now_s, yaw, command_vx, command_vy,
-                            forward_error, left_error);
+
+        const bool active_flight_state = state_ == "SEARCH_CAR"
+            || state_ == "FOLLOW_CAR" || state_ == "DESCEND_HIGH"
+            || state_ == "LAND_ON_PLATFORM" || state_ == "CLIMB_TO_CRUISE";
+        if (started_ && mission_start_s_ >= 0.0
+            && now_s - mission_start_s_ > mission_timeout_s_
+            && active_flight_state) {
+            publishFault(2102, "mission_timeout_return_home");
+            if (state_ == "LAND_ON_PLATFORM") {
+                ego_api_->requestPlatformLandingCancel();
+            }
+            beginReturnHome(now_s, "MISSION_TIMEOUT_RETURN", true);
         }
 
-        FixedHeightDropFlowInput input;
-        input.now_s = now_s;
-        input.takeoff_complete = bridge_state_ == "HOVER" && odom_fresh;
-        input.tag_detected = tagFresh(now_s);
-        input.aligned = odom_fresh
-            && alignedForDrop(now_s, forward_error, left_error);
-        input.landed = bridge_state_ == "IDLE";
-        input.abort_requested = abort_requested_;
-        if (odom_fresh) {
-            input.offset_reached = std::hypot(
-                offset_target_x_ - latest_odom_.pose.pose.position.x,
-                offset_target_y_ - latest_odom_.pose.pose.position.y)
-                <= initial_offset_reach_radius_m_;
-            input.search_endpoint_reached = std::hypot(
-                forward_target_x_ - latest_odom_.pose.pose.position.x,
-                forward_target_y_ - latest_odom_.pose.pose.position.y)
-                <= forward_search_reach_radius_m_;
-            input.home_reached = std::hypot(
-                home_x_ - latest_odom_.pose.pose.position.x,
-                home_y_ - latest_odom_.pose.pose.position.y)
-                <= home_xy_tolerance_m_
-                && std::abs(latest_odom_.pose.pose.position.z
-                            - (home_z_ + flight_height_m_))
-                    <= height_tolerance_m_;
-        }
-
-        const FixedHeightDropFlowOutput output = flow_.update(input);
-        if (output.fault_code != 0) {
-            publishFault(output.fault_code, output.fault_text);
-        }
-        handleStateChange(output, now_s);
-        abort_requested_ = false;
-
-        const FixedHeightDropState state = flow_.state();
-        if (started_ && state == FixedHeightDropState::TAKEOFF) {
+        if (started_ && state_ == "TAKEOFF") {
             if (now_s - last_takeoff_request_s_ >= takeoff_retry_s_) {
-                ego_api_->requestTakeoffTo(home_z_ + flight_height_m_);
+                ego_api_->requestTakeoffTo(cruiseZ());
                 last_takeoff_request_s_ = now_s;
             }
-        } else if (started_ && !odom_fresh
-                   && state != FixedHeightDropState::LAND_HOME
-                   && state != FixedHeightDropState::COMPLETE
-                   && state != FixedHeightDropState::ABORT) {
-            publishFault(2101, "uav_odometry_stale");
-        } else if (started_ && odom_fresh
-                   && state == FixedHeightDropState::MOVE_TO_SEARCH_START
-                   && requestOverrideIfNeeded()) {
-            sendFixedHeightCommand(offset_target_x_, offset_target_y_, home_yaw_);
-        } else if (started_ && odom_fresh
-                   && state == FixedHeightDropState::FORWARD_SEARCH
-                   && requestOverrideIfNeeded()) {
-            sendFixedHeightCommand(forward_target_x_, forward_target_y_, home_yaw_);
-        } else if (started_ && odom_fresh
-                   && state == FixedHeightDropState::FOLLOW_CAR
-                   && requestOverrideIfNeeded()) {
-            const double yaw = yawFromQuaternion(latest_odom_.pose.pose.orientation);
-            sendFixedHeightCommand(latest_odom_.pose.pose.position.x,
-                                   latest_odom_.pose.pose.position.y,
-                                   yaw, command_vx, command_vy);
-        } else if (started_ && odom_fresh
-                   && state == FixedHeightDropState::RELEASE
-                   && requestOverrideIfNeeded()) {
-            sendFixedHeightCommand(release_x_, release_y_, release_yaw_);
-        } else if (started_ && odom_fresh
-                   && state == FixedHeightDropState::RETURN_HOME
-                   && requestOverrideIfNeeded()) {
-            sendFixedHeightCommand(home_x_, home_y_, home_yaw_);
-        } else if (started_ && state == FixedHeightDropState::LAND_HOME
-                   && bridge_state_ != "IDLE"
-                   && now_s - last_land_request_s_ >= landing_retry_s_) {
-            requestLanding(now_s);
+            if (bridge_state_ == "HOVER") {
+                if (!odomFresh(now_s)) {
+                    publishFault(2101, "uav_odometry_stale");
+                } else {
+                    home_x_ = latest_odom_.pose.pose.position.x;
+                    home_y_ = latest_odom_.pose.pose.position.y;
+                    home_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
+                    setState("HOVER_3S", now_s, "CRUISE_HOVER_STARTED");
+                }
+            }
+        } else if (started_ && state_ == "HOVER_3S") {
+            if (!odomFresh(now_s)) {
+                abortOnStaleOdom(now_s);
+            } else if (now_s - state_enter_s_ >= hover_time_s_) {
+                ego_api_->requestOverrideMode(true);
+                beginSearch(now_s);
+            }
+        } else if (started_ && state_ == "SEARCH_CAR") {
+            if (!odomFresh(now_s)) {
+                abortOnStaleOdom(now_s);
+            } else if (!requestOverrideIfNeeded()) {
+                // Wait for the bridge to acknowledge OVERRIDE before sending a
+                // competition command to the moving platform.
+            } else if (initial_offset_pending_) {
+                sendPositionCommand(offset_target_x_, offset_target_y_, cruiseZ(), home_yaw_);
+                const double dx = offset_target_x_ - latest_odom_.pose.pose.position.x;
+                const double dy = offset_target_y_ - latest_odom_.pose.pose.position.y;
+                if (std::hypot(dx, dy) <= initial_offset_reach_radius_m_) {
+                    initial_offset_pending_ = false;
+                    state_enter_s_ = now_s;
+                    publishEvent("SEARCH_OFFSET_REACHED");
+                }
+            } else if (tagFresh(now_s)) {
+                follow_start_s_ = now_s;
+                resetPid();
+                setState("FOLLOW_CAR", now_s, "FOLLOW_CAR_ESTABLISHED");
+            } else {
+                holdAtCurrent(cruiseZ());
+                if (now_s - state_enter_s_ > vision_acquire_timeout_s_) {
+                    publishFault(2104, "platform_tag_not_found");
+                    beginReturnHome(now_s, "SEARCH_TIMEOUT_RETURN", true);
+                }
+            }
+        } else if (started_ && state_ == "FOLLOW_CAR") {
+            if (!odomFresh(now_s)) {
+                abortOnStaleOdom(now_s);
+            } else if (!requestOverrideIfNeeded()) {
+                // The current bridge setpoint holds the drone until OVERRIDE returns.
+            } else if (!followTagAtHeight(now_s, cruiseZ(), 0.0,
+                                           command_vx, command_vy,
+                                           forward_error, left_error)) {
+                initial_offset_pending_ = false;
+                setState("SEARCH_CAR", now_s, "PLATFORM_TAG_LOST_SEARCHING");
+            } else if (isDropMode()) {
+                if (now_s - follow_start_s_ >= drop_min_follow_s_
+                    && alignedFor(now_s, alignment_hold_s_)) {
+                    payload_released_ = true;
+                    release_start_s_ = now_s;
+                    publishPayloadRelease(true);
+                    setState("RELEASE", now_s, "PAYLOAD_RELEASE_STARTED");
+                }
+            } else if (alignedFor(now_s, alignment_hold_s_)) {
+                setState("DESCEND_HIGH", now_s, "DYNAMIC_DESCENT_STARTED");
+            }
+        } else if (started_ && state_ == "RELEASE") {
+            if (!odomFresh(now_s)) {
+                publishPayloadRelease(false);
+                abortOnStaleOdom(now_s);
+            } else {
+                if (requestOverrideIfNeeded()) {
+                    followTagAtHeight(now_s, cruiseZ(), 0.0,
+                                      command_vx, command_vy,
+                                      forward_error, left_error);
+                }
+                if (now_s - release_start_s_ >= payload_release_pulse_s_) {
+                    publishPayloadRelease(false);
+                    // The car must not accelerate at RELEASE: that state begins
+                    // the GPIO pulse.  This one-shot event is sent only after
+                    // the configured pulse has elapsed and the output is low.
+                    publishEvent("PAYLOAD_RELEASED_SPEED_UP");
+                    beginReturnHome(now_s, "PAYLOAD_RELEASED_RETURN_HOME");
+                }
+            }
+        } else if (started_ && state_ == "DESCEND_HIGH") {
+            if (!odomFresh(now_s)) {
+                abortOnStaleOdom(now_s);
+            } else if (!requestOverrideIfNeeded()) {
+                // Wait for OVERRIDE.
+            } else if (!followTagAtHeight(now_s,
+                                           platformZ() + landing_approach_height_m_,
+                                           -landing_vertical_speed_mps_,
+                                           command_vx, command_vy,
+                                           forward_error, left_error)) {
+                beginRecoveryClimb(now_s, "DESCENT_TAG_LOST_RECOVERY");
+            } else if (std::abs(latest_odom_.pose.pose.position.z
+                                - (platformZ() + landing_approach_height_m_))
+                           <= landing_height_tolerance_m_
+                       && alignedFor(now_s, state_settle_time_s_)) {
+                platform_landing_start_s_ = now_s;
+                last_platform_request_s_ = -1e9;
+                setState("LAND_ON_PLATFORM", now_s, "PLATFORM_CONTACT_STARTED");
+            }
+        } else if (started_ && state_ == "LAND_ON_PLATFORM") {
+            if (bridge_state_ == "PLATFORM_LANDED") {
+                platform_hold_start_s_ = now_s;
+                setState("PLATFORM_HOLD", now_s, "PLATFORM_LANDED");
+            } else if (!odomFresh(now_s)) {
+                abortOnStaleOdom(now_s);
+            } else if (now_s - platform_landing_start_s_ > platform_contact_timeout_s_) {
+                ego_api_->requestPlatformLandingCancel();
+                publishFault(2201, "platform_contact_timeout");
+                beginRecoveryClimb(now_s, "PLATFORM_CONTACT_TIMEOUT_RECOVERY");
+            } else if (!requestOverrideIfNeeded()) {
+                // Wait for OVERRIDE before asking the bridge to enter contact mode.
+            } else if (!followTagAtHeight(now_s,
+                                           platformZ() - landing_press_depth_m_,
+                                           -landing_vertical_speed_mps_,
+                                           command_vx, command_vy,
+                                           forward_error, left_error)) {
+                ego_api_->requestPlatformLandingCancel();
+                beginRecoveryClimb(now_s, "PLATFORM_TAG_LOST_RECOVERY");
+            } else {
+                requestPlatformLanding(now_s);
+            }
+        } else if (started_ && state_ == "PLATFORM_HOLD") {
+            if (bridge_state_ != "PLATFORM_LANDED") {
+                mission_failed_ = true;
+                setState("ABORT", now_s, "PLATFORM_HOLD_INTERRUPTED");
+            } else if (now_s - platform_hold_start_s_ >= platform_hold_s_) {
+                platform_takeoff_start_s_ = now_s;
+                last_platform_request_s_ = -1e9;
+                setState("PLATFORM_TAKEOFF", now_s, "PLATFORM_TAKEOFF_STARTED");
+                requestPlatformTakeoff(now_s);
+            }
+        } else if (started_ && state_ == "PLATFORM_TAKEOFF") {
+            if (bridge_state_ == "HOVER") {
+                beginReturnHome(now_s, "PLATFORM_TAKEOFF_COMPLETE_RETURN_HOME");
+            } else if (now_s - platform_takeoff_start_s_ > platform_takeoff_timeout_s_) {
+                mission_failed_ = true;
+                publishFault(2204, "platform_takeoff_timeout");
+                setState("ABORT", now_s, "PLATFORM_TAKEOFF_ABORT");
+            } else {
+                requestPlatformTakeoff(now_s);
+            }
+        } else if (started_ && state_ == "CLIMB_TO_CRUISE") {
+            if (!odomFresh(now_s)) {
+                abortOnStaleOdom(now_s);
+            } else if (!requestOverrideIfNeeded()) {
+                // Wait for OVERRIDE.
+            } else {
+                sendPositionCommand(recovery_x_, recovery_y_, cruiseZ(), recovery_yaw_);
+                const double dx = recovery_x_ - latest_odom_.pose.pose.position.x;
+                const double dy = recovery_y_ - latest_odom_.pose.pose.position.y;
+                if (std::hypot(dx, dy) <= home_reach_radius_m_
+                    && std::abs(latest_odom_.pose.pose.position.z - cruiseZ())
+                        <= landing_height_tolerance_m_) {
+                    initial_offset_pending_ = false;
+                    setState("SEARCH_CAR", now_s, "RECOVERY_SEARCH_RESUMED");
+                }
+            }
+        } else if (started_ && state_ == "RETURN_HOME") {
+            if (!odomFresh(now_s)) {
+                mission_failed_ = true;
+                setState("ABORT", now_s, "RETURN_HOME_ODOMETRY_LOST");
+            } else if (!requestOverrideIfNeeded()) {
+                // Wait for OVERRIDE.
+            } else {
+                sendPositionCommand(home_x_, home_y_, cruiseZ(), home_yaw_);
+                const double dx = home_x_ - latest_odom_.pose.pose.position.x;
+                const double dy = home_y_ - latest_odom_.pose.pose.position.y;
+                if (std::hypot(dx, dy) <= home_reach_radius_m_
+                    && std::abs(latest_odom_.pose.pose.position.z - cruiseZ())
+                        <= landing_height_tolerance_m_) {
+                    setState("LAND_HOME", now_s, "HOME_REACHED_LANDING");
+                    requestLanding(now_s);
+                }
+            }
+        } else if (started_ && state_ == "LAND_HOME") {
+            if (bridge_state_ == "IDLE") {
+                setState(mission_failed_ ? "ABORT" : "COMPLETE", now_s,
+                         mission_failed_ ? "MISSION_ABORTED" : "MISSION_COMPLETE");
+            } else if (bridge_state_ == "HOVER"
+                       && now_s - last_land_request_s_ >= landing_retry_s_) {
+                requestLanding(now_s);
+            }
         }
-
-        payload_actuator_.update(now_s);
 
         publishTaskState();
         publishHealth(now_s);
-        publishTracking(now_s, forward_error, left_error);
+        publishTracking(now_s, command_vx, command_vy,
+                        forward_error, left_error);
         publishDebug(now_s, command_vx, command_vy, forward_error, left_error);
-        if (output.terminal && !terminal_published_) {
-            publishTerminal(output.aborted ? "ABORT" : "COMPLETE");
-            terminal_published_ = true;
-            started_ = false;
-        }
     }
 
     void publishTaskState() {
         Json::Value state;
         state["mission_id"] = mission_id_;
         state["mode"] = mode_;
-        state["state"] = fixedHeightDropStateName(flow_.state());
-        state["payload_hardware_enabled"] = payload_actuator_.enabled();
+        state["state"] = state_;
+        state["vision_locked"] = tagFresh(ros::Time::now().toSec());
+        state["payload_released"] = payload_released_;
+        state["payload_output_active"] = payload_release_active_;
+        state["mission_elapsed_ms"] = mission_start_s_ < 0.0
+            ? 0 : static_cast<Json::Int64>(std::max(0.0,
+                ros::Time::now().toSec() - mission_start_s_) * 1000.0);
         std_msgs::String message;
         message.data = writeJson(state);
         task_state_publisher_.publish(message);
     }
 
-    void publishEvent(
-        const std::string& event,
-        const Json::Value& details = Json::Value(Json::objectValue)) {
-        Json::Value value = details;
+    void publishEvent(const std::string& event) {
+        Json::Value value;
         value["event"] = event;
         value["mission_id"] = mission_id_;
         std_msgs::String message;
         message.data = writeJson(value);
         event_publisher_.publish(message);
-    }
-
-    void publishTerminal(const std::string& final_state) {
-        Json::Value reset;
-        reset["mission_id"] = mission_id_;
-        reset["final_state"] = final_state;
-        std_msgs::String message;
-        message.data = writeJson(reset);
-        mission_reset_publisher_.publish(message);
-        Json::Value details;
-        details["final_state"] = final_state;
-        publishEvent("MISSION_CONTROLLER_FINISHED", details);
     }
 
     void publishFault(int code, const std::string& text) {
@@ -953,36 +828,44 @@ private:
         value["bridge_connected"] = ego_api_->isConnected();
         value["mission_odom_fresh"] = odomFresh(now_s);
         value["tag0_fresh"] = vision_ok;
-        value["payload_hardware_enabled"] = payload_actuator_.enabled();
-        value["mission_configured"] = !mission_id_.empty();
+        value["state"] = state_;
+        value["mode"] = mode_;
+        value["payload_released"] = payload_released_;
         std_msgs::String message;
         message.data = writeJson(value);
         health_publisher_.publish(message);
     }
 
-    void publishTracking(double now_s, double forward_error,
-                         double left_error) {
+    void publishTracking(double now_s, double command_vx, double command_vy,
+                         double forward_error, double left_error) {
         const bool detected = tagFresh(now_s);
         Json::Value value;
-        value["track_state"] = detected ? "MEASURED" : "INVALID";
+        value["track_state"] = detected ? "LOCKED" : "INVALID";
         value["detected"] = detected;
         value["confidence"] = detected ? tag_confidence_ : 0.0;
-        value["pixel_center"]["u"] = detected ? tag_center_.x : 0.0;
-        value["pixel_center"]["v"] = detected ? tag_center_.y : 0.0;
+        value["pixel_center"]["u"] = tag_center_.x;
+        value["pixel_center"]["v"] = tag_center_.y;
+        // This simple controller deliberately has no world-space target
+        // estimate.  Keep the required fields zero and publish the measured
+        // normalised pixel error explicitly for the ground station.
         value["relative_position"]["x"] = 0.0;
         value["relative_position"]["y"] = 0.0;
         value["relative_position"]["z"] = 0.0;
         value["relative_velocity"]["x"] = 0.0;
         value["relative_velocity"]["y"] = 0.0;
-        value["vision_age_ms"] = detected
-            ? static_cast<Json::Int64>(std::max(0.0, now_s - last_tag_s_)
-                                      * 1000.0)
-            : static_cast<Json::Int64>(2147483647);
+        value["command_velocity"]["x"] = command_vx;
+        value["command_velocity"]["y"] = command_vy;
+        value["pixel_error_norm"]["forward"] = forward_error;
+        value["pixel_error_norm"]["left"] = left_error;
+        value["vision_age_ms"] = last_tag_s_ < 0.0
+            ? Json::UInt64(0x7fffffffU)
+            : static_cast<Json::UInt64>(std::max(0.0, now_s - last_tag_s_) * 1000.0);
         value["filter_mode"] = detected ? "MEASURED" : "INVALID";
-        value["release_gate"] =
-            flow_.state() == FixedHeightDropState::FOLLOW_CAR
-            && alignedForDrop(now_s, forward_error, left_error);
-        value["landing_gate"] = false;
+        value["release_gate"] = isDropMode() && state_ == "FOLLOW_CAR"
+            && detected && tagAligned();
+        value["landing_gate"] = !isDropMode()
+            && (state_ == "DESCEND_HIGH" || state_ == "LAND_ON_PLATFORM")
+            && detected && tagAligned();
         std_msgs::String message;
         message.data = writeJson(value);
         tracking_publisher_.publish(message);
@@ -991,15 +874,10 @@ private:
     void publishDebug(double now_s, double command_vx, double command_vy,
                       double forward_error, double left_error) {
         Json::Value value;
-        value["state"] = fixedHeightDropStateName(flow_.state());
+        value["state"] = state_;
         value["tag0_found"] = tagFresh(now_s);
         value["tag0_u"] = tag_center_.x;
         value["tag0_v"] = tag_center_.y;
-        value["servo_observed_u"] = servo_observed_u_;
-        value["servo_observed_v"] = servo_observed_v_;
-        value["servo_target_u"] = servo_target_u_;
-        value["servo_target_v"] = servo_target_v_;
-        value["camera_info_ready"] = camera_info_ready_;
         value["forward_error"] = forward_error;
         value["left_error"] = left_error;
         value["command_vx"] = command_vx;
@@ -1007,12 +885,11 @@ private:
         value["fixed_height_m"] = home_z_ + flight_height_m_;
         value["initial_offset_target_x"] = offset_target_x_;
         value["initial_offset_target_y"] = offset_target_y_;
-        value["forward_search_target_x"] = forward_target_x_;
-        value["forward_search_target_y"] = forward_target_y_;
-        value["home_x"] = home_x_;
-        value["home_y"] = home_y_;
-        value["home_z"] = home_z_;
-        value["payload_hardware_enabled"] = payload_actuator_.enabled();
+        value["airborne_elapsed_s"] = mission_start_s_ < 0.0
+            ? 0.0 : now_s - mission_start_s_;
+        value["payload_released"] = payload_released_;
+        value["payload_output_active"] = payload_release_active_;
+        value["bridge_state"] = bridge_state_;
         std_msgs::String message;
         message.data = writeJson(value);
         debug_publisher_.publish(message);
@@ -1023,74 +900,69 @@ private:
     image_transport::ImageTransport image_transport_;
     image_transport::Subscriber image_subscriber_;
     std::unique_ptr<EgoApi> ego_api_;
-    FixedHeightDropFlow flow_;
-    PayloadActuator payload_actuator_;
     cv::Ptr<cv::aruco::Dictionary> dictionary_;
     cv::Ptr<cv::aruco::DetectorParameters> detector_parameters_;
 
     ros::Subscriber mission_config_subscriber_;
     ros::Subscriber mission_start_subscriber_;
-    ros::Subscriber car_event_subscriber_;
     ros::Subscriber positioning_subscriber_;
     ros::Subscriber odom_subscriber_;
     ros::Subscriber bridge_state_subscriber_;
     ros::Subscriber control_mode_subscriber_;
-    ros::Subscriber camera_info_subscriber_;
     ros::Publisher task_state_publisher_;
-    ros::Publisher mission_reset_publisher_;
     ros::Publisher event_publisher_;
     ros::Publisher fault_publisher_;
     ros::Publisher health_publisher_;
+    ros::Publisher tracking_publisher_;
     ros::Publisher vision_health_publisher_;
     ros::Publisher tag_center_publisher_;
+    ros::Publisher payload_release_publisher_;
     ros::Publisher debug_publisher_;
-    ros::Publisher tracking_publisher_;
     ros::Timer control_timer_;
 
     std::string bridge_namespace_;
     std::string mission_id_;
     std::string mode_ = "DROP";
+    std::string state_ = "NOT_READY";
     std::string bridge_state_;
     std::string last_fault_key_;
     nav_msgs::Odometry latest_odom_;
     cv::Point2f tag_center_;
-    cv::Mat camera_matrix_;
-    cv::Mat distortion_coefficients_;
     bool has_odom_ = false;
     bool tag_found_ = false;
     bool positioning_ready_ = false;
     bool started_ = false;
-    bool abort_requested_ = false;
-    bool terminal_published_ = false;
-    bool camera_info_ready_ = false;
+    bool initial_offset_pending_ = true;
+    bool payload_released_ = false;
+    bool payload_release_active_ = false;
+    bool mission_failed_ = false;
     uint8_t control_mode_ = 0;
     unsigned int image_width_ = 0;
     unsigned int image_height_ = 0;
-    unsigned int camera_info_width_ = 0;
-    unsigned int camera_info_height_ = 0;
     int tag_id_ = 0;
     double last_odom_s_ = -1.0;
     double last_tag_s_ = -1.0;
     double last_takeoff_request_s_ = -1e9;
     double last_land_request_s_ = -1e9;
+    double last_platform_request_s_ = -1e9;
+    double mission_start_s_ = -1.0;
+    double state_enter_s_ = -1.0;
+    double follow_start_s_ = -1.0;
+    double aligned_since_s_ = -1.0;
+    double release_start_s_ = -1.0;
+    double platform_hold_start_s_ = -1.0;
+    double platform_landing_start_s_ = -1.0;
+    double platform_takeoff_start_s_ = -1.0;
+    double home_z_ = 0.0;
     double home_x_ = 0.0;
     double home_y_ = 0.0;
-    double home_z_ = 0.0;
     double home_yaw_ = 0.0;
     double offset_target_x_ = 0.0;
     double offset_target_y_ = 0.0;
-    double forward_target_x_ = 0.0;
-    double forward_target_y_ = 0.0;
-    double release_x_ = 0.0;
-    double release_y_ = 0.0;
-    double release_yaw_ = 0.0;
+    double recovery_x_ = 0.0;
+    double recovery_y_ = 0.0;
+    double recovery_yaw_ = 0.0;
     double tag_confidence_ = 0.0;
-    double target_offset_u_px_ = 0.0;
-    double target_offset_v_px_ = 0.0;
-    double servo_observed_u_ = 0.0;
-    double servo_observed_v_ = 0.0;
-    double servo_target_u_ = 0.0;
-    double servo_target_v_ = 0.0;
 
     double flight_height_m_ = 1.50;
     double control_rate_hz_ = 30.0;
@@ -1098,15 +970,28 @@ private:
     double tag_timeout_s_ = 0.20;
     double takeoff_retry_s_ = 0.50;
     double landing_retry_s_ = 0.50;
+    double platform_request_retry_s_ = 0.50;
     double min_tag_side_px_ = 8.0;
     double initial_offset_distance_m_ = 0.50;
     double initial_offset_clockwise_deg_ = 30.0;
     double initial_offset_reach_radius_m_ = 0.08;
-    double forward_search_distance_m_ = 1.00;
-    double forward_search_reach_radius_m_ = 0.08;
-    double drop_alignment_tolerance_ = 0.08;
-    double height_tolerance_m_ = 0.10;
-    double home_xy_tolerance_m_ = 0.20;
+    double hover_time_s_ = 3.0;
+    double mission_timeout_s_ = 80.0;
+    double vision_acquire_timeout_s_ = 20.0;
+    double home_reach_radius_m_ = 0.15;
+    double state_settle_time_s_ = 0.50;
+    double alignment_tolerance_norm_ = 0.10;
+    double alignment_hold_s_ = 0.50;
+    double drop_min_follow_s_ = 3.0;
+    double payload_release_pulse_s_ = 0.70;
+    double platform_height_offset_m_ = 0.0;
+    double landing_approach_height_m_ = 0.25;
+    double landing_press_depth_m_ = 0.07;
+    double landing_vertical_speed_mps_ = 0.12;
+    double landing_height_tolerance_m_ = 0.05;
+    double platform_hold_s_ = 5.0;
+    double platform_contact_timeout_s_ = 12.0;
+    double platform_takeoff_timeout_s_ = 12.0;
     double kp_ = 0.35;
     double ki_ = 0.0;
     double kd_ = 0.0;
