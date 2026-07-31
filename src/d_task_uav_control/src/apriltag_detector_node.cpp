@@ -11,6 +11,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.h>
 #include <opencv2/aruco.hpp>
+#include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
 #include <sensor_msgs/CameraInfo.h>
@@ -189,6 +190,33 @@ private:
         return stream.str();
     }
 
+    static void putDebugLabel(
+        cv::Mat& image,
+        const std::string& text,
+        const cv::Point& preferred_top_left,
+        const cv::Scalar& foreground) {
+        constexpr double font_scale = 0.48;
+        constexpr int thickness = 1;
+        constexpr int padding = 3;
+        int baseline = 0;
+        const cv::Size text_size = cv::getTextSize(
+            text, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
+        const int box_width = text_size.width + 2 * padding;
+        const int box_height = text_size.height + baseline + 2 * padding;
+        const int left = std::max(
+            0, std::min(preferred_top_left.x, image.cols - box_width));
+        const int top = std::max(
+            0, std::min(preferred_top_left.y, image.rows - box_height));
+        cv::rectangle(
+            image, cv::Rect(left, top, box_width, box_height),
+            cv::Scalar(0, 0, 0), cv::FILLED);
+        cv::putText(
+            image, text,
+            cv::Point(left + padding, top + padding + text_size.height),
+            cv::FONT_HERSHEY_SIMPLEX, font_scale, foreground,
+            thickness, cv::LINE_AA);
+    }
+
     void imageCallback(const sensor_msgs::ImageConstPtr& message) {
         try {
             const cv_bridge::CvImageConstPtr image = cv_bridge::toCvShare(
@@ -240,7 +268,67 @@ private:
             std::vector<std::vector<cv::Point2f>> corners{detection.corners};
             std::vector<int> ids{detection.id};
             cv::aruco::drawDetectedMarkers(annotated, corners, ids);
-            cv::circle(annotated, detection.center, 4, cv::Scalar(0, 255, 255), -1);
+            const cv::Point center(
+                cvRound(detection.center.x), cvRound(detection.center.y));
+            cv::line(
+                annotated, center + cv::Point(-10, 0),
+                center + cv::Point(10, 0), cv::Scalar(0, 255, 255),
+                2, cv::LINE_AA);
+            cv::line(
+                annotated, center + cv::Point(0, -10),
+                center + cv::Point(0, 10), cv::Scalar(0, 255, 255),
+                2, cv::LINE_AA);
+            cv::circle(
+                annotated, center, 4, cv::Scalar(0, 255, 255), -1,
+                cv::LINE_AA);
+
+            if (pose.valid) {
+                cv::drawFrameAxes(
+                    annotated, camera_matrix_, distortion_coefficients_,
+                    pose.rotation_vector, pose.translation_m,
+                    static_cast<float>(tag_size_m_ * 0.5), 2);
+            }
+
+            constexpr int label_step = 24;
+            constexpr int label_count = 3;
+            const int label_stack_height = label_step * label_count;
+            int label_top = cvRound(
+                detection.bbox.y + detection.bbox.height + 6.0F);
+            if (label_top + label_stack_height >= annotated.rows) {
+                label_top = cvRound(detection.bbox.y) - label_stack_height - 6;
+            }
+            const int label_left = cvRound(detection.bbox.x);
+            putDebugLabel(
+                annotated,
+                "pixel u=" + fixed(detection.center.x, 1)
+                    + " v=" + fixed(detection.center.y, 1),
+                cv::Point(label_left, label_top),
+                cv::Scalar(0, 255, 255));
+            if (pose.valid) {
+                putDebugLabel(
+                    annotated,
+                    "cam X=" + fixed(pose.translation_m[0], 3)
+                        + " Y=" + fixed(pose.translation_m[1], 3)
+                        + " Z=" + fixed(pose.translation_m[2], 3) + " m",
+                    cv::Point(label_left, label_top + label_step),
+                    cv::Scalar(0, 255, 0));
+                putDebugLabel(
+                    annotated,
+                    "range=" + fixed(pose.slant_range_m, 3)
+                        + " plane=" + fixed(pose.plane_distance_m, 3)
+                        + " m",
+                    cv::Point(label_left, label_top + 2 * label_step),
+                    cv::Scalar(255, 255, 0));
+            } else {
+                putDebugLabel(
+                    annotated, "cam X/Y/Z=N/A",
+                    cv::Point(label_left, label_top + label_step),
+                    cv::Scalar(0, 165, 255));
+                putDebugLabel(
+                    annotated, "range/plane=N/A",
+                    cv::Point(label_left, label_top + 2 * label_step),
+                    cv::Scalar(0, 165, 255));
+            }
         }
         const std::string label = detection.found
             ? "APRILTAG 36h11 ID " + std::to_string(detection.id)

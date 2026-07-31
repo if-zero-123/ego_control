@@ -199,6 +199,12 @@ MQTT 或投放执行器。`apriltag_range` 每帧发布：
 - `intrinsics_source`：`camera_info` 表示使用相机标定，`config_fallback` 表示使用
   YAML 中 `fx/fy/cx/cy` 的临时内参。
 
+`/d_task/vision/apriltag_debug` 会直接在相机画面中叠加检测框、中心十字、像素位置
+`u/v`、相机坐标 `X/Y/Z`、空间直线距离 `range`、到码面的垂直距离 `plane` 和位姿
+坐标轴。这里使用相机光学坐标系：`X` 向图像右侧、`Y` 向图像下方、`Z` 沿镜头
+向前；单位为米。未识别到码时左上角显示 `APRILTAG SEARCH`，看到码但位姿解算无效时，
+码旁的三维位置与距离显示 `N/A`，不会把无效值伪装成零。
+
 DECXIN 相机当前固定使用 640×480、无畸变图像。实测时把黑色边长 80mm 的标签正对
 镜头，镜头平面到码面为 0.500m；连续 120 帧得到水平/垂直边长中位数
 145.500px/145.507px，据此反标：
@@ -326,3 +332,10 @@ AprilTag 检测、检测源门控和协议伴飞锁存均有独立测试。
 均指向同一标定文件。完整 `catkin_make` 成功，包测试为
 `97 tests, 0 errors, 0 failures`。加载新 K 后复核时标签已离开当前画面，因此仍需在
 码重新进入画面后用卷尺距离复核最终误差；投递高度尚未修改。
+
+2026-07-31 AprilTag 图像位置叠加验证记录：完整 `catkin_make` 成功，包测试汇总为
+`97 tests, 0 errors, 0 failures`。实际相机入口发布 640×480 调试图，当前镜头内无
+AprilTag，因此正确显示 `APRILTAG SEARCH` 和 `K=camera_info`。另用隔离的合成图像
+入口验证 ID 0 检出、中心位置 `u=379.5/v=259.5`、相机 `X/Y/Z`、`range/plane`
+和三维坐标轴均叠加在码附近。`roslaunch --nodes` 仍只列出 USB 相机和测距节点；
+验证后临时节点已精确停止，未启动飞控、任务状态机、MQTT 或投放执行器。
