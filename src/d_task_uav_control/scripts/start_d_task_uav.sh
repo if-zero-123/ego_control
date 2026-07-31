@@ -7,13 +7,14 @@ usage() {
 
 依次启动 ROS Master、MAVROS、MID360 驱动和 D 题无人机后端。
 脚本不会发布起飞消息；后端启动后等待小车合法指令。
-任务话题自动录制为轻量 rosbag：mission_topics.bag（不含图像和点云）。
+默认不录制任务话题包；需要现场复盘时可显式开启轻量 rosbag。
 
 选项：
   --mqtt-host HOST        MQTT Broker 地址（默认：192.168.0.198）
   --mqtt-port PORT        MQTT Broker 端口（默认：1883）
   --video-device PATH     下视相机设备路径
   --mavros-fcu-url URL    传给 mavros px4.launch 的 fcu_url
+  --record-bag            录制轻量任务话题包（默认关闭）
   --dry-run               仅显示将执行的启动命令
   -h, --help              显示帮助
 EOF
@@ -40,6 +41,7 @@ mqtt_host="192.168.0.198"
 mqtt_port="1883"
 video_device="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"
 mavros_fcu_url=""
+record_bag=false
 dry_run=false
 
 while (($# > 0)); do
@@ -63,6 +65,10 @@ while (($# > 0)); do
       require_value "$1" "${2:-}"
       mavros_fcu_url="$2"
       shift 2
+      ;;
+    --record-bag)
+      record_bag=true
+      shift
       ;;
     --dry-run)
       dry_run=true
@@ -115,9 +121,11 @@ if [[ "$dry_run" == true ]]; then
   print_command "${mavros_command[@]}"
   print_command roslaunch livox_ros_driver2 msg_MID360s.launch
   print_command "${backend_command[@]}"
-  print_command rosbag record --split --size=256 \
-    -O "${D_TASK_LOG_ROOT:-${HOME}/.ros/d_task_uav}/<run>/mission_topics.bag" \
-    "${rosbag_topics[@]}"
+  if [[ "$record_bag" == true ]]; then
+    print_command rosbag record --split --size=256 \
+      -O "${D_TASK_LOG_ROOT:-${HOME}/.ros/d_task_uav}/<run>/mission_topics.bag" \
+      "${rosbag_topics[@]}"
+  fi
   exit 0
 fi
 
@@ -144,10 +152,13 @@ source "$positioning_setup"
 # shellcheck disable=SC1090
 source "$catkin_setup" --extend
 
-for required_command in roscore roslaunch rosnode rostopic rosbag setsid timeout; do
+for required_command in roscore roslaunch rosnode rostopic setsid timeout; do
   command -v "$required_command" >/dev/null 2>&1 \
     || die "找不到命令：$required_command"
 done
+if [[ "$record_bag" == true ]]; then
+  command -v rosbag >/dev/null 2>&1 || die "找不到命令：rosbag"
+fi
 
 run_id="$(date +%Y%m%d_%H%M%S)_$$"
 log_dir="$log_root/$run_id"
@@ -325,15 +336,21 @@ fi
 start_component d_task_uav "${backend_command[@]}"
 wait_for_node /d_task_mission \
   || die "D 题任务节点在 ${startup_timeout_s}s 内未就绪"
-start_optional_component mission_topics rosbag record --split --size=256 \
-  -O "$log_dir/mission_topics.bag" "${rosbag_topics[@]}"
+if [[ "$record_bag" == true ]]; then
+  start_optional_component mission_topics rosbag record --split --size=256 \
+    -O "$log_dir/mission_topics.bag" "${rosbag_topics[@]}"
+fi
 
 log "全部软件已启动，当前不会自动起飞"
 log "请通过小车发送合法 mission_config，定位就绪后等待小车 mission_start"
 log "状态检查：rostopic echo /d_task/positioning/status"
 log "任务检查：rostopic echo /uav_protocol/task_state"
 log "全部日志：$log_dir"
-log "任务话题包：$log_dir/mission_topics*.bag"
+if [[ "$record_bag" == true ]]; then
+  log "任务话题包：$log_dir/mission_topics*.bag"
+else
+  log "任务话题包：已关闭"
+fi
 log "按 Ctrl+C 停止本脚本启动的进程"
 
 if wait -n "${critical_pids[@]}"; then

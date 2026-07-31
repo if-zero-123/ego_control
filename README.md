@@ -56,23 +56,17 @@ MID360 驱动，然后启动 D 题无人机完整后端：
 `--mavros-fcu-url URL`，不要直接套用未经确认的设备名和波特率。
 
 先用 `--dry-run` 可查看启动顺序而不启动进程。脚本前台常驻，每次启动的记录写入
-`~/.ros/d_task_uav/<启动时间>_<PID>/`。其中 `d_task_uav.log` 包含任务节点日志，
-`mission_topics*.bag` 自动按 256MB 分片录制任务状态、MAVROS 里程计、ego_bridge
-状态和指令、AprilTag 检测、平台融合及小车位姿；不录相机图像、AprilTag 调试图和
-点云。脚本启动完成时会打印本次目录。现场复盘可执行：
+`~/.ros/d_task_uav/<启动时间>_<PID>/`。默认只保留各进程日志，不启动任务话题录包。
+需要现场复盘时显式附加 `--record-bag`，任务话题包会按 256MB 分片写入同一目录，
+且不包含相机图像、AprilTag 调试图和点云。脚本启动完成时会打印本次目录。
 
 ```bash
-grep -E '\[d_task_mission\]\[(STATE|FAULT|DIAG)\]' \
-  ~/.ros/d_task_uav/<本次启动目录>/d_task_uav.log
-rosbag info ~/.ros/d_task_uav/<本次启动目录>/mission_topics*.bag
+/home/orangepi/catkin_ws/src/ego_control/src/d_task_uav_control/scripts/start_d_task_uav.sh \
+  --mqtt-host 192.168.0.198 \
+  --record-bag
 ```
 
-`[STATE]` 在状态切换时立即记录；`[FAULT]` 记录去重后的任务故障；`[DIAG]` 默认
-每秒记录一次控制器状态、飞行器位置速度、实际目标位置速度、A 点与搜索终点误差、
-桥接模式、平台融合、像素对齐、AprilTag 可见/参与融合 ID、下降安全门和 D 点距离。
-各输入源同时记录接收年龄和新鲜标志，默认超过 `diagnostics.source_timeout_s=1.0s`
-即标为旧数据。频率由 `diagnostics.log_rate_hz` 配置，设为 `0` 可关闭周期快照。
-rosbag 异常退出只会输出醒目警告，不会停止飞行任务主流程。按 `Ctrl+C` 时只停止
+启用录包后，rosbag 异常退出只会输出醒目警告，不会停止飞行任务主流程。按 `Ctrl+C` 时只停止
 脚本自己启动的进程，不停止启动前已经存在的 ROS Master、MAVROS 或 MID360 驱动。脚本不会
 发布起飞消息，后端仍会停在准备流程并等待小车合法指令。注意合法
 `mission/start` 到达后，当前 `ego_bridge` 配置会自动切换 OFFBOARD 并解锁，
