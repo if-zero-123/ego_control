@@ -1,6 +1,7 @@
 #ifndef D_TASK_UAV_CONTROL_APRILTAG_DETECTOR_H_
 #define D_TASK_UAV_CONTROL_APRILTAG_DETECTOR_H_
 
+#include <set>
 #include <vector>
 
 #include <opencv2/aruco.hpp>
@@ -31,14 +32,34 @@ struct AprilTagPoseEstimate {
     double reprojection_error_px = 0.0;
 };
 
+struct AprilTagLayoutEntry {
+    int id = -1;
+    double size_m = 0.0;
+    double x_m = 0.0;
+    double y_m = 0.0;
+    double yaw_rad = 0.0;
+};
+
+struct AprilTagBoardEstimate : AprilTagPoseEstimate {
+    bool center_tag_visible = false;
+    float confidence = 0.0F;
+    cv::Point2f center;
+    cv::Rect2f bbox;
+    std::vector<int> used_tag_ids;
+};
+
 class AprilTagDetector {
 public:
     explicit AprilTagDetector(int target_id = 0, double min_side_px = 8.0);
+    explicit AprilTagDetector(const std::vector<int>& target_ids,
+                              double min_side_px = 8.0);
 
     AprilTagDetection detect(const cv::Mat& image) const;
+    std::vector<AprilTagDetection> detectAll(const cv::Mat& image) const;
 
 private:
     int target_id_ = 0;
+    std::set<int> target_ids_;
     double min_side_px_ = 8.0;
     cv::Ptr<cv::aruco::Dictionary> dictionary_;
     cv::Ptr<cv::aruco::DetectorParameters> parameters_;
@@ -49,6 +70,32 @@ AprilTagPoseEstimate estimateAprilTagPose(
     double tag_size_m,
     const cv::Mat& camera_matrix,
     const cv::Mat& distortion_coefficients);
+
+std::vector<cv::Point3f> aprilTagLayoutObjectCorners(
+    const AprilTagLayoutEntry& entry);
+
+AprilTagBoardEstimate estimateAprilTagBoardPose(
+    const std::vector<AprilTagDetection>& detections,
+    const std::vector<AprilTagLayoutEntry>& layout,
+    const cv::Mat& camera_matrix,
+    const cv::Mat& distortion_coefficients,
+    double max_reprojection_error_px);
+
+std::vector<AprilTagDetection> filterPlatformTagDetections(
+    const std::vector<AprilTagDetection>& detections,
+    bool close_range);
+
+cv::Rect expandedImageRoi(const cv::Rect2f& tracked_bbox,
+                          double expand_scale,
+                          const cv::Size& image_size,
+                          int minimum_size_px);
+
+bool imageNeedsContrastEnhancement(const cv::Mat& gray,
+                                   double minimum_stddev);
+
+void translateAprilTagDetections(
+    const cv::Point& offset,
+    std::vector<AprilTagDetection>& detections);
 
 }  // namespace d_task_uav_control
 

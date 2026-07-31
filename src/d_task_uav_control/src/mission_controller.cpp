@@ -71,6 +71,11 @@ void MissionController::reset() {
     condition_start_s_ = -1.0;
     tracking_loss_start_s_ = -1.0;
     release_started_s_ = -1.0;
+    landing_prediction_armed_ = false;
+    landing_blind_start_s_ = -1.0;
+    last_landing_visual_s_ = -1.0;
+    last_landing_pixel_vx_ = 0.0;
+    last_landing_pixel_vy_ = 0.0;
     resetFollowCommand();
     last_takeoff_request_s_ = -1e9;
     last_override_request_s_ = -1e9;
@@ -95,6 +100,11 @@ bool MissionController::configure(const std::string& mission_id,
     condition_start_s_ = -1.0;
     tracking_loss_start_s_ = -1.0;
     release_started_s_ = -1.0;
+    landing_prediction_armed_ = false;
+    landing_blind_start_s_ = -1.0;
+    last_landing_visual_s_ = -1.0;
+    last_landing_pixel_vx_ = 0.0;
+    last_landing_pixel_vy_ = 0.0;
     resetFollowCommand();
     return true;
 }
@@ -223,6 +233,27 @@ void MissionController::commandPixelPlatform(const MissionInput& input,
     commandPosition(input.uav_x + target_vx * lead,
                     input.uav_y + target_vy * lead,
                     target_z, target_vx, target_vy, target_vz, output);
+}
+
+void MissionController::commandLandingPrediction(
+    const MissionInput& input, double target_z, double target_vz,
+    MissionCommand& output) const {
+    double handoff_scale = 0.0;
+    if (last_landing_visual_s_ >= 0.0
+        && config_.landing_visual_handoff_s > 0.0) {
+        handoff_scale = std::max(
+            0.0, 1.0 - (input.now_s - last_landing_visual_s_)
+                / config_.landing_visual_handoff_s);
+    }
+    const double target_vx = input.platform_vx
+        + handoff_scale * last_landing_pixel_vx_;
+    const double target_vy = input.platform_vy
+        + handoff_scale * last_landing_pixel_vy_;
+    const double lead = config_.follow_lead_time_s;
+    commandPosition(
+        input.platform_x + input.platform_vx * lead,
+        input.platform_y + input.platform_vy * lead,
+        target_z, target_vx, target_vy, target_vz, output);
 }
 
 void MissionController::resetFollowCommand() {
@@ -493,7 +524,8 @@ MissionCommand MissionController::update(const MissionInput& input) {
 
         case MissionState::DROP_DESCEND: {
             if (!input.platform_valid || !input.pixel_valid
-                || !input.apriltag_range_valid) {
+                || !input.apriltag_range_valid
+                || !input.apriltag_center_tag_visible) {
                 resetFollowCommand();
                 commandPosition(input.uav_x, input.uav_y, input.uav_z,
                                 0.0, 0.0, 0.0, output);
@@ -505,6 +537,7 @@ MissionCommand MissionController::update(const MissionInput& input) {
                     beginAbortReturn(
                         input, output, 2106,
                         input.platform_valid && input.pixel_valid
+                            && input.apriltag_center_tag_visible
                             ? "drop_apriltag_range_lost"
                             : "drop_visual_tracking_lost");
                 }
@@ -586,11 +619,20 @@ MissionCommand MissionController::update(const MissionInput& input) {
             commandPixelPlatform(input, input.platform_z + target_height,
                                  -speed, output);
             if (conditionHeld(input.pixel_aligned
+                                  && (high
+                                      || input.apriltag_center_tag_visible)
                                   && atRelativeHeight(input, target_height),
                               input.now_s, config_.phase_stable_time_s)) {
-                transition(high ? MissionState::DESCEND_LOW
-                                : MissionState::LAND_ON_PLATFORM,
-                           input.now_s);
+                if (high) {
+                    transition(MissionState::DESCEND_LOW, input.now_s);
+                } else {
+                    landing_prediction_armed_ = true;
+                    landing_blind_start_s_ = -1.0;
+                    last_landing_visual_s_ = input.now_s;
+                    last_landing_pixel_vx_ = input.pixel_world_vx;
+                    last_landing_pixel_vy_ = input.pixel_world_vy;
+                    transition(MissionState::LAND_ON_PLATFORM, input.now_s);
+                }
             } else if (stateTimedOut(input.now_s, config_.descent_timeout_s)) {
                 handleTrackingFailure(input, output,
                                       high ? "high_descent_timeout"
@@ -604,12 +646,37 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 transition(MissionState::PLATFORM_HOLD, input.now_s);
                 break;
             }
-            if (!input.platform_valid || !input.pixel_valid || !input.descent_allowed
+            if (!input.platform_valid || !input.descent_allowed
                 || input.safety_hold) {
-                commandPosition(input.uav_x, input.uav_y, input.uav_z,
-                                0.0, 0.0, 0.0, output);
-            } else {
+                handleTrackingFailure(
+                    input, output, "landing_prediction_source_lost");
+            } else if (input.pixel_valid) {
+                landing_blind_start_s_ = -1.0;
+                last_landing_visual_s_ = input.now_s;
+                last_landing_pixel_vx_ = input.pixel_world_vx;
+                last_landing_pixel_vy_ = input.pixel_world_vy;
                 commandPixelPlatform(
+                    input,
+                    input.platform_z - config_.platform_press_depth_m,
+                    -config_.contact_descent_speed_mps,
+                    output);
+                if (requestDue(input.now_s, last_platform_land_request_s_)) {
+                    output.request_platform_land = true;
+                }
+            } else if (!landing_prediction_armed_) {
+                handleTrackingFailure(
+                    input, output, "landing_prediction_not_armed");
+            } else {
+                if (landing_blind_start_s_ < 0.0) {
+                    landing_blind_start_s_ = input.now_s;
+                }
+                if (input.now_s - landing_blind_start_s_
+                        > config_.landing_prediction_timeout_s) {
+                    handleTrackingFailure(
+                        input, output, "landing_prediction_timeout");
+                    break;
+                }
+                commandLandingPrediction(
                     input,
                     input.platform_z - config_.platform_press_depth_m,
                     -config_.contact_descent_speed_mps,

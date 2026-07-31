@@ -8,8 +8,6 @@
   <arg name="image_height" default="480"/>
   <arg name="framerate" default="30"/>
   <arg name="pixel_format" default="yuyv"/>
-  <arg name="apriltag_id" default="0"/>
-  <arg name="apriltag_size_m" default="0.080"/>
 
   <!-- 只读测距入口：不启动 ego_bridge、任务状态机、MQTT 或投放执行器。 -->
   <node if="$(arg start_camera)"
@@ -30,7 +28,6 @@
   <node pkg="d_task_uav_control" type="apriltag_detector_node"
         name="apriltag_range_debug" output="screen">
     <rosparam command="load" file="$(arg config_file)"/>
-    <param name="apriltag/tag_id" value="$(arg apriltag_id)"/>
-    <param name="apriltag/tag_size_m" value="$(arg apriltag_size_m)"/>
+    <param name="apriltag/phase_selection_enabled" value="false"/>
   </node>
 </launch>

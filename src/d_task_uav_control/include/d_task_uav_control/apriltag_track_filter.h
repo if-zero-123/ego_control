@@ -13,6 +13,12 @@ struct AprilTagTrackFilterConfig {
     double reacquire_distance_px = 120.0;
 };
 
+struct AprilTagRangeFilterConfig {
+    double alpha = 0.35;
+    double max_jump_m = 0.25;
+    double reset_timeout_s = 0.35;
+};
+
 bool aprilTagTrackFilterConfigValid(
     const AprilTagTrackFilterConfig& config);
 
@@ -58,6 +64,22 @@ private:
     double last_update_s_ = -1.0;
     double last_measurement_s_ = -1.0;
     float last_confidence_ = 0.0F;
+};
+
+class AprilTagRangeFilter {
+public:
+    explicit AprilTagRangeFilter(
+        const AprilTagRangeFilterConfig& config =
+            AprilTagRangeFilterConfig());
+
+    void reset();
+    bool update(double measurement_m, double stamp_s, double& filtered_m);
+
+private:
+    AprilTagRangeFilterConfig config_;
+    bool initialised_ = false;
+    double value_m_ = 0.0;
+    double last_measurement_s_ = -1.0;
 };
 
 }  // namespace d_task_uav_control

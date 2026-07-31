@@ -14,12 +14,16 @@ class PixelServoDebugLaunchTests(unittest.TestCase):
         launch_path = PACKAGE_ROOT / "launch" / "pixel_servo_debug.launch"
         root = ET.parse(launch_path).getroot()
 
-        includes = root.findall("include")
-        self.assertEqual(len(includes), 1)
-        self.assertIn("platform_target_test.launch", includes[0].attrib["file"])
-        nodes = root.findall("node")
-        self.assertEqual(len(nodes), 1)
-        self.assertEqual(nodes[0].attrib["type"], "pixel_servo_debug_node")
+        self.assertEqual(root.findall("include"), [])
+        node_types = {
+            node.attrib.get("type") for node in root.findall("node")
+        }
+        self.assertEqual(
+            node_types,
+            {"usb_cam_node", "apriltag_detector_node", "pixel_servo_debug_node"},
+        )
+        launch_xml = ET.tostring(root, encoding="unicode")
+        self.assertNotIn("metal_ball_rknn", launch_xml)
         self.assertNotIn("d_task_mission_node", ET.tostring(root, encoding="unicode"))
         self.assertNotIn("ego_bridge", ET.tostring(root, encoding="unicode"))
 

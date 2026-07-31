@@ -5,9 +5,25 @@
   <arg name="video_device"
        default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"/>
 
-  <include file="$(find metal_ball_rknn)/launch/platform_target_test.launch">
-    <arg name="video_device" value="$(arg video_device)"/>
-  </include>
+  <node pkg="usb_cam" type="usb_cam_node" name="usb_cam"
+        ns="usb_camera_vision" output="screen">
+    <param name="video_device" value="$(arg video_device)"/>
+    <param name="image_width" value="640"/>
+    <param name="image_height" value="480"/>
+    <param name="framerate" value="30"/>
+    <param name="pixel_format" value="yuyv"/>
+    <param name="camera_frame_id" value="usb_camera_link"/>
+    <param name="camera_name" value="head_camera"/>
+    <param name="camera_info_url"
+           value="file://$(find d_task_uav_control)/config/decxin_640x480.yaml"/>
+    <param name="io_method" value="mmap"/>
+  </node>
+
+  <node pkg="d_task_uav_control" type="apriltag_detector_node"
+        name="apriltag_pixel_servo_debug" output="screen">
+    <rosparam command="load" file="$(arg config_file)"/>
+    <param name="apriltag/phase_selection_enabled" value="false"/>
+  </node>
 
   <node pkg="d_task_uav_control" type="pixel_servo_debug_node"
         name="pixel_servo_debug" output="screen">

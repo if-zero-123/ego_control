@@ -31,10 +31,9 @@ MQTT Broker 运行在小车 `192.168.0.198`，图形地面站运行在本机
      mqtt_host:=192.168.0.198
    ```
 
-   更换模型或摄像头设备时可附加：
+   更换摄像头设备时可附加：
 
    ```bash
-   model_path:=/absolute/path/platform_target.rknn \
    video_device:=/dev/v4l/by-id/your-camera
    ```
 
@@ -91,18 +90,18 @@ UAV health 同时发布 `positioning_ready=true`，小车不会再把“旧 odom
 
 `DROP`：起飞至相对 H 点 1.50m，悬停 3 秒后先飞到无人机世界坐标
 `(0.746, -0.379)`，再保持巡航高度沿世界坐标 `+X` 方向前进 1.50m，搜索终点为
-`(2.246, -0.379)`。前进过程中持续检查平台估计和 YOLO 真实检测；一旦发现平台，
+`(2.246, -0.379)`。前进过程中持续检查平台估计和外围 AprilTag 真实检测；一旦发现平台，
 立即退出固定搜索航迹并进入视觉锁定和伴飞。到达搜索终点仍未发现平台时，不再
 继续搜索，直接返回 H 点、降落并以任务失败结束。进入伴飞后按卡尔曼估计的位置和
-速度接近，YOLO 锁定标靶后参与精确伴飞；稳定后下降到投放高度并触发投放流程，
+速度接近，多码融合平台中心参与精确伴飞；稳定后下降到投放高度并触发投放流程，
 随后爬升、返回 H 点和普通降落。`distance_to_d_m` 仅作 D 点截止保护，不会等到
 D 点附近才开始投放。
 
-任务1的视觉源按状态严格分段。`SEARCH_CAR/LOCK_CAR/FOLLOW_CAR` 在 1.50m
-巡航高度只使用 YOLO 检测，公共检测结果继续进入已有的四状态
-`[x,y,vx,vy]` 卡尔曼平台跟踪器；即使高空能看到 AprilTag，也不会抢占 YOLO。
-固定搜索航迹中只有平台估计和真实 YOLO 像素检测同时有效才视为发现平台；进入
-视觉锁定后，YOLO 像素误差作为限幅后的细调量叠加到坐标控制上。
+任务视觉源按状态严格分段。`SEARCH_CAR/LOCK_CAR/FOLLOW_CAR` 在 1.50m
+巡航高度只使用 ID 1-4 的 120mm 外围码；任意一个大码都可按已知 195mm 偏移
+反推出平台中心，多个可见码使用全部角点联合解算。进入投递或动态下降后允许
+ID 0-4 联合解算，45mm 中心码负责近距精确对中。公共平台中心继续进入已有的
+四状态 `[x,y,vx,vy]` 卡尔曼平台跟踪器，像素误差仅作为有界细调量。
 
 高空水平伴飞采用外环 PD 速度控制：
 
@@ -115,25 +114,26 @@ v_cmd = v_car + Kp * (p_car - p_uav) + Kd * (v_car - v_uav) + vision_trim
 无人机当前位置，避免桥接层位置环与外部 PD 重复控制，Z 方向仍使用任务目标高度。
 全流程不接入 EGO-Planner，也不启用避障。无人机像素对中连续稳定 1 秒并进入
 `DROP_DESCEND` 后，网关把本任务的
-`follow_established=true` 持续回传给小车，小车据此从低速切到正常速度。投放状态机
-同时开放 AprilTag 检测；`DROP_DESCEND/RELEASE` 中优先采用新鲜且识别成功的
-AprilTag。真实检测中心和框先经过轻量 α-β 滤波，瞬间丢码时最多按匀速预测
-`0.18s`（30Hz 下约 5 帧），预测置信度随时间衰减；超过窗口后再回退到新鲜的
-YOLO。离开这两个状态后自动回到仅 YOLO。
-投递动作本身不使用 YOLO 估计高度：只有新鲜有效的 AprilTag
-`plane_distance_m <= 0.40m`，同时像素、XY 和相对速度均已对准，才会进入释放。
-达到 0.40m 门槛后立即停止下降，连续稳定 `0.50s` 再触发投递；测距失效时保持当前位置，
+`follow_established=true` 持续回传给小车，小车据此从低速切到正常速度。平台中心和
+检测范围先经过 α-β 滤波，码面距离另经低通和跳变门限；瞬间丢码时最多按像素速度
+预测 `0.18s`（30Hz 下约 5 帧），预测置信度随时间衰减。
+投递只有在 ID 0 真实可见、新鲜有效的
+`plane_distance_m <= 0.30m`，同时像素、XY 和相对速度均已对准时才会进入释放。
+达到 0.30m 门槛后立即停止下降，连续稳定 `0.50s` 再触发投递；测距失效时保持当前位置，
 超过失视超时后中止返航，不会按世界坐标高度盲投。
 预测帧只维持图像源和中心显示，不产生三维测距，也不会刷新控制层的真实观测或触发投递。
 
 `DYNAMIC_LANDING`：起飞、搜索和伴飞后分 0.80m、0.30m 两段下降，
-移动平台接触阶段继续发送平台位置与速度前馈。桥接层确认下压误差和低垂速
+低段只有 ID 0 真实可见并稳定对中才进入平台接触。中心码因距离过近离开画面后，
+像素修正在 0.25s 内平滑衰减，控制器使用小车实时位姿、平台卡尔曼位置/速度和
+最后视觉校正继续随车下压，单次盲区预测最多 5.0s。桥接层确认下压误差和低垂速
 持续成立后锁桨，随车停留 5.20 秒，再预发 setpoint、切 OFFBOARD、解锁，
 恢复 1.50m 高度并返航。接触超时最多自动取消并重试一次。
 
 小车位姿超过 300ms 未更新时，网关关闭动态下降门。高空伴飞在视觉短时丢失、
 但小车位姿仍新鲜时按小车世界坐标继续接近；进入投放下降、动态下降或平台接触后，
-视觉超过 `pixel_servo.source_timeout_s` 未更新会立即保持当前高度和横向位置，不会继续下降。
+只有已经通过 ID 0 近距对中门的 `LAND_ON_PLATFORM` 可在视觉盲区继续预测下降；
+此前失视会立即停降。预测期间小车位姿过期、安全门关闭或超时会取消降落并爬升重试。
 
 ## 现场参数
 
@@ -148,6 +148,10 @@ YOLO。离开这两个状态后自动回到仅 YOLO。
 - `tracking.use_visual_projection`：默认 `false`，避免未标定视觉投影影响小车世界坐标；仅保留旧方案时才开启。
 - `tracking.platform_height_m`：平台中心在无人机世界系中的高度。
 - `apriltag.track_filter_alpha/beta`：AprilTag 中心和框的 α-β 滤波权重。
+- `apriltag.layout`：ID 0-4 的尺寸、相对平台中心偏移和朝向。
+- `apriltag.full_frame_interval/roi_expand_scale`：全图重捕获周期和跟踪 ROI 扩展比例。
+- `apriltag.clahe_*`：灰度检测失败或低对比度时的 CLAHE 回退参数。
+- `apriltag.range_filter_alpha/range_max_jump_m`：码面距离低通权重和跳变门限。
 - `apriltag.prediction_timeout_s`：瞬时丢码预测窗口，默认 `0.18s`。
 - `apriltag.max_velocity_px_s`：预测像素速度限幅，默认 `800px/s`。
 - `apriltag.reacquire_distance_px`：重捕获跳变阈值，默认 `120px`；超过后直接重置滤波。
@@ -157,51 +161,47 @@ YOLO。离开这两个状态后自动回到仅 YOLO。
   `(0.746, -0.379)m`；
 - `mission.search_forward_distance_m`：到达搜索起点后沿世界坐标 `+X` 的搜索距离，
   当前为 `1.50m`；
-- `mission.drop_apriltag_distance_m`：任务1的 AprilTag 码面投递距离，当前为 `0.40m`；
+- `mission.drop_apriltag_distance_m`：任务1的 ID 0 码面投递距离，当前为 `0.30m`；
 - `mission.apriltag_range_timeout_s`：码测距新鲜度窗口，当前为 `0.35s`。
 - `mission.follow_xy_kp/kd`：高空伴飞外环 PD 增益，默认 `0.80/0.25`。
 - `mission.follow_position_deadband_m`：水平位置死区，默认 `0.04m`。
 - `mission.follow_max_correction_mps`、`follow_max_total_speed_mps`：
   PD 修正和总水平速度上限，默认 `0.30m/s`、`0.50m/s`。
 - `mission.follow_max_accel_mps2`：水平速度指令加速度上限，默认 `0.50m/s²`。
-- `mission.vision_trim_max_speed_mps`：YOLO/AprilTag 像素细调速度上限，默认 `0.12m/s`。
+- `mission.vision_trim_max_speed_mps`：AprilTag 平台中心像素细调速度上限，默认 `0.12m/s`。
+- `mission.landing_prediction_timeout_s`：最终接触阶段中心码盲区预测上限，默认 `5.0s`。
+- `mission.landing_visual_handoff_s`：视觉修正切换到坐标预测的平滑时间，默认 `0.25s`。
 - 对中误差、相对速度、稳定时间、超时、5.20 秒停留和重试次数。
 - `payload.*`：投放执行器预留配置。
 
 参数在启动时加载，飞行中不热更新。调整坐标偏移、像素轴映射和平台高度后，
 必须先做低高度、禁用自动解锁的实机验证。
 
-YOLO 使用单类别平台标靶模型 `model_2_yolo_target_yolov8n_640_rk3588_i8.rknn`，标靶固定在
-降落平台中心。检测节点每帧发布结构化检测，即使未发现目标也发布
-`found=false`。小车世界坐标由四状态卡尔曼滤波输出平台位置和速度；伴飞主控制使用
-该状态做 XY 方向 PD，视觉只做有界细调。近距离下降时切换到 AprilTag，以处理 YOLO
-无法完整框出平台的情况。
-
-下降近距离跟踪使用平台中心的 AprilTag：
-
-- 码族 `AprilTag 36h11`，ID `0`；
-- 输入文件为
-  `E:\电赛空地协同\output\pdf\AprilTag_36h11_ID0_80mm_print.pdf`；
-- 必须按“实际大小/100%”打印，禁止适合页面或缩放；
-- 黑色标签图形边长为 `80mm`，含完整白色静区的外框约 `100mm`；
-- 平整、水平贴在平台中心，正面朝上对着下视相机，不能镜像、裁掉白边、覆膜强反光
-  或折皱；
-- 码在平台平面内旋转不影响 ID、中心位置和 `plane_distance_m`，没有强制箭头方向；
-  为了让调试图的位姿坐标轴方向固定，建议把打印 PDF 的页面顶部朝向小车前进方向。
-
-该 PDF 已渲染检查，并在 Orange Pi 的 OpenCV 4.2
-`DICT_APRILTAG_36h11` 上实测识别为 ID 0。检测源话题为：
+正式任务不再启动 RKNN YOLO 检测和检测源 mux，USB 相机图像直接进入 AprilTag 36h11
+多码检测。贴装文件为
+`/home/orangepi/catkin_ws/src/AprilTag_600mm_Car_Platform_Print_and_Placement.pdf`，
+必须按 100%/实际大小打印并保持所有标签页面顶部朝向车头。当前布局为：
 
 ```text
-/d_task/vision/platform_detection/yolo       # 高空 YOLO
-/d_task/vision/platform_detection/apriltag   # 近距 AprilTag
-/d_task/vision/platform_detection            # 状态门控后的公共输入
+ID 0: 45mm,  (x= 0.000, y= 0.000)m
+ID 1: 120mm, (x=-0.195, y= 0.195)m
+ID 2: 120mm, (x= 0.195, y= 0.195)m
+ID 3: 120mm, (x= 0.195, y=-0.195)m
+ID 4: 120mm, (x=-0.195, y=-0.195)m
+```
+
+检测节点将可见码全部角点放入统一平台坐标系求解，输出的是平台几何中心而不是某个
+标签中心。高空状态过滤 ID 0，下降状态允许五码联合；无关 ID、过小码和高重投影误差
+结果不会进入控制。检测话题为：
+
+```text
+/d_task/vision/platform_detection            # 融合后的平台中心
 /d_task/vision/apriltag_range                 # AprilTag 三维测距与质量
 /d_task/vision/apriltag_debug                 # AprilTag 调试图
 ```
 
-相关参数在 `apriltag.*`、`detection_mux.*` 和 `mission.*`。默认码 ID 为 `0`、
-物理边长 `0.080m`、短时预测窗口为 `0.18s`，检测与测距新鲜度窗口均为 `0.35s`。
+相关参数在 `apriltag.*` 和 `mission.*`。短时预测窗口为 `0.18s`，检测与测距新鲜度
+窗口均为 `0.35s`。
 `PlatformDetection` 增加 `predicted` 和 `measurement_age_s`，用于明确区分真实检测与
 预测中心；任务节点另行读取 `/d_task/vision/apriltag_range`，只把真实检测得到的有效
 码面距离用于投递门控，不会另起一套水平控制器。
@@ -217,21 +217,19 @@ rqt_image_view /d_task/vision/apriltag_debug
 该 launch 只启动 USB 相机和 AprilTag 检测，不启动 `ego_bridge`、任务状态机、
 MQTT 或投放执行器。`apriltag_range` 每帧发布：
 
-- `detected/pose_valid`：是否看到码、是否成功解算位姿；
+- `detected/pose_valid/center_tag_visible`：平台是否解算成功、距离是否有效、ID 0 是否可见；
+- `visible_tag_ids/used_tag_ids`：本帧检出的码和通过几何门限参与融合的码；
 - `optical_axis_distance_m`：沿相机光轴的 Z 距离；
 - `slant_range_m`：相机光心到码中心的空间直线距离；
-- `plane_distance_m`：相机光心到码平面的垂直距离，下视相机选投递高度时重点观察；
+- `plane_distance_m/raw_plane_distance_m`：滤波后和原始的相机到平台平面垂直距离；
 - `mean_side_px`、`tag_tilt_deg`、`reprojection_error_px`：码大小、倾角和解算质量；
+- `detection_region/preprocessing/processing_time_ms`：当前全图或 ROI、灰度或 CLAHE、耗时；
 - `intrinsics_source`：`camera_info` 表示使用相机标定，`config_fallback` 表示使用
   YAML 中 `fx/fy/cx/cy` 的临时内参。
 
-`/d_task/vision/apriltag_debug` 会直接在相机画面中叠加检测框、中心十字、像素位置
-`u/v`、相机坐标 `X/Y/Z`、空间直线距离 `range`、到码面的垂直距离 `plane` 和位姿
-坐标轴。这里使用相机光学坐标系：`X` 向图像右侧、`Y` 向图像下方、`Z` 沿镜头
-向前；单位为米。未识别到码时左上角显示 `APRILTAG SEARCH`，看到码但位姿解算无效时，
-码旁的三维位置与距离显示 `N/A`，不会把无效值伪装成零。
-真实帧以绿色 `APRILTAG FILTER` 标记；短时丢码预测帧以橙色框和
-`APRILTAG PREDICT` 标记，并显示预测年龄与衰减置信度。预测帧的距离固定显示 `N/A`。
+`/d_task/vision/apriltag_debug` 叠加每个 ID、融合中心、平台坐标轴、跟踪框、
+`FULL/ROI`、`GRAY/CLAHE`、使用 ID、滤波/原始距离、重投影误差和单帧耗时。
+短时预测使用橙色框，预测帧距离固定为 `N/A`。
 
 DECXIN 相机当前固定使用 640×480、无畸变图像。实测时把黑色边长 80mm 的标签正对
 镜头，镜头平面到码面为 0.500m；连续 120 帧得到水平/垂直边长中位数
@@ -253,37 +251,21 @@ D=[0,0,0,0,0]
 
 ```bash
 rostopic echo /uav_protocol/task_state
-rostopic echo /d_task/vision/platform_detection/yolo
-rostopic echo /d_task/vision/platform_detection/apriltag
 rostopic echo /d_task/vision/platform_detection
 rostopic echo /d_task/vision/apriltag_range
 rqt_image_view /d_task/vision/apriltag_debug
 ```
 
-高空 `FOLLOW_CAR` 时公共结果应来自 YOLO；进入 `DROP_DESCEND` 后日志应出现
-`apriltag enabled`，码识别成功时出现 `selected source=APRILTAG`。码瞬时丢失
-`0.18s` 内仍保持 AprilTag 源并发布带标志的预测中心，超过窗口后才回退 YOLO；
-识别源都超过 `0.35s` 未更新时 mux 不再发布，现有下降失视保护会保持位置并按原
-超时策略处理。
+高空 `FOLLOW_CAR` 调试图应显示 `policy=OUTER_ONLY`；进入 `DROP_DESCEND`、
+`DESCEND_HIGH` 等下降状态后应显示 `policy=CENTER+OUTER`。码瞬时丢失 `0.18s`
+内发布带标志的预测中心，超过窗口后检测失效并由状态机执行停降或盲区安全策略。
+实飞前分级验证：
 
-临时回退近距码追踪时，在完整启动命令后加 `start_apriltag:=false`；mux 会在下降
-阶段继续使用可用的 YOLO，公共 Topic 和任务状态机无需改回旧代码。实飞前分级验证：
-
-1. 拆桨并设 `payload.enabled: false`，用打印码确认 AprilTag 私有 Topic 和调试图稳定。
-2. 维持 `FOLLOW_CAR`，同时让 YOLO 与码都可见，确认公共输出仍选 YOLO。
-3. 只模拟或安全进入 `DROP_DESCEND`，确认码成功时选择 AprilTag；短暂遮码时先出现
-   橙色 `PREDICT`，超过 `0.18s` 后再回退 YOLO。
-4. 同时遮挡两种目标超过 `0.35s`，确认下降冻结且不会触发投放。
+1. 拆桨并设 `payload.enabled: false`，用完整贴码平台确认 ID 1-4 高空识别和融合中心稳定。
+2. 遮挡部分外围码，确认单码/多码之间切换时平台中心没有明显跳变。
+3. 安全进入 `DROP_DESCEND`，确认 ID 0 距离大于 0.30m 不投递，达到门槛并稳定 0.50s 才投递。
+4. 动态降落在 0.30m 完成 ID 0 对中后遮挡中心码，确认继续随车下压；位姿过期时应取消重试。
 5. 低高度系留验证通过后再装桨；首次完整任务仍保持投放 dry-run，最后才恢复 GPIO。
-
-仅验证相机和模型时运行：
-
-```bash
-roslaunch metal_ball_rknn platform_target_test.launch
-```
-
-在地面站运行 `rqt_image_view` 并订阅 `/metal_ball_rknn/debug_image` 查看带框画面；
-`/d_task/vision/platform_detection` 输出结构化检测结果。
 
 确认下视相机的图像轴与机体系方向时，拆桨、禁止解锁后运行：
 
@@ -291,7 +273,7 @@ roslaunch metal_ball_rknn platform_target_test.launch
 roslaunch d_task_uav_control pixel_servo_debug.launch
 ```
 
-该入口只启动相机、RKNN 检测和调试节点，不启动任务状态机、`ego_bridge` 或飞控控制。
+该入口只启动相机、多码检测和调试节点，不启动任务状态机、`ego_bridge` 或飞控控制。
 观察 `/d_task/vision/pixel_servo_debug`、`/d_task/vision/pixel_velocity_body_debug`
 和 `/d_task/vision/pixel_velocity_world_debug`；分别将标靶向机体前后左右移动，确认建议
 速度方向后再修改 `pixel_servo.body_*` 参数。视觉超过 `pixel_servo.source_timeout_s` 未更新时，
@@ -423,3 +405,16 @@ C++ 任务节点三处契约，防止后续再次出现本地二次校验不一�
 `130 tests, 0 errors, 0 failures`，`uav_protocol_gateway` 为
 `23 tests, 0 errors, 0 failures`，Python 语法检查和完整 launch 参数导出通过。
 本次未启动相机、飞控、任务状态机、自动解锁或投放 GPIO。
+
+2026-07-31 五码 AprilTag 融合跟踪更新记录：正式任务链已关闭 YOLO 和
+`platform_detection_mux`，改由 36h11 的 ID 1-4 外围码进行 SEARCH/LOCK/FOLLOW
+平台中心融合，ID 0 中心码仅用于投递门控和低段降落对齐；五码联合 PnP、外围码反推
+平台中心、重投影误差剔除、任务阶段 ID 筛选均已加入。检测入口增加灰度检测、ROI 跟踪、
+每 10 帧全图重捕获、ROI 丢失重捕获、低对比度 CLAHE 回退和亚像素角点；平台中心使用
+alpha-beta 滤波，距离使用低通和跳变剔除。投递硬门为中心码真实可见、码面距离不超过
+`0.30m`、像素/XY/相对速度对齐并稳定 `0.50s`；中心码在低段丢失后允许结合小车实时位姿、
+速度和最后视觉修正盲区预测降落，预测预算最多 `5.0s`，小车位姿过期或安全门失败立即取消。
+完整 `catkin_make` 成功；`catkin_make run_tests_d_task_uav_control` 与
+`catkin_test_results build/test_results/d_task_uav_control` 汇总为
+`162 tests, 0 errors, 0 failures, 0 skipped`；完整任务、只读测距和像素调试 launch
+均已解析验证，未启动真实相机、飞控、解锁、投放或降落硬件。

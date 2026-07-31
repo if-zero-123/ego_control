@@ -123,6 +123,7 @@ target_link_libraries(apriltag_detector_node
   d_task_apriltag_detector
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
+  jsoncpp_lib
 )
 add_dependencies(platform_detection_mux_node
   ${${PROJECT_NAME}_EXPORTED_TARGETS}

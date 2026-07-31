@@ -1,8 +1,12 @@
 std_msgs/Header header
 bool detected
 bool pose_valid
+bool center_tag_visible
 int32 tag_id
+int32[] visible_tag_ids
+int32[] used_tag_ids
 string intrinsics_source
+string measurement_source
 float64 tag_size_m
 float64 mean_side_px
 float64 camera_x_m
@@ -10,5 +14,9 @@ float64 camera_y_m
 float64 optical_axis_distance_m
 float64 slant_range_m
 float64 plane_distance_m
+float64 raw_plane_distance_m
 float64 tag_tilt_deg
 float64 reprojection_error_px
+float64 processing_time_ms
+string detection_region
+string preprocessing

@@ -100,6 +100,20 @@ TEST(AprilTagTrackFilter, ReinitialisesOnLargeReacquisitionJump) {
     EXPECT_NEAR(output.center.y, 220.0, 1e-6);
 }
 
+TEST(AprilTagTrackFilter, ClampsInferredPlatformCenterAtImageBoundary) {
+    AprilTagTrackFilter filter(testConfig());
+    AprilTagDetection outside = measurement(-35.0F, 200.0F);
+    outside.bbox = cv::Rect2f(-100.0F, 140.0F, 130.0F, 120.0F);
+
+    const AprilTagDetection output = filter.update(
+        outside, 1.0, 640U, 480U);
+
+    ASSERT_TRUE(output.found);
+    EXPECT_FLOAT_EQ(output.center.x, 0.0F);
+    EXPECT_FLOAT_EQ(output.center.y, 200.0F);
+    EXPECT_GE(output.bbox.x, 0.0F);
+}
+
 TEST(AprilTagTrackFilter, NeverTreatsPredictedDetectionAsPoseMeasurement) {
     AprilTagDetection predicted = measurement(100.0F, 120.0F);
     predicted.predicted = true;
@@ -108,6 +122,35 @@ TEST(AprilTagTrackFilter, NeverTreatsPredictedDetectionAsPoseMeasurement) {
         predicted, 0.080, cv::Mat::eye(3, 3, CV_64F), cv::Mat());
 
     EXPECT_FALSE(pose.valid);
+}
+
+TEST(AprilTagRangeFilter, SmoothsMeasurementsAndRejectsShortTermJump) {
+    AprilTagRangeFilterConfig config;
+    config.alpha = 0.35;
+    config.max_jump_m = 0.25;
+    config.reset_timeout_s = 0.35;
+    AprilTagRangeFilter filter(config);
+    double filtered = 0.0;
+
+    ASSERT_TRUE(filter.update(0.60, 1.0, filtered));
+    EXPECT_DOUBLE_EQ(filtered, 0.60);
+    ASSERT_TRUE(filter.update(0.50, 1.1, filtered));
+    EXPECT_NEAR(filtered, 0.565, 1e-9);
+    EXPECT_FALSE(filter.update(1.20, 1.2, filtered));
+
+    ASSERT_TRUE(filter.update(0.30, 1.5, filtered));
+    EXPECT_DOUBLE_EQ(filtered, 0.30);
+}
+
+TEST(AprilTagRangeFilter, RejectsInvalidConfigurationAndMeasurement) {
+    AprilTagRangeFilterConfig config;
+    config.alpha = 0.0;
+    EXPECT_THROW({ AprilTagRangeFilter filter(config); }, std::invalid_argument);
+
+    AprilTagRangeFilter filter;
+    double output = 0.0;
+    EXPECT_FALSE(filter.update(-0.1, 1.0, output));
+    EXPECT_FALSE(filter.update(0.5, -1.0, output));
 }
 
 }  // namespace

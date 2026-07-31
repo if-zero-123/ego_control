@@ -12,12 +12,6 @@
   <arg name="start_apriltag" default="true"/>
   <arg name="video_device"
        default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"/>
-  <arg name="model_path"
-       default="$(find metal_ball_rknn)/models/model_2_yolo_target_yolov8n_640_rk3588_i8.rknn"/>
-  <arg name="target_class_id" default="0"/>
-  <arg name="target_label" default="platform_target"/>
-  <arg name="apriltag_id" default="0"/>
-  <arg name="apriltag_size_m" default="0.080"/>
 
   <group if="$(arg start_ego_bridge)">
     <rosparam command="load"
@@ -55,25 +49,20 @@
     <param name="/usb_camera_vision/usb_cam/camera_info_url"
            value="file://$(find d_task_uav_control)/config/decxin_640x480.yaml"/>
 
-    <include file="$(find metal_ball_rknn)/launch/usb_camera_detector.launch">
-      <arg name="video_device" value="$(arg video_device)"/>
-      <arg name="model_path" value="$(arg model_path)"/>
-      <arg name="target_class_id" value="$(arg target_class_id)"/>
-      <arg name="target_label" value="$(arg target_label)"/>
-      <arg name="detection_topic"
-           value="/d_task/vision/platform_detection/yolo"/>
-    </include>
+    <node pkg="usb_cam" type="usb_cam_node" name="usb_cam"
+          ns="usb_camera_vision" output="screen">
+      <param name="video_device" value="$(arg video_device)"/>
+      <param name="image_width" value="640"/>
+      <param name="image_height" value="480"/>
+      <param name="framerate" value="30"/>
+      <param name="pixel_format" value="yuyv"/>
+      <param name="camera_frame_id" value="usb_camera_link"/>
+      <param name="io_method" value="mmap"/>
+    </node>
 
     <node if="$(arg start_apriltag)"
           pkg="d_task_uav_control" type="apriltag_detector_node"
           name="apriltag_detector" output="screen">
-      <rosparam command="load" file="$(arg config_file)"/>
-      <param name="apriltag/tag_id" value="$(arg apriltag_id)"/>
-      <param name="apriltag/tag_size_m" value="$(arg apriltag_size_m)"/>
-    </node>
-
-    <node pkg="d_task_uav_control" type="platform_detection_mux_node"
-          name="platform_detection_mux" output="screen">
       <rosparam command="load" file="$(arg config_file)"/>
     </node>
   </group>

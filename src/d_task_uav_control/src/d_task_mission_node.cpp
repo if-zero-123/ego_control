@@ -322,6 +322,10 @@ private:
         LOAD_MISSION_PARAM("descent_timeout_s", descent_timeout_s);
         LOAD_MISSION_PARAM("platform_contact_timeout_s",
                            platform_contact_timeout_s);
+        LOAD_MISSION_PARAM("landing_prediction_timeout_s",
+                           landing_prediction_timeout_s);
+        LOAD_MISSION_PARAM("landing_visual_handoff_s",
+                           landing_visual_handoff_s);
         LOAD_MISSION_PARAM("platform_takeoff_timeout_s",
                            platform_takeoff_timeout_s);
         LOAD_MISSION_PARAM("return_timeout_s", return_timeout_s);
@@ -358,6 +362,8 @@ private:
             || config.follow_max_total_speed_mps <= 0.0
             || config.follow_max_accel_mps2 < 0.0
             || config.vision_trim_max_speed_mps < 0.0
+            || config.landing_prediction_timeout_s <= 0.0
+            || config.landing_visual_handoff_s < 0.0
             || config.max_dynamic_landing_retries < 0) {
             throw std::runtime_error(
                 "invalid mission height, follow-control, hold, or retry parameters");
@@ -572,6 +578,9 @@ private:
             apriltag_plane_distance_m_ = message->plane_distance_m;
             last_apriltag_range_received_s_ = ros::Time::now().toSec();
         }
+        apriltag_center_tag_visible_ =
+            message->detected && message->center_tag_visible;
+        last_apriltag_center_received_s_ = ros::Time::now().toSec();
     }
 
     void bridgeStateCallback(const std_msgs::String::ConstPtr& message) {
@@ -640,6 +649,9 @@ private:
         input.pixel_world_vy = pixel_state.world_vy;
         input.apriltag_range_valid = has_apriltag_range_
             && now_s - last_apriltag_range_received_s_
+                <= apriltag_range_timeout_s_;
+        input.apriltag_center_tag_visible = apriltag_center_tag_visible_
+            && now_s - last_apriltag_center_received_s_
                 <= apriltag_range_timeout_s_;
         input.apriltag_plane_distance_m = apriltag_plane_distance_m_;
         input.descent_allowed = descent_allowed_;
@@ -822,8 +834,10 @@ private:
     double last_odom_received_s_ = -1.0;
     double last_platform_received_s_ = -1.0;
     double last_apriltag_range_received_s_ = -1.0;
+    double last_apriltag_center_received_s_ = -1.0;
     double apriltag_plane_distance_m_ =
         std::numeric_limits<double>::infinity();
+    bool apriltag_center_tag_visible_ = false;
     std::string bridge_state_;
     uint8_t control_mode_ = 0;
     bool descent_allowed_ = false;

@@ -28,10 +28,10 @@ bool measurementValid(
         && std::isfinite(measurement.center.y)
         && std::isfinite(measurement.bbox.width)
         && std::isfinite(measurement.bbox.height)
-        && measurement.center.x >= 0.0F
-        && measurement.center.y >= 0.0F
-        && measurement.center.x < static_cast<float>(image_width)
-        && measurement.center.y < static_cast<float>(image_height)
+        && measurement.center.x >= -static_cast<float>(image_width)
+        && measurement.center.y >= -static_cast<float>(image_height)
+        && measurement.center.x < 2.0F * static_cast<float>(image_width)
+        && measurement.center.y < 2.0F * static_cast<float>(image_height)
         && measurement.bbox.width > 0.0F
         && measurement.bbox.height > 0.0F;
 }
@@ -243,6 +243,49 @@ AprilTagDetection AprilTagTrackFilter::update(
     }
     return makePredictedOutput(
         measurement_age_s, image_width, image_height);
+}
+
+AprilTagRangeFilter::AprilTagRangeFilter(
+    const AprilTagRangeFilterConfig& config)
+    : config_(config) {
+    if (!std::isfinite(config_.alpha) || config_.alpha <= 0.0
+        || config_.alpha > 1.0 || !std::isfinite(config_.max_jump_m)
+        || config_.max_jump_m <= 0.0
+        || !std::isfinite(config_.reset_timeout_s)
+        || config_.reset_timeout_s <= 0.0) {
+        throw std::invalid_argument("invalid AprilTag range-filter config");
+    }
+    reset();
+}
+
+void AprilTagRangeFilter::reset() {
+    initialised_ = false;
+    value_m_ = 0.0;
+    last_measurement_s_ = -1.0;
+}
+
+bool AprilTagRangeFilter::update(
+    double measurement_m, double stamp_s, double& filtered_m) {
+    if (!std::isfinite(measurement_m) || measurement_m <= 0.0
+        || !std::isfinite(stamp_s) || stamp_s < 0.0
+        || (initialised_ && stamp_s <= last_measurement_s_)) {
+        return false;
+    }
+    if (!initialised_
+        || stamp_s - last_measurement_s_ > config_.reset_timeout_s) {
+        initialised_ = true;
+        value_m_ = measurement_m;
+        last_measurement_s_ = stamp_s;
+        filtered_m = value_m_;
+        return true;
+    }
+    if (std::abs(measurement_m - value_m_) > config_.max_jump_m) {
+        return false;
+    }
+    value_m_ += config_.alpha * (measurement_m - value_m_);
+    last_measurement_s_ = stamp_s;
+    filtered_m = value_m_;
+    return true;
 }
 
 }  // namespace d_task_uav_control

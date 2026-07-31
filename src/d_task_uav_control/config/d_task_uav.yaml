@@ -45,20 +45,32 @@ topics:
   local_health: /uav_protocol/local_health
   mission_reset: /uav_protocol/mission_reset
 
-# The 1.5 m follow phase normally uses YOLO. During the drop descent, the
-# 80 mm platform-centre tag remains visible after the whole platform no longer
-# fits inside the frame. The mux prefers a fresh decoded tag and falls back to
-# YOLO automatically.
+# 600 x 600 mm 平台 AprilTag 36h11 布局。ID 1-4 用于高空伴飞，ID 0
+# 用于近距投递和动态降落对中；所有码页面顶部统一朝车头。
 apriltag:
   image_topic: /usb_camera_vision/usb_cam/image_raw
   camera_info_topic: /usb_camera_vision/usb_cam/camera_info
-  detection_topic: /d_task/vision/platform_detection/apriltag
+  detection_topic: /d_task/vision/platform_detection
   range_topic: /d_task/vision/apriltag_range
   debug_image_topic: /d_task/vision/apriltag_debug
-  tag_id: 0
-  tag_size_m: 0.080
+  task_state_topic: /uav_protocol/task_state
+  phase_selection_enabled: true
+  layout:
+    - {id: 0, size_m: 0.045, x_m: 0.000, y_m: 0.000, yaw_rad: 0.0}
+    - {id: 1, size_m: 0.120, x_m: -0.195, y_m: 0.195, yaw_rad: 0.0}
+    - {id: 2, size_m: 0.120, x_m: 0.195, y_m: 0.195, yaw_rad: 0.0}
+    - {id: 3, size_m: 0.120, x_m: 0.195, y_m: -0.195, yaw_rad: 0.0}
+    - {id: 4, size_m: 0.120, x_m: -0.195, y_m: -0.195, yaw_rad: 0.0}
   min_side_px: 8.0
+  max_reprojection_error_px: 3.0
   publish_debug_image: true
+  full_frame_interval: 10
+  roi_expand_scale: 1.50
+  roi_min_size_px: 96
+  clahe_fallback: true
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+  contrast_stddev_threshold: 18.0
   # Filter real centre/bbox measurements, then bridge only brief decode gaps.
   # 0.18 s is about 5 frames at 30 Hz. Predicted frames are pixel-only:
   # they never update AprilTag range and can never authorize payload release.
@@ -67,16 +79,9 @@ apriltag:
   prediction_timeout_s: 0.18
   max_velocity_px_s: 800.0
   reacquire_distance_px: 120.0
-
-detection_mux:
-  yolo_topic: /d_task/vision/platform_detection/yolo
-  apriltag_topic: /d_task/vision/platform_detection/apriltag
-  output_topic: /d_task/vision/platform_detection
-  # AprilTag is accepted only after the DROP mission enters descent/release.
-  # Cruise-height search, lock and follow remain YOLO + Kalman.
-  task_state_topic: /uav_protocol/task_state
-  source_timeout_s: 0.35
-  publish_rate_hz: 30.0
+  range_filter_alpha: 0.35
+  range_max_jump_m: 0.25
+  range_filter_reset_timeout_s: 0.35
 
 # 下视相机内参与相机系到机体系外参。use_camera_info=true 时优先使用
 # CameraInfo；收不到 CameraInfo 时使用这里的标定值。
@@ -121,7 +126,7 @@ tracking:
 
   release_max_xy_error_m: 0.15
   release_max_relative_speed_mps: 0.20
-  release_target_height_m: 0.40
+  release_target_height_m: 0.30
   release_height_tolerance_m: 0.15
   landing_max_xy_error_m: 0.10
   landing_max_relative_speed_mps: 0.15
@@ -162,10 +167,9 @@ mission:
   search_start_y_m: -0.379
   search_forward_distance_m: 1.50
 
-  # DROP_DESCEND aims for this world-frame relative height, but payload release
-  # additionally requires a fresh AprilTag plane distance <= 0.40 m.
-  drop_height_m: 0.40
-  drop_apriltag_distance_m: 0.40
+  # DROP_DESCEND 下降至 ID 0 码面距离 0.30m，稳定对中后投递。
+  drop_height_m: 0.30
+  drop_apriltag_distance_m: 0.30
   high_descent_height_m: 0.80
   low_descent_height_m: 0.30
   platform_press_depth_m: 0.10
@@ -198,6 +202,8 @@ mission:
   tracking_loss_timeout_s: 1.0
   descent_timeout_s: 20.0
   platform_contact_timeout_s: 8.0
+  landing_prediction_timeout_s: 5.0
+  landing_visual_handoff_s: 0.25
   platform_takeoff_timeout_s: 20.0
   return_timeout_s: 35.0
   home_land_timeout_s: 30.0

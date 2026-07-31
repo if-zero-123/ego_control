@@ -16,8 +16,8 @@ MissionControllerConfig fastConfig() {
     config.release_settle_time_s = 0.0;
     config.platform_hold_time_s = 5.2;
     config.cruise_height_m = 1.5;
-    config.drop_height_m = 0.4;
-    config.drop_apriltag_distance_m = 0.4;
+    config.drop_height_m = 0.3;
+    config.drop_apriltag_distance_m = 0.3;
     config.high_descent_height_m = 0.8;
     config.low_descent_height_m = 0.3;
     config.xy_tolerance_m = 0.12;
@@ -41,6 +41,7 @@ MissionInput nominalInput() {
     input.pixel_valid = true;
     input.pixel_aligned = true;
     input.apriltag_range_valid = true;
+    input.apriltag_center_tag_visible = true;
     input.apriltag_plane_distance_m = 0.8;
     input.platform_x = 1.0;
     input.platform_y = 2.0;
@@ -276,6 +277,27 @@ TEST(MissionController, DropDoesNotReleaseWithoutFreshAprilTagRange) {
     EXPECT_FALSE(command.release_payload);
 }
 
+TEST(MissionController, DropDoesNotReleaseFromOuterTagRange) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    input.uav_z = input.platform_z + fastConfig().drop_height_m;
+    input.apriltag_plane_distance_m =
+        fastConfig().drop_apriltag_distance_m;
+    input.apriltag_center_tag_visible = false;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    EXPECT_FALSE(command.release_payload);
+    EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
+    EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
+}
+
 TEST(MissionController, DropDoesNotReleaseAboveAprilTagDistance) {
     MissionController controller(fastConfig());
     prepareAndStart(controller, MissionMode::DROP);
@@ -366,6 +388,107 @@ TEST(MissionController, PixelLossFreezesDynamicDescentImmediately) {
     EXPECT_EQ(controller.state(), MissionState::DESCEND_HIGH);
 }
 
+TEST(MissionController, LowDescentRequiresCenterTagBeforeFinalLanding) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::DESCEND_HIGH);
+    input.uav_z = input.platform_z + fastConfig().high_descent_height_m;
+    input.now_s += 0.1;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::DESCEND_LOW);
+
+    input.uav_z = input.platform_z + fastConfig().low_descent_height_m;
+    input.apriltag_center_tag_visible = false;
+    input.now_s += 0.1;
+    controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::DESCEND_LOW);
+}
+
+TEST(MissionController, PredictsMovingPlatformAfterFinalCenterTagLoss) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+    controller.update(input);
+    input.uav_z = input.platform_z + fastConfig().high_descent_height_m;
+    input.now_s += 0.1;
+    controller.update(input);
+    input.uav_z = input.platform_z + fastConfig().low_descent_height_m;
+    input.now_s += 0.1;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::LAND_ON_PLATFORM);
+
+    input.platform_vx = 0.22;
+    input.platform_vy = -0.08;
+    input.pixel_valid = false;
+    input.pixel_aligned = false;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_TRUE(command.request_platform_land);
+    EXPECT_NEAR(command.target_vx, input.platform_vx, 1e-9);
+    EXPECT_NEAR(command.target_vy, input.platform_vy, 1e-9);
+    EXPECT_LT(command.target_vz, 0.0);
+    EXPECT_EQ(controller.state(), MissionState::LAND_ON_PLATFORM);
+}
+
+TEST(MissionController, CancelsBlindLandingWhenCarPoseBecomesStale) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+    controller.update(input);
+    input.uav_z = input.platform_z + fastConfig().high_descent_height_m;
+    input.now_s += 0.1;
+    controller.update(input);
+    input.uav_z = input.platform_z + fastConfig().low_descent_height_m;
+    input.now_s += 0.1;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::LAND_ON_PLATFORM);
+
+    input.bridge_state = "PLATFORM_LANDING";
+    input.pixel_valid = false;
+    input.descent_allowed = false;
+    input.safety_hold = true;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_TRUE(command.request_platform_cancel);
+    EXPECT_EQ(controller.state(), MissionState::CLIMB_TO_CRUISE);
+}
+
+TEST(MissionController, CancelsBlindLandingAtPredictionTimeout) {
+    MissionControllerConfig config = fastConfig();
+    config.landing_prediction_timeout_s = 0.50;
+    MissionController controller(config);
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+    controller.update(input);
+    input.uav_z = input.platform_z + config.high_descent_height_m;
+    input.now_s += 0.1;
+    controller.update(input);
+    input.uav_z = input.platform_z + config.low_descent_height_m;
+    input.now_s += 0.1;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::LAND_ON_PLATFORM);
+
+    input.bridge_state = "PLATFORM_LANDING";
+    input.pixel_valid = false;
+    input.now_s += 0.1;
+    controller.update(input);
+    input.now_s += 0.51;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_TRUE(command.request_platform_cancel);
+    EXPECT_EQ(controller.state(), MissionState::CLIMB_TO_CRUISE);
+}
+
 TEST(MissionController, PixelFollowAddsCorrectionToCarVelocity) {
     MissionController controller(fastConfig());
     prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
@@ -404,7 +527,7 @@ TEST(MissionController, LockUsesPixelCorrectionBeforePixelAlignment) {
     EXPECT_EQ(controller.state(), MissionState::LOCK_CAR);
 }
 
-TEST(MissionController, DynamicSearchUsesCoordinatePdBeforeYoloIsVisible) {
+TEST(MissionController, DynamicSearchUsesCoordinatePdBeforeAprilTagIsVisible) {
     MissionControllerConfig config = fastConfig();
     config.follow_position_deadband_m = 0.0;
     config.follow_max_correction_mps = 10.0;

@@ -59,8 +59,8 @@ struct MissionControllerConfig {
     double search_start_x_m = 0.746;
     double search_start_y_m = -0.379;
     double search_forward_distance_m = 1.50;
-    double drop_height_m = 0.40;
-    double drop_apriltag_distance_m = 0.40;
+    double drop_height_m = 0.30;
+    double drop_apriltag_distance_m = 0.30;
     double high_descent_height_m = 0.80;
     double low_descent_height_m = 0.30;
     double platform_press_depth_m = 0.10;
@@ -90,6 +90,8 @@ struct MissionControllerConfig {
     double tracking_loss_timeout_s = 1.0;
     double descent_timeout_s = 20.0;
     double platform_contact_timeout_s = 8.0;
+    double landing_prediction_timeout_s = 5.0;
+    double landing_visual_handoff_s = 0.25;
     double platform_takeoff_timeout_s = 20.0;
     double return_timeout_s = 35.0;
     double home_land_timeout_s = 30.0;
@@ -125,6 +127,7 @@ struct MissionInput {
     double pixel_world_vx = 0.0;
     double pixel_world_vy = 0.0;
     bool apriltag_range_valid = false;
+    bool apriltag_center_tag_visible = false;
     double apriltag_plane_distance_m =
         std::numeric_limits<double>::infinity();
 
@@ -188,6 +191,9 @@ private:
                          double target_vz, MissionCommand& output) const;
     void commandPixelPlatform(const MissionInput& input, double target_z,
                               double target_vz, MissionCommand& output) const;
+    void commandLandingPrediction(const MissionInput& input, double target_z,
+                                  double target_vz,
+                                  MissionCommand& output) const;
     void commandFollowOverride(const MissionInput& input, double target_z,
                                double target_vz, bool apply_pixel_trim,
                                MissionCommand& output);
@@ -231,6 +237,11 @@ private:
     double last_follow_cmd_vx_ = 0.0;
     double last_follow_cmd_vy_ = 0.0;
     double last_follow_cmd_s_ = -1.0;
+    bool landing_prediction_armed_ = false;
+    double landing_blind_start_s_ = -1.0;
+    double last_landing_visual_s_ = -1.0;
+    double last_landing_pixel_vx_ = 0.0;
+    double last_landing_pixel_vy_ = 0.0;
 
     double last_takeoff_request_s_ = -1e9;
     double last_override_request_s_ = -1e9;
