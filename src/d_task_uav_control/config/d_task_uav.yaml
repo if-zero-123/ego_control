@@ -26,6 +26,7 @@ topics:
   mavros_state: /mavros/state
   camera_info: /usb_camera_vision/usb_cam/camera_info
   platform_detection: /d_task/vision/platform_detection
+  apriltag_range: /d_task/vision/apriltag_range
   pixel_velocity_body_debug: /d_task/vision/pixel_velocity_body_debug
   pixel_velocity_world_debug: /d_task/vision/pixel_velocity_world_debug
   pixel_servo_debug: /d_task/vision/pixel_servo_debug
@@ -111,7 +112,7 @@ tracking:
 
   release_max_xy_error_m: 0.15
   release_max_relative_speed_mps: 0.20
-  release_target_height_m: 0.80
+  release_target_height_m: 0.40
   release_height_tolerance_m: 0.15
   landing_max_xy_error_m: 0.10
   landing_max_relative_speed_mps: 0.15
@@ -137,6 +138,7 @@ mission:
   control_rate_hz: 30.0
   odom_timeout_s: 0.30
   platform_estimate_timeout_s: 0.35
+  apriltag_range_timeout_s: 0.35
 
   cruise_height_m: 1.50
   hover_time_s: 3.0
@@ -146,7 +148,10 @@ mission:
   release_settle_time_s: 0.50
   platform_hold_time_s: 5.20
 
-  drop_height_m: 0.80
+  # DROP_DESCEND aims for this world-frame relative height, but payload release
+  # additionally requires a fresh AprilTag plane distance <= 0.40 m.
+  drop_height_m: 0.40
+  drop_apriltag_distance_m: 0.40
   high_descent_height_m: 0.80
   low_descent_height_m: 0.30
   platform_press_depth_m: 0.10

@@ -437,8 +437,9 @@ MissionCommand MissionController::update(const MissionInput& input) {
             break;
         }
 
-        case MissionState::DROP_DESCEND:
-            if (!input.platform_valid || !input.pixel_valid) {
+        case MissionState::DROP_DESCEND: {
+            if (!input.platform_valid || !input.pixel_valid
+                || !input.apriltag_range_valid) {
                 resetFollowCommand();
                 commandPosition(input.uav_x, input.uav_y, input.uav_z,
                                 0.0, 0.0, 0.0, output);
@@ -447,26 +448,37 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 }
                 if (input.now_s - tracking_loss_start_s_
                         > config_.tracking_loss_timeout_s) {
-                    beginAbortReturn(input, output, 2106,
-                                     "drop_visual_tracking_lost");
+                    beginAbortReturn(
+                        input, output, 2106,
+                        input.platform_valid && input.pixel_valid
+                            ? "drop_apriltag_range_lost"
+                            : "drop_visual_tracking_lost");
                 }
                 break;
             }
             tracking_loss_start_s_ = -1.0;
+            const bool at_drop_distance =
+                input.apriltag_plane_distance_m
+                    <= config_.drop_apriltag_distance_m;
             commandFollowOverride(
-                input, input.platform_z + config_.drop_height_m,
-                -config_.high_descent_speed_mps, true, output);
+                input,
+                at_drop_distance
+                    ? input.uav_z
+                    : input.platform_z + config_.drop_height_m,
+                at_drop_distance ? 0.0 : -config_.high_descent_speed_mps,
+                true, output);
             if (input.distance_to_d_m <= config_.drop_abort_distance_to_d_m) {
                 beginAbortReturn(input, output, 2107, "drop_window_missed");
             } else if (conditionHeld(
                            input.pixel_aligned && aligned(input)
-                               && atRelativeHeight(input, config_.drop_height_m),
+                               && at_drop_distance,
                            input.now_s, config_.phase_stable_time_s)) {
                 transition(MissionState::RELEASE, input.now_s);
             } else if (stateTimedOut(input.now_s, config_.descent_timeout_s)) {
                 beginAbortReturn(input, output, 2108, "drop_descent_timeout");
             }
             break;
+        }
 
         case MissionState::RELEASE:
             if (!payload_released_) {

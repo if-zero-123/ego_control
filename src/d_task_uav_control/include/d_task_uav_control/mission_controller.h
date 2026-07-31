@@ -54,7 +54,8 @@ struct MissionControllerConfig {
     double release_settle_time_s = 0.50;
     double platform_hold_time_s = 5.20;
 
-    double drop_height_m = 0.80;
+    double drop_height_m = 0.40;
+    double drop_apriltag_distance_m = 0.40;
     double high_descent_height_m = 0.80;
     double low_descent_height_m = 0.30;
     double platform_press_depth_m = 0.10;
@@ -118,6 +119,9 @@ struct MissionInput {
     bool pixel_aligned = false;
     double pixel_world_vx = 0.0;
     double pixel_world_vy = 0.0;
+    bool apriltag_range_valid = false;
+    double apriltag_plane_distance_m =
+        std::numeric_limits<double>::infinity();
 
     bool descent_allowed = false;
     bool safety_hold = false;

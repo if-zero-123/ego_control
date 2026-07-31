@@ -18,6 +18,7 @@
 #include <std_msgs/String.h>
 #include <std_msgs/UInt8.h>
 
+#include "d_task_uav_control/AprilTagRange.h"
 #include "d_task_uav_control/PlatformDetection.h"
 #include "d_task_uav_control/PlatformEstimate.h"
 #include "d_task_uav_control/mission_controller.h"
@@ -248,9 +249,14 @@ public:
         private_node_.param("mission/odom_timeout_s", odom_timeout_s_, 0.30);
         private_node_.param("mission/platform_estimate_timeout_s",
                             platform_estimate_timeout_s_, 0.35);
+        private_node_.param("mission/apriltag_range_timeout_s",
+                            apriltag_range_timeout_s_, 0.35);
         private_node_.param("mission/control_rate_hz", control_rate_hz_, 30.0);
-        if (control_rate_hz_ < 10.0 || !std::isfinite(control_rate_hz_)) {
-            throw std::runtime_error("mission/control_rate_hz must be >= 10 Hz");
+        if (control_rate_hz_ < 10.0 || !std::isfinite(control_rate_hz_)
+            || apriltag_range_timeout_s_ <= 0.0
+            || !std::isfinite(apriltag_range_timeout_s_)) {
+            throw std::runtime_error(
+                "mission control rate or AprilTag range timeout is invalid");
         }
 
         subscribeTopics();
@@ -275,6 +281,8 @@ private:
         LOAD_MISSION_PARAM("release_settle_time_s", release_settle_time_s);
         LOAD_MISSION_PARAM("platform_hold_time_s", platform_hold_time_s);
         LOAD_MISSION_PARAM("drop_height_m", drop_height_m);
+        LOAD_MISSION_PARAM("drop_apriltag_distance_m",
+                           drop_apriltag_distance_m);
         LOAD_MISSION_PARAM("high_descent_height_m", high_descent_height_m);
         LOAD_MISSION_PARAM("low_descent_height_m", low_descent_height_m);
         LOAD_MISSION_PARAM("platform_press_depth_m", platform_press_depth_m);
@@ -333,6 +341,7 @@ private:
             || config.high_descent_height_m <= config.low_descent_height_m
             || config.low_descent_height_m <= 0.0
             || config.drop_height_m <= 0.0
+            || config.drop_apriltag_distance_m <= 0.0
             || config.platform_hold_time_s < 0.0
             || config.follow_xy_kp < 0.0
             || config.follow_xy_kd < 0.0
@@ -390,6 +399,10 @@ private:
             private_node_.param<std::string>(
                 "topics/platform_detection", "/d_task/vision/platform_detection"),
             10, &DTaskMissionNode::platformDetectionCallback, this);
+        apriltag_range_subscriber_ = node_.subscribe(
+            private_node_.param<std::string>(
+                "topics/apriltag_range", "/d_task/vision/apriltag_range"),
+            10, &DTaskMissionNode::aprilTagRangeCallback, this);
         odom_subscriber_ = node_.subscribe(
             private_node_.param<std::string>(
                 "topics/px4_odom", "/mavros/local_position/odom"),
@@ -543,6 +556,16 @@ private:
             message->image_width, message->image_height, message->confidence});
     }
 
+    void aprilTagRangeCallback(const AprilTagRange::ConstPtr& message) {
+        has_apriltag_range_ = message->detected && message->pose_valid
+            && std::isfinite(message->plane_distance_m)
+            && message->plane_distance_m > 0.0;
+        if (has_apriltag_range_) {
+            apriltag_plane_distance_m_ = message->plane_distance_m;
+            last_apriltag_range_received_s_ = ros::Time::now().toSec();
+        }
+    }
+
     void bridgeStateCallback(const std_msgs::String::ConstPtr& message) {
         bridge_state_ = message->data;
     }
@@ -607,6 +630,10 @@ private:
             && std::abs(pixel_state.error_v) <= 1e-9;
         input.pixel_world_vx = pixel_state.world_vx;
         input.pixel_world_vy = pixel_state.world_vy;
+        input.apriltag_range_valid = has_apriltag_range_
+            && now_s - last_apriltag_range_received_s_
+                <= apriltag_range_timeout_s_;
+        input.apriltag_plane_distance_m = apriltag_plane_distance_m_;
         input.descent_allowed = descent_allowed_;
         input.safety_hold = safety_hold_;
         input.distance_to_d_m = distance_to_d_m_;
@@ -728,6 +755,11 @@ private:
         value["platform_estimate_fresh"] = has_platform_
             && now_s - last_platform_received_s_
                 <= platform_estimate_timeout_s_;
+        value["apriltag_range_fresh"] = has_apriltag_range_
+            && now_s - last_apriltag_range_received_s_
+                <= apriltag_range_timeout_s_;
+        value["apriltag_plane_distance_m"] =
+            has_apriltag_range_ ? apriltag_plane_distance_m_ : -1.0;
         value["payload_hardware_enabled"] = payload_actuator_.enabled();
         std_msgs::String message;
         message.data = writeJson(value);
@@ -760,6 +792,7 @@ private:
     ros::Subscriber positioning_subscriber_;
     ros::Subscriber platform_subscriber_;
     ros::Subscriber detection_subscriber_;
+    ros::Subscriber apriltag_range_subscriber_;
     ros::Subscriber odom_subscriber_;
     ros::Subscriber bridge_state_subscriber_;
     ros::Subscriber control_mode_subscriber_;
@@ -777,8 +810,12 @@ private:
     PlatformEstimate latest_platform_;
     bool has_odom_ = false;
     bool has_platform_ = false;
+    bool has_apriltag_range_ = false;
     double last_odom_received_s_ = -1.0;
     double last_platform_received_s_ = -1.0;
+    double last_apriltag_range_received_s_ = -1.0;
+    double apriltag_plane_distance_m_ =
+        std::numeric_limits<double>::infinity();
     std::string bridge_state_;
     uint8_t control_mode_ = 0;
     bool descent_allowed_ = false;
@@ -786,6 +823,7 @@ private:
     double distance_to_d_m_ = std::numeric_limits<double>::infinity();
     double odom_timeout_s_ = 0.30;
     double platform_estimate_timeout_s_ = 0.35;
+    double apriltag_range_timeout_s_ = 0.35;
     double control_rate_hz_ = 30.0;
     double last_health_publish_s_ = -1e9;
     bool terminal_published_ = false;

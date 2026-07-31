@@ -115,6 +115,10 @@ v_cmd = v_car + Kp * (p_car - p_uav) + Kd * (v_car - v_uav) + vision_trim
 `follow_established=true` 持续回传给小车，小车据此从低速切到正常速度。投放状态机
 同时开放 AprilTag 检测；`DROP_DESCEND/RELEASE` 中优先采用新鲜且识别成功的
 AprilTag，码暂时未识别时回退到新鲜的 YOLO。离开这两个状态后自动回到仅 YOLO。
+投递动作本身不使用 YOLO 估计高度：只有新鲜有效的 AprilTag
+`plane_distance_m <= 0.40m`，同时像素、XY 和相对速度均已对准，才会进入释放。
+达到 0.40m 门槛后立即停止下降，连续稳定 `0.50s` 再触发投递；测距失效时保持当前位置，
+超过失视超时后中止返航，不会按世界坐标高度盲投。
 
 `DYNAMIC_LANDING`：起飞、搜索和伴飞后分 0.80m、0.30m 两段下降，
 移动平台接触阶段继续发送平台位置与速度前馈。桥接层确认下压误差和低垂速
@@ -137,7 +141,9 @@ AprilTag，码暂时未识别时回退到新鲜的 YOLO。离开这两个状态�
 - `tracking.use_visual_projection`：默认 `false`，避免未标定视觉投影影响小车世界坐标；仅保留旧方案时才开启。
 - `tracking.platform_height_m`：平台中心在无人机世界系中的高度。
 - `pixel_servo.*`：像素滤波、死区、最大横移速度及图像轴到机体系轴的映射；必须先完成台架四方向确认。
-- `mission.cruise_height_m`、`drop_height_m`、两段下降高度和速度。
+- `mission.cruise_height_m`、`drop_height_m`、两段下降高度和速度；
+- `mission.drop_apriltag_distance_m`：任务1的 AprilTag 码面投递距离，当前为 `0.40m`；
+- `mission.apriltag_range_timeout_s`：码测距新鲜度窗口，当前为 `0.35s`。
 - `mission.follow_xy_kp/kd`：高空伴飞外环 PD 增益，默认 `0.80/0.25`。
 - `mission.follow_position_deadband_m`：水平位置死区，默认 `0.04m`。
 - `mission.follow_max_correction_mps`、`follow_max_total_speed_mps`：
@@ -163,7 +169,10 @@ YOLO 使用单类别平台标靶模型 `model_2_yolo_target_yolov8n_640_rk3588_i
   `E:\电赛空地协同\output\pdf\AprilTag_36h11_ID0_80mm_print.pdf`；
 - 必须按“实际大小/100%”打印，禁止适合页面或缩放；
 - 黑色标签图形边长为 `80mm`，含完整白色静区的外框约 `100mm`；
-- 平整贴在平台中心，不能裁掉白边、覆膜强反光或折皱。
+- 平整、水平贴在平台中心，正面朝上对着下视相机，不能镜像、裁掉白边、覆膜强反光
+  或折皱；
+- 码在平台平面内旋转不影响 ID、中心位置和 `plane_distance_m`，没有强制箭头方向；
+  为了让调试图的位姿坐标轴方向固定，建议把打印 PDF 的页面顶部朝向小车前进方向。
 
 该 PDF 已渲染检查，并在 Orange Pi 的 OpenCV 4.2
 `DICT_APRILTAG_36h11` 上实测识别为 ID 0。检测源话题为：
@@ -176,9 +185,10 @@ YOLO 使用单类别平台标靶模型 `model_2_yolo_target_yolov8n_640_rk3588_i
 /d_task/vision/apriltag_debug                 # AprilTag 调试图
 ```
 
-相关参数在 `apriltag.*` 和 `detection_mux.*`。默认码 ID 为 `0`、物理边长
-`0.080m`、检测源新鲜度窗口 `0.35s`。公共话题接口未改变，因此现有像素伺服、
-卡尔曼跟踪器和任务状态机无需同时运行第二套控制器。
+相关参数在 `apriltag.*`、`detection_mux.*` 和 `mission.*`。默认码 ID 为 `0`、
+物理边长 `0.080m`、检测与测距新鲜度窗口均为 `0.35s`。公共检测话题接口不变；
+任务节点另行读取 `/d_task/vision/apriltag_range`，只把有效的码面距离用于投递门控，
+不会另起一套水平控制器。
 
 投递高度先用 AprilTag 测距实测，不直接猜值。拆桨后运行只读入口：
 
@@ -339,3 +349,11 @@ AprilTag，因此正确显示 `APRILTAG SEARCH` 和 `K=camera_info`。另用隔�
 入口验证 ID 0 检出、中心位置 `u=379.5/v=259.5`、相机 `X/Y/Z`、`range/plane`
 和三维坐标轴均叠加在码附近。`roslaunch --nodes` 仍只列出 USB 相机和测距节点；
 验证后临时节点已精确停止，未启动飞控、任务状态机、MQTT 或投放执行器。
+
+2026-07-31 0.40m 投递门控验证记录：任务1下降目标和平台跟踪释放参考高度改为
+`0.40m`，任务节点新增 `/d_task/vision/apriltag_range` 订阅。只有新鲜有效的
+`plane_distance_m <= 0.40m` 且像素、XY、相对速度均对准时才允许进入 `RELEASE`；
+达到距离后先停止下降并完成 `0.50s` 稳定计时。新增测试覆盖测距丢失、`0.401m`
+拒绝投递和门槛内停降，任务状态机 `21/21` 通过，全包汇总为
+`103 tests, 0 errors, 0 failures`。完整构建和 launch 参数解析通过，本次未启动飞控、
+解锁或投放硬件。

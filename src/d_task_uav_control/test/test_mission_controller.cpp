@@ -16,7 +16,8 @@ MissionControllerConfig fastConfig() {
     config.release_settle_time_s = 0.0;
     config.platform_hold_time_s = 5.2;
     config.cruise_height_m = 1.5;
-    config.drop_height_m = 0.8;
+    config.drop_height_m = 0.4;
+    config.drop_apriltag_distance_m = 0.4;
     config.high_descent_height_m = 0.8;
     config.low_descent_height_m = 0.3;
     config.xy_tolerance_m = 0.12;
@@ -39,6 +40,8 @@ MissionInput nominalInput() {
     input.platform_vision_detected = true;
     input.pixel_valid = true;
     input.pixel_aligned = true;
+    input.apriltag_range_valid = true;
+    input.apriltag_plane_distance_m = 0.8;
     input.platform_x = 1.0;
     input.platform_y = 2.0;
     input.platform_z = 0.3;
@@ -119,7 +122,7 @@ TEST(MissionController, RequestsConfiguredHeightRelativeToHome) {
     EXPECT_DOUBLE_EQ(command.target_z, 1.7);
 }
 
-TEST(MissionController, DropReleasesWhenAlignedAtConfiguredHeight) {
+TEST(MissionController, DropReleasesAtConfiguredAprilTagDistance) {
     MissionController controller(fastConfig());
     prepareAndStart(controller, MissionMode::DROP);
     MissionInput input = nominalInput();
@@ -128,6 +131,8 @@ TEST(MissionController, DropReleasesWhenAlignedAtConfiguredHeight) {
     controller.update(input);
     ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
     input.uav_z = input.platform_z + fastConfig().drop_height_m;
+    input.apriltag_plane_distance_m =
+        fastConfig().drop_apriltag_distance_m;
     input.now_s += 0.1;
     controller.update(input);
     ASSERT_EQ(controller.state(), MissionState::RELEASE);
@@ -136,6 +141,76 @@ TEST(MissionController, DropReleasesWhenAlignedAtConfiguredHeight) {
     const MissionCommand command = controller.update(input);
     EXPECT_TRUE(command.release_payload);
     EXPECT_LT(input.distance_to_d_m, 10.0);
+}
+
+TEST(MissionController, DropDoesNotReleaseWithoutFreshAprilTagRange) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    input.uav_z = input.platform_z + fastConfig().drop_height_m;
+    input.apriltag_range_valid = false;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
+    EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
+    EXPECT_FALSE(command.release_payload);
+}
+
+TEST(MissionController, DropDoesNotReleaseAboveAprilTagDistance) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    input.uav_z = input.platform_z + fastConfig().drop_height_m;
+    input.apriltag_plane_distance_m =
+        fastConfig().drop_apriltag_distance_m + 0.001;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    EXPECT_LT(command.target_vz, 0.0);
+    EXPECT_FALSE(command.release_payload);
+}
+
+TEST(MissionController, DropHoldsHeightWhileDistanceGateSettles) {
+    MissionControllerConfig config = fastConfig();
+    config.phase_stable_time_s = 0.50;
+    MissionController controller(config);
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
+    input.uav_z = 0.82;
+    input.apriltag_plane_distance_m = config.drop_apriltag_distance_m;
+    input.now_s += 0.1;
+    MissionCommand command = controller.update(input);
+
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
+    EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
+    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
+
+    input.now_s += 0.49;
+    command = controller.update(input);
+    EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
+    EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
+    EXPECT_EQ(controller.state(), MissionState::DROP_DESCEND);
+
+    input.now_s += 0.01;
+    controller.update(input);
+    EXPECT_EQ(controller.state(), MissionState::RELEASE);
 }
 
 TEST(MissionController, StaleCarPoseFreezesDynamicDescentAltitude) {
@@ -330,6 +405,8 @@ TEST(MissionController, ReleaseKeepsPixelCorrectionWhileVisible) {
     controller.update(input);
     ASSERT_EQ(controller.state(), MissionState::DROP_DESCEND);
     input.uav_z = input.platform_z + fastConfig().drop_height_m;
+    input.apriltag_plane_distance_m =
+        fastConfig().drop_apriltag_distance_m;
     input.now_s += 0.1;
     controller.update(input);
     ASSERT_EQ(controller.state(), MissionState::RELEASE);
