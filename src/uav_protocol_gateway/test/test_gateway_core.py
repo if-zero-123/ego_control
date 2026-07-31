@@ -30,6 +30,7 @@ from d_task_protocol.topics import Topics  # noqa: E402
 from uav_protocol_gateway.gateway_core import (  # noqa: E402
     UavGatewayCore,
     follow_established_after_state,
+    normalise_local_event,
 )
 
 
@@ -427,6 +428,40 @@ class GatewayCoreTests(unittest.TestCase):
             odom_valid=True,
             pose_quality=0.9,
         )
+
+
+class LocalEventTests(unittest.TestCase):
+    def test_matching_mission_id_is_consumed_before_envelope_build(self):
+        event, details = normalise_local_event(
+            {
+                "event": "MISSION_CONTROLLER_READY",
+                "mission_id": "mission-0001",
+                "state": "WAIT_START",
+            },
+            "mission-0001",
+        )
+
+        self.assertEqual(event, "MISSION_CONTROLLER_READY")
+        self.assertEqual(details, {"state": "WAIT_START"})
+
+    def test_missing_mission_id_is_allowed_for_plain_local_events(self):
+        event, details = normalise_local_event(
+            {"event": "CAMERA_RECOVERED", "camera": "down"},
+            "mission-0001",
+        )
+
+        self.assertEqual(event, "CAMERA_RECOVERED")
+        self.assertEqual(details, {"camera": "down"})
+
+    def test_mismatched_mission_id_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "mission_id mismatch"):
+            normalise_local_event(
+                {
+                    "event": "MISSION_CONTROLLER_READY",
+                    "mission_id": "mission-old",
+                },
+                "mission-current",
+            )
 
 
 class FakeBus:

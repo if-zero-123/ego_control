@@ -9,7 +9,7 @@ freshness gate used by the dynamic-landing task.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 from d_task_protocol import (
     AckResult,
@@ -48,6 +48,20 @@ def follow_established_after_state(
         established
         or state in _FOLLOW_ESTABLISHED_STATES.get(mode, set())
     )
+
+
+def normalise_local_event(
+    data: Mapping[str, object],
+    mission_id: str,
+) -> Tuple[str, Dict[str, Any]]:
+    """Remove envelope-owned fields and reject events from another mission."""
+
+    details: Dict[str, Any] = dict(data)
+    event = str(details.pop("event", "LOCAL_EVENT"))
+    source_mission_id = details.pop("mission_id", "")
+    if source_mission_id not in ("", None) and str(source_mission_id) != mission_id:
+        raise ValueError("local event mission_id mismatch")
+    return event, details
 
 
 @dataclass(frozen=True)

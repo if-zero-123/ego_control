@@ -396,3 +396,13 @@ C++ 任务节点三处契约，防止后续再次出现本地二次校验不一�
 `uav_protocol_gateway` 为 `19 tests, 0 errors, 0 failures`，完整 launch 节点解析
 通过。源码生效需要安全重启无人机任务后端，并由小车重新发布一个新的任务配置；
 本次没有重启运行节点或解锁飞控。
+
+2026-07-31 定位 READY 锁存修复记录：`startup_timeout_s` 现在只约束首次完成定位
+初始化；三路定位连续稳定并进入 `WAIT_START` 后，READY 不会在任务配置 15 秒时被
+错误反转为 `positioning_startup_timeout`。网关本地事件同时会消费并校验来源
+`mission_id`，不再把它作为重复参数传给协议封装器；旧任务的本地事件会被拒绝。
+新增测试覆盖 READY 跨过启动期限、匹配任务事件、无任务字段事件和旧任务事件拒绝。
+完整 `catkin_make` 成功；`d_task_uav_control` 为
+`120 tests, 0 errors, 0 failures`，`uav_protocol_gateway` 为
+`22 tests, 0 errors, 0 failures`，完整 launch 节点解析通过。本次没有重启运行节点、
+解锁飞控或修改 Kill Switch。

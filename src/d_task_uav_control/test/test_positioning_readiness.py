@@ -84,6 +84,21 @@ class PositioningReadinessTests(unittest.TestCase):
         self.assertEqual(status.state, "POSITIONING_FAULT")
         self.assertEqual(status.fault_text, "positioning_startup_timeout")
 
+    def test_ready_state_is_not_overwritten_by_startup_timeout(self):
+        for index in range(11):
+            stamp = 10.0 + index * 0.1
+            self.feed(stamp)
+            self.readiness.evaluate(stamp)
+        self.assertTrue(self.readiness.status.ready)
+
+        self.feed(30.0, x=1.01)
+        status = self.readiness.evaluate(30.0)
+
+        self.assertTrue(status.ready)
+        self.assertEqual(status.state, "WAIT_START")
+        self.assertEqual(status.fault_code, 0)
+        self.assertEqual(status.fault_text, "")
+
     def test_new_configuration_clears_previous_ready_and_home(self):
         for index in range(11):
             stamp = 10.0 + index * 0.1

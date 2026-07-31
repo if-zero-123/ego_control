@@ -93,6 +93,8 @@ class PositioningReadiness:
             return self.status
         if self.status.state == "POSITIONING_FAULT":
             return self.status
+        if self.status.ready:
+            return self.status
         if now_s - self._started_s > self.config.startup_timeout_s:
             self.status.state = "POSITIONING_FAULT"
             self.status.ready = False

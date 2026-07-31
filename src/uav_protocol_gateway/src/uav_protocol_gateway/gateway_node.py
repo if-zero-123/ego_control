@@ -36,6 +36,7 @@ from .gateway_core import (
     CoreAction,
     UavGatewayCore,
     follow_established_after_state,
+    normalise_local_event,
 )
 
 
@@ -553,8 +554,16 @@ class UavProtocolGateway:
             data = _json_object(message.data)
         except (ValueError, TypeError, json.JSONDecodeError):
             data = {"event": message.data}
-        event = str(data.pop("event", "LOCAL_EVENT"))
-        self._publish_event(event, **data)
+        try:
+            event, details = normalise_local_event(
+                data, self._context_mission_id()
+            )
+        except ValueError as exc:
+            rospy.logwarn_throttle(
+                2.0, "[uav_protocol_gateway] rejected local event: %s", exc
+            )
+            return
+        self._publish_event(event, **details)
 
     def _fault_cb(self, message: String) -> None:
         try:
