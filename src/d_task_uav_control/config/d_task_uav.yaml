@@ -50,8 +50,13 @@ simple_follow:
   initial_offset_clockwise_deg: 30.0
   initial_offset_reach_radius_m: 0.08
 
-  # The 20-second airborne window includes the initial offset.  On expiry,
-  # hold the current pose for seven seconds, then request the bridge's
+  # After the diagonal offset, search one metre along the locked takeoff
+  # heading.  A real tag observation immediately hands control to follow.
+  forward_search_distance_m: 1.00
+  forward_search_reach_radius_m: 0.08
+
+  # The 20-second airborne window includes the diagonal offset and forward
+  # search.  On expiry, hold for seven seconds, then request the bridge's
   # built-in slow landing (default 0.18 m/s).
   flight_duration_s: 20.0
   pre_land_hover_s: 7.0

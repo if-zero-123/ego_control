@@ -93,6 +93,10 @@ private:
                             initial_offset_clockwise_deg_, 30.0);
         private_node_.param("simple_follow/initial_offset_reach_radius_m",
                             initial_offset_reach_radius_m_, 0.08);
+        private_node_.param("simple_follow/forward_search_distance_m",
+                            forward_search_distance_m_, 1.00);
+        private_node_.param("simple_follow/forward_search_reach_radius_m",
+                            forward_search_reach_radius_m_, 0.08);
         private_node_.param("simple_follow/flight_duration_s", flight_duration_s_, 20.0);
         private_node_.param("simple_follow/pre_land_hover_s", pre_land_hover_s_, 7.0);
         private_node_.param("simple_follow/pid/kp", kp_, 0.35);
@@ -106,7 +110,8 @@ private:
             || takeoff_retry_s_ <= 0.0 || landing_retry_s_ <= 0.0
             || min_tag_side_px_ <= 0.0 || initial_offset_distance_m_ < 0.0
             || initial_offset_reach_radius_m_ <= 0.0 || flight_duration_s_ <= 0.0
-            || pre_land_hover_s_ < 0.0
+            || forward_search_distance_m_ < 0.0
+            || forward_search_reach_radius_m_ <= 0.0 || pre_land_hover_s_ < 0.0
             || tag_id_ < 0 || kp_ < 0.0 || ki_ < 0.0 || kd_ < 0.0
             || deadband_ < 0.0 || integral_limit_ < 0.0
             || max_speed_mps_ <= 0.0) {
@@ -385,8 +390,18 @@ private:
         state_ = "FOLLOW_TAG";
         resetPid();
         publishEvent("TAG_FOLLOW_STARTED");
-        ROS_INFO("[tag0_follow] initial offset complete in %.2fs",
+        ROS_INFO("[tag0_follow] tag acquired after %.2fs airborne",
                  now_s - airborne_start_s_);
+    }
+
+    void beginForwardSearch() {
+        forward_target_x_ = offset_target_x_
+            + forward_search_distance_m_ * std::cos(home_yaw_);
+        forward_target_y_ = offset_target_y_
+            + forward_search_distance_m_ * std::sin(home_yaw_);
+        state_ = "FORWARD_SEARCH";
+        resetPid();
+        publishEvent("FORWARD_SEARCH_STARTED");
     }
 
     void beginPreLandHover(double now_s) {
@@ -435,7 +450,24 @@ private:
                 const double dy = offset_target_y_ - latest_odom_.pose.pose.position.y;
                 sendFixedHeightCommand(offset_target_x_, offset_target_y_, home_yaw_);
                 if (std::hypot(dx, dy) <= initial_offset_reach_radius_m_) {
-                    beginFollowTag(now_s);
+                    beginForwardSearch();
+                }
+            }
+        } else if (started_ && state_ == "FORWARD_SEARCH") {
+            if (!odomFresh(now_s)) {
+                publishFault(2101, "uav_odometry_stale");
+            } else if (now_s - airborne_start_s_ >= flight_duration_s_) {
+                beginPreLandHover(now_s);
+            } else if (tagFresh(now_s)) {
+                beginFollowTag(now_s);
+            } else if (requestOverrideIfNeeded()) {
+                const double dx = forward_target_x_
+                    - latest_odom_.pose.pose.position.x;
+                const double dy = forward_target_y_
+                    - latest_odom_.pose.pose.position.y;
+                sendFixedHeightCommand(forward_target_x_, forward_target_y_, home_yaw_);
+                if (std::hypot(dx, dy) <= forward_search_reach_radius_m_) {
+                    beginPreLandHover(now_s);
                 }
             }
         } else if (started_ && state_ == "FOLLOW_TAG") {
@@ -543,6 +575,8 @@ private:
         value["fixed_height_m"] = home_z_ + flight_height_m_;
         value["initial_offset_target_x"] = offset_target_x_;
         value["initial_offset_target_y"] = offset_target_y_;
+        value["forward_search_target_x"] = forward_target_x_;
+        value["forward_search_target_y"] = forward_target_y_;
         value["airborne_elapsed_s"] = airborne_start_s_ < 0.0
             ? 0.0 : now_s - airborne_start_s_;
         std_msgs::String message;
@@ -599,6 +633,8 @@ private:
     double home_yaw_ = 0.0;
     double offset_target_x_ = 0.0;
     double offset_target_y_ = 0.0;
+    double forward_target_x_ = 0.0;
+    double forward_target_y_ = 0.0;
     double hold_x_ = 0.0;
     double hold_y_ = 0.0;
     double hold_yaw_ = 0.0;
@@ -614,6 +650,8 @@ private:
     double initial_offset_distance_m_ = 0.50;
     double initial_offset_clockwise_deg_ = 30.0;
     double initial_offset_reach_radius_m_ = 0.08;
+    double forward_search_distance_m_ = 1.00;
+    double forward_search_reach_radius_m_ = 0.08;
     double flight_duration_s_ = 20.0;
     double pre_land_hover_s_ = 7.0;
     double kp_ = 0.35;
