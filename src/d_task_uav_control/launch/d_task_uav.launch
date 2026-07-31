@@ -9,7 +9,6 @@
   <arg name="start_ego_bridge" default="true"/>
   <arg name="start_gateway" default="true"/>
   <arg name="start_vision" default="true"/>
-  <arg name="start_apriltag" default="true"/>
   <arg name="video_device"
        default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"/>
 
@@ -36,19 +35,16 @@
     </node>
   </group>
 
-  <!-- 本节点只在收到地面站 mission/config 后重启 direct Fast-LIO launch。 -->
+  <!-- Receives mission_config and starts/reset FAST-LIO for that mission. -->
   <node pkg="d_task_uav_control" type="fastlio_supervisor_node.py"
         name="fastlio_supervisor" output="screen">
     <rosparam command="load" file="$(arg config_file)"/>
   </node>
 
   <group if="$(arg start_vision)">
-    <!-- 给 include 内的 usb_cam 注入同一份实测 CameraInfo。 -->
-    <param name="/usb_camera_vision/usb_cam/camera_name"
-           value="head_camera"/>
+    <param name="/usb_camera_vision/usb_cam/camera_name" value="head_camera"/>
     <param name="/usb_camera_vision/usb_cam/camera_info_url"
            value="file://$(find d_task_uav_control)/config/decxin_640x480.yaml"/>
-
     <node pkg="usb_cam" type="usb_cam_node" name="usb_cam"
           ns="usb_camera_vision" output="screen">
       <param name="video_device" value="$(arg video_device)"/>
@@ -59,19 +55,9 @@
       <param name="camera_frame_id" value="usb_camera_link"/>
       <param name="io_method" value="mmap"/>
     </node>
-
-    <node if="$(arg start_apriltag)"
-          pkg="d_task_uav_control" type="apriltag_detector_node"
-          name="apriltag_detector" output="screen">
-      <rosparam command="load" file="$(arg config_file)"/>
-    </node>
   </group>
 
-  <node pkg="d_task_uav_control" type="platform_tracking_fusion_node"
-        name="platform_tracking_fusion" output="screen">
-    <rosparam command="load" file="$(arg config_file)"/>
-  </node>
-
+  <!-- No PnP, prediction, target fusion, landing, or payload state machine. -->
   <node pkg="d_task_uav_control" type="d_task_mission_node"
         name="d_task_mission" output="screen">
     <rosparam command="load" file="$(arg config_file)"/>

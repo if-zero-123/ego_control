@@ -2,6 +2,7 @@ system:
   uav_id: uav_01
   allow_arm: false
 
+# Positioning readiness remains a separate safety prerequisite for mission start.
 positioning:
   workspace_env: /home/orangepi/ros_ws/devel/env.sh
   launch_package: lidar_to_mavros
@@ -19,218 +20,33 @@ topics:
   mission_config: /uav_protocol/mission_config
   mission_start: /uav_protocol/mission_start
   positioning_status: /d_task/positioning/status
-  status: /d_task/positioning/status
-  fastlio_odom: /Odometry
-  vision_pose: /mavros/vision_pose/pose
   px4_odom: /mavros/local_position/odom
-  mavros_state: /mavros/state
-  camera_info: /usb_camera_vision/usb_cam/camera_info
-  platform_detection: /d_task/vision/platform_detection
-  apriltag_range: /d_task/vision/apriltag_range
-  pixel_velocity_body_debug: /d_task/vision/pixel_velocity_body_debug
-  pixel_velocity_world_debug: /d_task/vision/pixel_velocity_world_debug
-  pixel_servo_debug: /d_task/vision/pixel_servo_debug
-  platform_estimate: /d_task/tracking/platform_estimate
-  vision_health: /d_task/vision/health
-  car_pose: /uav_protocol/car/pose
-  car_pose_meta: /uav_protocol/car/pose_meta
   bridge_state: /ego_bridge/flight_state
   control_mode: /ego_bridge/control_mode
-  dynamic_descent_allowed: /uav_protocol/dynamic_descent_allowed
-  safety_hold: /uav_protocol/safety_hold
-  local_tracking: /uav_protocol/local_tracking
+  image: /usb_camera_vision/usb_cam/image_raw
   task_state: /uav_protocol/task_state
   local_event: /uav_protocol/local_event
   local_fault: /uav_protocol/local_fault
   local_health: /uav_protocol/local_health
-  mission_reset: /uav_protocol/mission_reset
+  vision_health: /d_task/vision/health
+  tag_center: /d_task/vision/tag0_center
+  debug: /d_task/simple_follow/debug
 
-# 600 x 600 mm 平台 AprilTag 36h11 布局。ID 1-4 用于高空伴飞，ID 0
-# 用于近距投递和动态降落对中；所有码页面顶部统一朝车头。
-apriltag:
-  image_topic: /usb_camera_vision/usb_cam/image_raw
-  camera_info_topic: /usb_camera_vision/usb_cam/camera_info
-  detection_topic: /d_task/vision/platform_detection
-  range_topic: /d_task/vision/apriltag_range
-  debug_image_topic: /d_task/vision/apriltag_debug
-  task_state_topic: /uav_protocol/task_state
-  phase_selection_enabled: true
-  layout:
-    - {id: 0, size_m: 0.045, x_m: 0.000, y_m: 0.000, yaw_rad: 0.0}
-    - {id: 1, size_m: 0.120, x_m: -0.195, y_m: 0.195, yaw_rad: 0.0}
-    - {id: 2, size_m: 0.120, x_m: 0.195, y_m: 0.195, yaw_rad: 0.0}
-    - {id: 3, size_m: 0.120, x_m: 0.195, y_m: -0.195, yaw_rad: 0.0}
-    - {id: 4, size_m: 0.120, x_m: -0.195, y_m: -0.195, yaw_rad: 0.0}
-  min_side_px: 8.0
-  max_reprojection_error_px: 3.0
-  publish_debug_image: true
-  full_frame_interval: 10
-  roi_expand_scale: 1.50
-  roi_min_size_px: 96
-  clahe_fallback: true
-  clahe_clip_limit: 2.0
-  clahe_grid_size: 8
-  contrast_stddev_threshold: 18.0
-  # Filter real centre/bbox measurements, then bridge only brief decode gaps.
-  # 0.18 s is about 5 frames at 30 Hz. Predicted frames are pixel-only:
-  # they never update AprilTag range and can never authorize payload release.
-  track_filter_alpha: 0.75
-  track_filter_beta: 0.10
-  prediction_timeout_s: 0.18
-  max_velocity_px_s: 800.0
-  reacquire_distance_px: 120.0
-  range_filter_alpha: 0.35
-  range_max_jump_m: 0.25
-  range_filter_reset_timeout_s: 0.35
-
-# 下视相机内参与相机系到机体系外参。use_camera_info=true 时优先使用
-# CameraInfo；收不到 CameraInfo 时使用这里的标定值。
-camera:
-  use_camera_info: true
-  # DECXIN 640x480，使用 80mm AprilTag 在镜头平面至码面 0.500m
-  # 的 120 帧正视采样反标；无畸变输出，D=[0,0,0,0,0]。
-  fx: 909.375000
-  fy: 909.418101
-  cx: 319.500000
-  cy: 239.500000
-  body_r_camera: [0.0, -1.0, 0.0,
-                  -1.0, 0.0, 0.0,
-                  0.0, 0.0, -1.0]
-  body_t_camera_m: [0.0, 0.0, 0.0]
-
-tracking:
-  world_frame: map
-  platform_height_m: 0.30
-  publish_rate_hz: 20.0
-  uav_odom_timeout_s: 0.30
-  # 平台 X/Y/VX/VY 只由 AprilTag 平台中心投影和视觉滤波产生。
-  use_visual_projection: true
-  use_car_measurements: false
-
-  # 以下小车融合参数仅为旧方案兼容项；use_car_measurements=false 时完全不使用。
-  # 小车 ROS2 地图系到无人机本地系的二维刚体变换。标定时小车圆点为
-  # (0, 0)，无人机放在圆点中心时本地坐标为下列 X/Y；两坐标系均为
-  # X 向前、Y 向左，因此不取反，航向偏移保持 0。
-  car_frame_offset_x_m: 0.7139167116197679
-  car_frame_offset_y_m: -0.38704493464013184
-  car_frame_yaw_offset_rad: 0.0
-  # 小车 base_link 到平台中心的机体系偏移；标靶在中心时通常为 0。
-  platform_offset_body_x_m: 0.0
-  platform_offset_body_y_m: 0.0
-
-  process_noise: 0.20
-  car_position_noise_m: 0.20
-  car_velocity_noise_mps: 0.15
-  vision_position_noise_m: 0.05
-  max_visual_residual_m: 0.80
-  source_timeout_s: 0.30
-  prediction_timeout_s: 1.00
-
-  release_max_xy_error_m: 0.15
-  release_max_relative_speed_mps: 0.20
-  release_target_height_m: 0.30
-  release_height_tolerance_m: 0.15
-  landing_max_xy_error_m: 0.10
-  landing_max_relative_speed_mps: 0.15
-
-# 像素伺服仅用于视觉锁定后的伴飞和下降。默认映射假设：图像上方为机头前方，
-# 图像左方为机体左方；台架四方向测试后可修改四个 body_* 参数。
-pixel_servo:
-  filter_alpha: 0.45
-  filter_beta: 0.08
-  source_timeout_s: 0.30
-  min_confidence: 0.25
-  deadband: 0.04
-  gain_mps: 0.40
-  max_speed_mps: 0.35
-  body_x_from_u: 0.0
-  body_x_from_v: -1.0
-  body_y_from_u: -1.0
-  body_y_from_v: 0.0
-  debug_publish_rate_hz: 20.0
-
-# 任务节点输出结构化状态切换、故障和周期诊断日志；设为 0 可关闭周期快照。
-diagnostics:
-  log_rate_hz: 1.0
-  source_timeout_s: 1.0
-
-mission:
-  bridge_namespace: /ego_bridge
+# Minimal tuning surface.  Height is a fixed setpoint relative to the
+# positioning home; the PID only controls horizontal image-centre error.
+simple_follow:
+  flight_height_m: 1.50
   control_rate_hz: 30.0
   odom_timeout_s: 0.30
-  platform_estimate_timeout_s: 0.35
-  apriltag_range_timeout_s: 0.35
+  tag_timeout_s: 0.20
+  takeoff_retry_s: 0.50
+  min_tag_side_px: 8.0
+  tag_id: 0
 
-  cruise_height_m: 1.50
-  hover_time_s: 3.0
-  vision_lock_time_s: 0.50
-  follow_stable_time_s: 1.0
-  phase_stable_time_s: 0.50
-  release_settle_time_s: 0.50
-  platform_hold_time_s: 5.20
-
-  # DROP 固定搜索航迹：先到起点，再沿无人机世界坐标 +X 前进指定距离。
-  search_start_x_m: 0.746
-  search_start_y_m: -0.379
-  search_forward_distance_m: 1.50
-
-  # DROP 在 1.50m 巡航伴飞高度直接投递；以下旧参数保留用于兼容配置。
-  drop_height_m: 0.30
-  drop_apriltag_distance_m: 0.30
-  high_descent_height_m: 0.80
-  low_descent_height_m: 0.30
-  platform_press_depth_m: 0.10
-  follow_lead_time_s: 0.15
-
-  # SEARCH/LOCK/FOLLOW/DROP use direct ego_bridge OVERRIDE commands.
-  # v_cmd = filtered_apriltag_v + Kp*position_error + Kd*relative_velocity
-  #         + bounded visual trim. No EGO-Planner or obstacle avoidance.
-  follow_xy_kp: 0.80
-  follow_xy_kd: 0.25
-  follow_position_deadband_m: 0.04
-  follow_max_correction_mps: 0.30
-  follow_max_total_speed_mps: 0.50
-  follow_max_accel_mps2: 0.50
-  vision_trim_max_speed_mps: 0.12
-
-  xy_tolerance_m: 0.12
-  relative_speed_tolerance_mps: 0.20
-  height_tolerance_m: 0.08
-  home_xy_tolerance_m: 0.20
-  home_height_tolerance_m: 0.12
-
-  high_descent_speed_mps: 0.25
-  low_descent_speed_mps: 0.12
-  contact_descent_speed_mps: 0.08
-  climb_speed_mps: 0.35
-
-  takeoff_timeout_s: 25.0
-  search_timeout_s: 20.0
-  tracking_loss_timeout_s: 1.0
-  descent_timeout_s: 20.0
-  platform_contact_timeout_s: 8.0
-  landing_prediction_timeout_s: 1.0
-  landing_visual_handoff_s: 0.25
-  platform_takeoff_timeout_s: 20.0
-  return_timeout_s: 35.0
-  home_land_timeout_s: 30.0
-  total_timeout_s: 180.0
-  request_retry_s: 0.50
-
-  # 默认稳定后立即开始投放下降；距 D 点 2m 时强制结束伴飞进入下降。
-  drop_force_descent_distance_to_d_m: 2.0
-  drop_abort_distance_to_d_m: 0.10
-  max_dynamic_landing_retries: 1
-
-# Orange Pi 5 Ultra 物理 16 脚（GPIO1_A3，WiringOP 编号 9）控制投放驱动。
-payload:
-  enabled: true
-  backend: gpio
-  gpio_wiringpi_pin: 9
-  gpio_active_high: true
-  topic: /mavros/actuator_control
-  group_mix: 2
-  channel: 0
-  release_value: 1.0
-  neutral_value: 0.0
-  pulse_duration_s: 5.0
+  pid:
+    kp: 0.35
+    ki: 0.00
+    kd: 0.00
+    deadband: 0.04
+    integral_limit: 0.50
+    max_speed_mps: 0.35
