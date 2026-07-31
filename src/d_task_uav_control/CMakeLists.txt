@@ -151,6 +151,7 @@ install(DIRECTORY config launch
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_positioning_readiness.py)
+  catkin_add_nosetests(test/test_mission_config_sender_contract.py)
   catkin_add_nosetests(test/test_pixel_servo_debug_launch.py)
   catkin_add_nosetests(test/test_apriltag_range_debug_launch.py)
   catkin_add_nosetests(test/test_payload_gpio.py)

@@ -387,3 +387,12 @@ AprilTag 距离仍只由当前真实四角 PnP 产生，预测帧距离为无效
 `tracking.car_frame_offset_x_m/y_m`；两边坐标轴均为 X 向前、Y 向左，
 故 `car_frame_yaw_offset_rad=0.0`。完整 launch 参数导出已确认融合节点加载精确值，
 坐标变换专项 `4/4` 通过；未启动或重启飞行节点。
+
+2026-07-31 Fast-LIO 任务触发修复记录：小车和无人机网关约定
+`mission_config(sender=car)`，Fast-LIO supervisor 与无人机任务节点现已统一只接受
+该 sender；旧的 `sender=ground` 会被拒绝。回归测试同时核对网关、supervisor 和
+C++ 任务节点三处契约，防止后续再次出现本地二次校验不一致。完整 `catkin_make`
+成功；`d_task_uav_control` 为 `119 tests, 0 errors, 0 failures`，
+`uav_protocol_gateway` 为 `19 tests, 0 errors, 0 failures`，完整 launch 节点解析
+通过。源码生效需要安全重启无人机任务后端，并由小车重新发布一个新的任务配置；
+本次没有重启运行节点或解锁飞控。

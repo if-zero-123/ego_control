@@ -117,8 +117,8 @@ class FastlioSupervisor:
     def _mission_config_cb(self, raw: String) -> None:
         try:
             message = ProtocolCodec.decode(raw.data)
-            if message.type != "mission_config" or message.sender != "ground":
-                raise ProtocolError("expected ground mission_config")
+            if message.type != "mission_config" or message.sender != "car":
+                raise ProtocolError("expected car mission_config")
         except (ProtocolError, TypeError, UnicodeDecodeError) as exc:
             rospy.logwarn("[fastlio_supervisor] invalid mission config: %s", exc)
             return

@@ -461,7 +461,7 @@ private:
         std::string error;
         if (!parseJsonObject(message->data, root, error)
             || root.get("type", "").asString() != "mission_config"
-            || root.get("sender", "").asString() != "ground"
+            || root.get("sender", "").asString() != "car"
             || !root["payload"].isObject()) {
             publishFault(2301, "invalid_local_mission_config", error);
             return;
