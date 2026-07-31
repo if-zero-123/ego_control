@@ -44,6 +44,29 @@ topics:
   local_health: /uav_protocol/local_health
   mission_reset: /uav_protocol/mission_reset
 
+# The 1.5 m follow phase normally uses YOLO. During the drop descent, the
+# 80 mm platform-centre tag remains visible after the whole platform no longer
+# fits inside the frame. The mux prefers a fresh decoded tag and falls back to
+# YOLO automatically.
+apriltag:
+  image_topic: /usb_camera_vision/usb_cam/image_raw
+  detection_topic: /d_task/vision/platform_detection/apriltag
+  debug_image_topic: /d_task/vision/apriltag_debug
+  tag_id: 0
+  tag_size_m: 0.080
+  min_side_px: 8.0
+  publish_debug_image: true
+
+detection_mux:
+  yolo_topic: /d_task/vision/platform_detection/yolo
+  apriltag_topic: /d_task/vision/platform_detection/apriltag
+  output_topic: /d_task/vision/platform_detection
+  # AprilTag is accepted only after the DROP mission enters descent/release.
+  # Cruise-height search, lock and follow remain YOLO + Kalman.
+  task_state_topic: /uav_protocol/task_state
+  source_timeout_s: 0.35
+  publish_rate_hz: 30.0
+
 # 下视相机内参与相机系到机体系外参。use_camera_info=true 时优先使用
 # CameraInfo；收不到 CameraInfo 时使用这里的标定值。
 camera:

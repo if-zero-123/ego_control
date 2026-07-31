@@ -27,7 +27,10 @@ from d_task_protocol import (  # noqa: E402
 from d_task_protocol.endpoint import ProtocolEndpoint  # noqa: E402
 from d_task_protocol.mqtt_bus import MqttBus, MqttConfig, _topic_matches  # noqa: E402
 from d_task_protocol.topics import Topics  # noqa: E402
-from uav_protocol_gateway.gateway_core import UavGatewayCore  # noqa: E402
+from uav_protocol_gateway.gateway_core import (  # noqa: E402
+    UavGatewayCore,
+    follow_established_after_state,
+)
 
 
 class GatewayCoreTests(unittest.TestCase):
@@ -143,9 +146,22 @@ class GatewayCoreTests(unittest.TestCase):
             vz=-0.2,
             battery_percent=80.0,
             mission_elapsed_ms=1000,
+            follow_established=True,
         )
 
         self.assertEqual(message.payload["state"], "DROP_DESCEND")
+        self.assertTrue(message.payload["follow_established"])
+
+    def test_follow_established_latches_only_after_stable_follow_states(self):
+        self.assertFalse(
+            follow_established_after_state(False, "DROP", "FOLLOW_CAR"))
+        self.assertTrue(
+            follow_established_after_state(False, "DROP", "DROP_DESCEND"))
+        self.assertTrue(
+            follow_established_after_state(True, "DROP", "RETURN_HOME"))
+        self.assertTrue(
+            follow_established_after_state(
+                False, "DYNAMIC_LANDING", "DESCEND_HIGH"))
 
     def test_duplicate_mission_config_only_emits_duplicate_ack(self):
         first = self.mission_config(command_id="config-duplicate")

@@ -27,6 +27,29 @@ from d_task_protocol.envelope import now_ms
 from d_task_protocol.topics import Topics, topic_accepts_message
 
 
+_FOLLOW_ESTABLISHED_STATES = {
+    "DROP": {"DROP_DESCEND", "RELEASE"},
+    "DYNAMIC_LANDING": {
+        "DESCEND_HIGH",
+        "DESCEND_LOW",
+        "LAND_ON_PLATFORM",
+        "PLATFORM_HOLD",
+    },
+}
+
+
+def follow_established_after_state(
+    established: bool,
+    mode: str,
+    state: str,
+) -> bool:
+    """Return a mission-scoped latch once stable escort has completed."""
+    return bool(
+        established
+        or state in _FOLLOW_ESTABLISHED_STATES.get(mode, set())
+    )
+
+
 @dataclass(frozen=True)
 class CoreAction:
     """An outbound MQTT action or an accepted local dispatch event."""

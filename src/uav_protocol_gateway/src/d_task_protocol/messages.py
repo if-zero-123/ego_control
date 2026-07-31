@@ -241,6 +241,8 @@ def validate_payload(message_type: str, payload: Mapping[str, Any]) -> None:
         if payload["mode"] not in {item.value for item in Mode}:
             raise ProtocolError("invalid mode")
         _bool(payload["armed"], "armed")
+        if "follow_established" in payload:
+            _bool(payload["follow_established"], "follow_established")
         if not isinstance(payload["frame_id"], str) or not payload["frame_id"]:
             raise ProtocolError("frame_id must be a non-empty string")
         _bool(payload["pose_valid"], "pose_valid")

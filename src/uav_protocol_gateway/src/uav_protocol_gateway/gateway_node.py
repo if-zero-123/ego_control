@@ -32,7 +32,11 @@ from d_task_protocol import (
 from d_task_protocol.mqtt_bus import MqttBus, MqttConfig
 from d_task_protocol.topics import Topics
 
-from .gateway_core import CoreAction, UavGatewayCore
+from .gateway_core import (
+    CoreAction,
+    UavGatewayCore,
+    follow_established_after_state,
+)
 
 
 _UAV_STATES = {
@@ -133,6 +137,7 @@ class UavProtocolGateway:
         self.last_camera_ms: Optional[int] = None
         self.last_tracking_ms: Optional[int] = None
         self.last_task_state_ms: Optional[int] = None
+        self.follow_established = False
         self.last_camera_health: Optional[bool] = None
         self.last_vision_health: Optional[bool] = None
         self.task_health: Dict[str, Any] = {}
@@ -396,6 +401,7 @@ class UavProtocolGateway:
                     self.fault_code = 0
                     self.fault_text = ""
                     self.last_task_state_ms = None
+                    self.follow_established = False
                     self._publish_event("MISSION_CONFIG_ACCEPTED", mode=self.mode)
                 elif action.kind == "mission_start":
                     self.pub_mission_start.publish(String(data=message.to_json()))
@@ -522,6 +528,11 @@ class UavProtocolGateway:
                 return
             if state:
                 self.state = self._normalise_state(str(state))
+                self.follow_established = follow_established_after_state(
+                    self.follow_established,
+                    str(mode or self.mode),
+                    self.state,
+                )
                 self.last_task_state_ms = _now_ms()
             if mode in (Mode.DROP.value, Mode.DYNAMIC_LANDING.value):
                 self.mode = mode
@@ -591,6 +602,7 @@ class UavProtocolGateway:
             self.mode = Mode.DROP.value
             self._stale_pose_fault_sent = False
             self.last_task_state_ms = None
+            self.follow_established = False
 
     def _camera_cb(self, _message: Image) -> None:
         with self.lock:
@@ -739,6 +751,7 @@ class UavProtocolGateway:
             "vz": vz,
             "battery_percent": self.battery_percent,
             "mission_elapsed_ms": elapsed,
+            "follow_established": self.follow_established,
         }
 
     @staticmethod

@@ -9,12 +9,15 @@
   <arg name="start_ego_bridge" default="true"/>
   <arg name="start_gateway" default="true"/>
   <arg name="start_vision" default="true"/>
+  <arg name="start_apriltag" default="true"/>
   <arg name="video_device"
        default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"/>
   <arg name="model_path"
        default="$(find metal_ball_rknn)/models/model_2_yolo_target_yolov8n_640_rk3588_i8.rknn"/>
   <arg name="target_class_id" default="0"/>
   <arg name="target_label" default="platform_target"/>
+  <arg name="apriltag_id" default="0"/>
+  <arg name="apriltag_size_m" default="0.080"/>
 
   <group if="$(arg start_ego_bridge)">
     <rosparam command="load"
@@ -51,8 +54,22 @@
       <arg name="model_path" value="$(arg model_path)"/>
       <arg name="target_class_id" value="$(arg target_class_id)"/>
       <arg name="target_label" value="$(arg target_label)"/>
-      <arg name="detection_topic" value="/d_task/vision/platform_detection"/>
+      <arg name="detection_topic"
+           value="/d_task/vision/platform_detection/yolo"/>
     </include>
+
+    <node if="$(arg start_apriltag)"
+          pkg="d_task_uav_control" type="apriltag_detector_node"
+          name="apriltag_detector" output="screen">
+      <rosparam command="load" file="$(arg config_file)"/>
+      <param name="apriltag/tag_id" value="$(arg apriltag_id)"/>
+      <param name="apriltag/tag_size_m" value="$(arg apriltag_size_m)"/>
+    </node>
+
+    <node pkg="d_task_uav_control" type="platform_detection_mux_node"
+          name="platform_detection_mux" output="screen">
+      <rosparam command="load" file="$(arg config_file)"/>
+    </node>
   </group>
 
   <node pkg="d_task_uav_control" type="platform_tracking_fusion_node"

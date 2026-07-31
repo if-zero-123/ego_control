@@ -1,0 +1,35 @@
+#ifndef D_TASK_UAV_CONTROL_APRILTAG_DETECTOR_H_
+#define D_TASK_UAV_CONTROL_APRILTAG_DETECTOR_H_
+
+#include <vector>
+
+#include <opencv2/aruco.hpp>
+#include <opencv2/core.hpp>
+
+namespace d_task_uav_control {
+
+struct AprilTagDetection {
+    bool found = false;
+    int id = -1;
+    float confidence = 0.0F;
+    cv::Point2f center;
+    cv::Rect2f bbox;
+    std::vector<cv::Point2f> corners;
+};
+
+class AprilTagDetector {
+public:
+    explicit AprilTagDetector(int target_id = 0, double min_side_px = 8.0);
+
+    AprilTagDetection detect(const cv::Mat& image) const;
+
+private:
+    int target_id_ = 0;
+    double min_side_px_ = 8.0;
+    cv::Ptr<cv::aruco::Dictionary> dictionary_;
+    cv::Ptr<cv::aruco::DetectorParameters> parameters_;
+};
+
+}  // namespace d_task_uav_control
+
+#endif  // D_TASK_UAV_CONTROL_APRILTAG_DETECTOR_H_

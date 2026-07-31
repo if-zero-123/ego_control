@@ -94,6 +94,14 @@ UAV health 同时发布 `positioning_ready=true`，小车不会再把“旧 odom
 随后爬升、返回 H 点和普通降落。`distance_to_d_m` 仅作 D 点截止保护，
 不会等到 D 点附近才开始投放。
 
+任务1的视觉源按状态严格分段。`SEARCH_CAR/LOCK_CAR/FOLLOW_CAR` 在 1.50m
+巡航高度只使用 YOLO 检测，公共检测结果继续进入已有的四状态
+`[x,y,vx,vy]` 卡尔曼平台跟踪器；即使高空能看到 AprilTag，也不会抢占 YOLO。
+无人机像素对中连续稳定 1 秒并进入 `DROP_DESCEND` 后，网关把本任务的
+`follow_established=true` 持续回传给小车，小车据此从低速切到正常速度。投放状态机
+同时开放 AprilTag 检测；`DROP_DESCEND/RELEASE` 中优先采用新鲜且识别成功的
+AprilTag，码暂时未识别时回退到新鲜的 YOLO。离开这两个状态后自动回到仅 YOLO。
+
 `DYNAMIC_LANDING`：起飞、搜索和伴飞后分 0.80m、0.30m 两段下降，
 移动平台接触阶段继续发送平台位置与速度前馈。桥接层确认下压误差和低垂速
 持续成立后锁桨，随车停留 5.20 秒，再预发 setpoint、切 OFFBOARD、解锁，
@@ -123,6 +131,52 @@ YOLO 使用单类别平台标靶模型 `model_2_yolo_target_yolov8n_640_rk3588_i
 降落平台中心。检测节点每帧发布结构化检测，即使未发现目标也发布
 `found=false`。小车世界坐标仍由四状态卡尔曼滤波输出平台位置和速度；视觉锁定后的
 伴飞与下降使用像素伺服，不依赖相机内参。
+
+下降近距离跟踪使用平台中心的 AprilTag：
+
+- 码族 `AprilTag 36h11`，ID `0`；
+- 输入文件为
+  `E:\电赛空地协同\output\pdf\AprilTag_36h11_ID0_80mm_print.pdf`；
+- 必须按“实际大小/100%”打印，禁止适合页面或缩放；
+- 黑色标签图形边长为 `80mm`，含完整白色静区的外框约 `100mm`；
+- 平整贴在平台中心，不能裁掉白边、覆膜强反光或折皱。
+
+该 PDF 已渲染检查，并在 Orange Pi 的 OpenCV 4.2
+`DICT_APRILTAG_36h11` 上实测识别为 ID 0。检测源话题为：
+
+```text
+/d_task/vision/platform_detection/yolo       # 高空 YOLO
+/d_task/vision/platform_detection/apriltag   # 近距 AprilTag
+/d_task/vision/platform_detection            # 状态门控后的公共输入
+/d_task/vision/apriltag_debug                 # AprilTag 调试图
+```
+
+相关参数在 `apriltag.*` 和 `detection_mux.*`。默认码 ID 为 `0`、物理边长
+`0.080m`、检测源新鲜度窗口 `0.35s`。公共话题接口未改变，因此现有像素伺服、
+卡尔曼跟踪器和任务状态机无需同时运行第二套控制器。
+
+拆桨、禁止解锁后，可观察识别与切换状态：
+
+```bash
+rostopic echo /uav_protocol/task_state
+rostopic echo /d_task/vision/platform_detection/yolo
+rostopic echo /d_task/vision/platform_detection/apriltag
+rostopic echo /d_task/vision/platform_detection
+rqt_image_view /d_task/vision/apriltag_debug
+```
+
+高空 `FOLLOW_CAR` 时公共结果应来自 YOLO；进入 `DROP_DESCEND` 后日志应出现
+`apriltag enabled`，码识别成功时出现 `selected source=APRILTAG`。识别源都超过
+`0.35s` 未更新时 mux 不再发布，现有下降失视保护会保持位置并按原超时策略处理。
+
+临时回退近距码追踪时，在完整启动命令后加 `start_apriltag:=false`；mux 会在下降
+阶段继续使用可用的 YOLO，公共 Topic 和任务状态机无需改回旧代码。实飞前分级验证：
+
+1. 拆桨并设 `payload.enabled: false`，用打印码确认 AprilTag 私有 Topic 和调试图稳定。
+2. 维持 `FOLLOW_CAR`，同时让 YOLO 与码都可见，确认公共输出仍选 YOLO。
+3. 只模拟或安全进入 `DROP_DESCEND`，确认码成功时选择 AprilTag；短暂遮码时回退 YOLO。
+4. 同时遮挡两种目标超过 `0.35s`，确认下降冻结且不会触发投放。
+5. 低高度系留验证通过后再装桨；首次完整任务仍保持投放 dry-run，最后才恢复 GPIO。
 
 仅验证相机和模型时运行：
 
@@ -181,3 +235,10 @@ rostopic pub -1 /payload_gpio_test/set std_msgs/Bool "data: false"
 首次实机运行前至少确认：MQTT 心跳稳定、三路定位 READY、相机健康、标靶世界
 像素建议速度方向正确、车机坐标偏移正确、300ms 断链能停止下降、平台锁桨条件不会在
 空中误触发，以及投放执行器仍处于 dry-run。
+
+2026-07-31 任务1改动验证记录：完整 `catkin_make` 成功；`d_task_uav_control` 与
+`uav_protocol_gateway` 测试结果汇总为 `116 tests, 0 errors, 0 failures`；新增
+AprilTag 检测、检测源门控和协议伴飞锁存均有独立测试。
+`roslaunch --nodes d_task_uav_control d_task_uav.launch` 已确认实际启动链包含
+`metal_ball_detector`、`apriltag_detector`、`platform_detection_mux`、
+`platform_tracking_fusion` 和 `d_task_mission`。这些验证未启动飞行或投放动作。
