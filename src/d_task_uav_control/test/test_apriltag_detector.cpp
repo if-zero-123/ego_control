@@ -120,6 +120,44 @@ TEST(AprilTagBoardPose, InfersPlatformCenterFromOneOuterTag) {
     EXPECT_NEAR(estimate.plane_distance_m, expected_translation[2], 0.02);
 }
 
+TEST(AprilTagBoardPose, UsesPlanarHomographyForNoisySingleOuterTagCenter) {
+    const cv::Mat camera_matrix = (cv::Mat_<double>(3, 3)
+        << 900.0, 0.0, 320.0,
+           0.0, 900.0, 240.0,
+           0.0, 0.0, 1.0);
+    const cv::Mat distortion = cv::Mat::zeros(1, 5, CV_64F);
+    const cv::Vec3d rotation(0.04, -0.06, 0.10);
+    const cv::Vec3d translation(0.05, -0.03, 1.40);
+    const std::vector<AprilTagLayoutEntry> layout = platformLayout();
+    AprilTagDetection outer = projectedDetection(
+        layout[1], rotation, translation, camera_matrix, distortion);
+    const std::vector<cv::Point2f> perturbation{
+        {1.0F, -0.5F}, {0.2F, 0.7F}, {-0.8F, 0.3F}, {0.4F, -0.9F}};
+    for (std::size_t index = 0; index < outer.corners.size(); ++index) {
+        outer.corners[index] += perturbation[index];
+    }
+
+    const std::vector<cv::Point2f> object_plane{
+        {-0.195F - 0.060F, 0.195F + 0.060F},
+        {-0.195F + 0.060F, 0.195F + 0.060F},
+        {-0.195F + 0.060F, 0.195F - 0.060F},
+        {-0.195F - 0.060F, 0.195F - 0.060F}};
+    const cv::Mat homography = cv::findHomography(
+        object_plane, outer.corners, 0);
+    std::vector<cv::Point2f> projected_center;
+    cv::perspectiveTransform(
+        std::vector<cv::Point2f>{{0.0F, 0.0F}}, projected_center,
+        homography);
+
+    const AprilTagBoardEstimate estimate = estimateAprilTagBoardPose(
+        {outer}, layout, camera_matrix, distortion, 3.0);
+
+    ASSERT_TRUE(estimate.valid);
+    ASSERT_EQ(projected_center.size(), 1U);
+    EXPECT_NEAR(estimate.center.x, projected_center.front().x, 0.5);
+    EXPECT_NEAR(estimate.center.y, projected_center.front().y, 0.5);
+}
+
 TEST(AprilTagBoardPose, FusesCenterAndOuterTagsIntoPlatformPose) {
     const cv::Mat camera_matrix = (cv::Mat_<double>(3, 3)
         << 900.0, 0.0, 320.0,

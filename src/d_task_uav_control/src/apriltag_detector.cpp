@@ -395,10 +395,43 @@ AprilTagBoardEstimate estimateAprilTagBoardPose(
     }
 
     std::vector<cv::Point2f> projected_center;
-    cv::projectPoints(
-        std::vector<cv::Point3f>{cv::Point3f(0.0F, 0.0F, 0.0F)},
-        rotation, translation, camera_matrix_64, distortion_64,
-        projected_center);
+    if (accepted.size() == 1U) {
+        const std::vector<cv::Point2f> object_plane{
+            {accepted.front().object[0].x, accepted.front().object[0].y},
+            {accepted.front().object[1].x, accepted.front().object[1].y},
+            {accepted.front().object[2].x, accepted.front().object[2].y},
+            {accepted.front().object[3].x, accepted.front().object[3].y}};
+        std::vector<cv::Point2f> undistorted_image;
+        cv::undistortPoints(
+            accepted.front().image, undistorted_image,
+            camera_matrix_64, distortion_64);
+        const cv::Mat homography = cv::findHomography(
+            object_plane, undistorted_image, 0);
+        if (homography.empty()) {
+            return output;
+        }
+        std::vector<cv::Point2f> normalized_center;
+        cv::perspectiveTransform(
+            std::vector<cv::Point2f>{{0.0F, 0.0F}}, normalized_center,
+            homography);
+        if (normalized_center.size() != 1U
+            || !std::isfinite(normalized_center.front().x)
+            || !std::isfinite(normalized_center.front().y)) {
+            return output;
+        }
+        projected_center.emplace_back(
+            static_cast<float>(camera_matrix_64.at<double>(0, 0)
+                               * normalized_center.front().x
+                               + camera_matrix_64.at<double>(0, 2)),
+            static_cast<float>(camera_matrix_64.at<double>(1, 1)
+                               * normalized_center.front().y
+                               + camera_matrix_64.at<double>(1, 2)));
+    } else {
+        cv::projectPoints(
+            std::vector<cv::Point3f>{cv::Point3f(0.0F, 0.0F, 0.0F)},
+            rotation, translation, camera_matrix_64, distortion_64,
+            projected_center);
+    }
     if (projected_center.size() != 1U) {
         return output;
     }

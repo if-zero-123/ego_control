@@ -116,6 +116,26 @@ TEST(PlatformTracker, RejectsVisualOutlierAndEventuallyBecomesStale) {
     EXPECT_FALSE(tracker.stateAt(1.2).valid);
 }
 
+TEST(PlatformTracker, ReinitializesVisualStateAfterStale) {
+    TrackerConfig config;
+    config.source_timeout_s = 0.30;
+    config.prediction_timeout_s = 0.50;
+    config.max_visual_residual_m = 0.20;
+    PlatformTracker tracker(config);
+
+    ASSERT_TRUE(tracker.updateVision(
+        VisionMeasurement{0.0, 1.0, 2.0, 1.0}));
+    EXPECT_EQ(tracker.stateAt(1.0).mode, FilterMode::STALE);
+
+    ASSERT_TRUE(tracker.updateVision(
+        VisionMeasurement{1.1, 5.0, -3.0, 1.0}));
+    const PlatformState reacquired = tracker.stateAt(1.1);
+    EXPECT_TRUE(reacquired.valid);
+    EXPECT_EQ(reacquired.mode, FilterMode::MEASURED);
+    EXPECT_NEAR(reacquired.x, 5.0, 1e-9);
+    EXPECT_NEAR(reacquired.y, -3.0, 1e-9);
+}
+
 TEST(PlatformTracker, RotatesAndTranslatesCarPositionVelocityAndHeading) {
     TrackerConfig config;
     config.use_car_measurements = true;

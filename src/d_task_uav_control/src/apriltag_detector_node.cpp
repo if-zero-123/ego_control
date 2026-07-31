@@ -555,12 +555,23 @@ private:
         if (tracked.found) {
             const cv::Scalar color = tracked.predicted
                 ? cv::Scalar(0, 165, 255) : cv::Scalar(0, 255, 0);
-            cv::rectangle(annotated, tracked.bbox, color, 2, cv::LINE_AA);
+            // The green outlines above are the real decoded tag corners.
+            // Do not draw the synthetic platform bounding box here: it is an
+            // inferred tracking region, not a physical image rectangle.
+            if (tracked.predicted) {
+                const cv::Point center(
+                    cvRound(tracked.center.x), cvRound(tracked.center.y));
+                cv::drawMarker(
+                    annotated, center, color, cv::MARKER_CROSS, 18, 2,
+                    cv::LINE_AA);
+            }
+        }
+        if (board.valid && !tracked.predicted) {
             const cv::Point center(
-                cvRound(tracked.center.x), cvRound(tracked.center.y));
+                cvRound(board.center.x), cvRound(board.center.y));
             cv::drawMarker(
-                annotated, center, color, cv::MARKER_CROSS, 22, 2,
-                cv::LINE_AA);
+                annotated, center, cv::Scalar(255, 0, 255),
+                cv::MARKER_TILTED_CROSS, 20, 2, cv::LINE_AA);
         }
         if (board.valid) {
             cv::drawFrameAxes(

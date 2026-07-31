@@ -130,15 +130,24 @@ bool PlatformTracker::updateVision(const VisionMeasurement& measurement) {
     if (!initialised_) {
         initialise(measurement.stamp_s, measurement.x, measurement.y, 0.0, 0.0);
     } else {
-        predictTo(measurement.stamp_s);
-        const double residual =
-            std::hypot(measurement.x - state_.x(), measurement.y - state_.y());
-        if (residual > config_.max_visual_residual_m) {
-            return false;
+        // A state that has exceeded the prediction budget belongs to the old
+        // track. Reacquisition must seed a new track instead of being compared
+        // against the stale, possibly far-drifted prediction.
+        const PlatformState prior = stateAt(measurement.stamp_s);
+        if (prior.mode == FilterMode::STALE) {
+            initialise(measurement.stamp_s, measurement.x, measurement.y,
+                       0.0, 0.0);
+        } else {
+            const double residual = std::hypot(
+                measurement.x - state_.x(), measurement.y - state_.y());
+            if (residual > config_.max_visual_residual_m) {
+                return false;
+            }
+            updatePosition(
+                measurement.x, measurement.y,
+                safeVariance(config_.vision_position_noise,
+                             measurement.confidence));
         }
-        updatePosition(
-            measurement.x, measurement.y,
-            safeVariance(config_.vision_position_noise, measurement.confidence));
     }
     if (has_car_) {
         const Eigen::Vector2d car_world = carWorldPosition(last_car_);
