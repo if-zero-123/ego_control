@@ -9,6 +9,7 @@
   <arg name="start_ego_bridge" default="true"/>
   <arg name="start_gateway" default="true"/>
   <arg name="start_vision" default="true"/>
+  <arg name="start_payload" default="true"/>
   <arg name="video_device"
        default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"/>
 
@@ -57,7 +58,14 @@
     </node>
   </group>
 
-  <!-- DROP mission: fixed-height Tag 0 follow, payload release, return and land. -->
+  <group if="$(arg start_payload)">
+    <node pkg="d_task_uav_control" type="payload_gpio_node.py"
+          name="payload_gpio" output="screen">
+      <rosparam command="load" file="$(arg config_file)"/>
+    </node>
+  </group>
+
+  <!-- Uses the field-tuned AprilTag centre PID for both competition modes. -->
   <node pkg="d_task_uav_control" type="d_task_mission_node"
         name="d_task_mission" output="screen">
     <rosparam command="load" file="$(arg config_file)"/>

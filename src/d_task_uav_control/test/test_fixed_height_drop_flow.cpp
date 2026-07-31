@@ -20,27 +20,16 @@ void advanceToFollow(FixedHeightDropFlow& flow,
     flow.update(input);
     ASSERT_EQ(flow.state(), FixedHeightDropState::MOVE_TO_SEARCH_START);
     input.takeoff_complete = false;
-    input.tag_detected = true;
+    input.offset_reached = true;
     input.now_s = 1.2;
+    flow.update(input);
+    ASSERT_EQ(flow.state(), FixedHeightDropState::FORWARD_SEARCH);
+    input.offset_reached = false;
+    input.tag_detected = true;
+    input.now_s = 1.3;
     flow.update(input);
     ASSERT_EQ(flow.state(), FixedHeightDropState::FOLLOW_CAR);
     input.tag_detected = false;
-}
-
-TEST(FixedHeightDropFlow, TagDuringDiagonalSearchEntersFollowImmediately) {
-    FixedHeightDropFlow flow = readyFlow(FixedHeightDropFlowConfig());
-    FixedHeightDropFlowInput input;
-    input.takeoff_complete = true;
-    input.now_s = 1.1;
-    flow.update(input);
-    ASSERT_EQ(flow.state(), FixedHeightDropState::MOVE_TO_SEARCH_START);
-
-    input.takeoff_complete = false;
-    input.tag_detected = true;
-    input.offset_reached = false;
-    input.now_s = 1.2;
-    flow.update(input);
-    EXPECT_EQ(flow.state(), FixedHeightDropState::FOLLOW_CAR);
 }
 
 TEST(FixedHeightDropFlow, CompletesEventDrivenDropReturnAndLanding) {

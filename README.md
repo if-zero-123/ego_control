@@ -98,9 +98,9 @@ UAV health 同时发布 `positioning_ready=true`，小车不会再把“旧 odom
 
 ## 任务流程
 
-`DROP`：定位就绪时锁存 H 点和起飞航向，起飞至相对 H 点 1.50m。进入悬停后，以该
-悬停点为 H 点，按起飞航向向右前方 20° 搜索 1.00m；搜索途中一旦
-真实识别 ID 0，立即进入现有图像中心 PID 伴飞；到达搜索终点仍未识别则直接返回 H、
+`DROP`：定位就绪后起飞至相对 H 点 1.50m，锁存悬停点和起飞航向并稳定悬停 3 秒。随后
+按起飞航向向右前方 20° 移动 1.00m；到达搜索点后真实识别 ID 0，立即进入现有图像中心
+PID 伴飞；超时仍未识别则直接返回 H、
 降落并以 `ABORT` 结束。
 
 伴飞没有固定时长。ID 0 在巡航高度持续对中 1.00s 后，状态进入 `RELEASE`，无人机保持
@@ -160,9 +160,9 @@ X/Y/速度融合。
 无人机任务常调参数集中在
 `src/d_task_uav_control/config/d_task_uav.yaml`：
 
-- `simple_follow.initial_offset_distance_m/initial_offset_clockwise_deg`：从起飞悬停点出发的
-  唯一右前搜索段，当前为 `1.00m/20°`；中途发现 ID 0 立即进入伴飞。
-- `simple_follow.forward_search_distance_m`：第二段前向搜索距离，当前为 `0.00m`（禁用）。
+- `simple_follow.initial_offset_distance_m/initial_offset_clockwise_deg`：悬停后右前搜索段，
+  当前为 `1.00m/20°`。
+- `simple_follow.hover_time_s`：起飞到巡航高度后保持悬停的稳定时间，当前为 `3.0s`。
 - `simple_follow.pid.*`：ID 0 图像中心 PID；当前 `kp=0.65`，Z 始终保持任务固定高度。
 - `simple_follow.drop_alignment_tolerance/drop_alignment_stable_s`：投递前图像归一化误差
   和连续稳定门，当前为 `0.08/1.00s`。

@@ -6,23 +6,20 @@ from pathlib import Path
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
-class FixedHeightMissionContractTests(unittest.TestCase):
+class CompetitionMissionContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.node = (PACKAGE_ROOT / "src" / "d_task_mission_node.cpp").read_text(
             encoding="utf-8"
         )
-        cls.flow = (
-            PACKAGE_ROOT / "src" / "fixed_height_drop_flow.cpp"
-        ).read_text(encoding="utf-8")
         cls.config = (PACKAGE_ROOT / "config" / "d_task_uav.yaml").read_text(
             encoding="utf-8"
         )
 
     def test_uses_ground_station_protocol_state_names(self):
         for state in (
-            "MOVE_TO_SEARCH_START",
-            "FORWARD_SEARCH",
+            "HOVER_3S",
+            "SEARCH_CAR",
             "FOLLOW_CAR",
             "RELEASE",
             "RETURN_HOME",
@@ -30,46 +27,37 @@ class FixedHeightMissionContractTests(unittest.TestCase):
             "COMPLETE",
             "ABORT",
         ):
-            self.assertIn(f'return "{state}";', self.flow)
-        for removed in ("FOLLOW_TAG", "HOLD_BEFORE_LAND", '"LANDING"'):
+            self.assertIn(f'"{state}"', self.node)
+        for removed in ("FOLLOW_TAG", "HOLD_BEFORE_LAND"):
             self.assertNotIn(removed, self.node)
 
-    def test_drop_progress_is_event_driven_not_fixed_follow_duration(self):
-        for removed in (
-            "search_timeout_s",
-            "follow_duration_s",
-            "pre_land_hover_s",
-        ):
-            self.assertNotIn(removed, self.node)
-            self.assertNotIn(removed, self.config)
-        self.assertIn("conditionHeld(input.aligned", self.flow)
-        self.assertIn("case FixedHeightDropState::MOVE_TO_SEARCH_START", self.flow)
-        self.assertIn("if (input.tag_detected)", self.flow)
-        self.assertIn("config_.release_duration_s", self.flow)
-        self.assertIn("conditionHeld(input.home_reached", self.flow)
+    def test_drop_gate_uses_follow_alignment_and_release_pulse(self):
+        self.assertIn("follow_start_s_", self.node)
+        self.assertIn("alignedFor(now_s, alignment_hold_s_)", self.node)
+        self.assertIn("payload_release_pulse_s_", self.node)
+        self.assertIn("hover_time_s: 3.0", self.config)
+        self.assertIn("drop_min_follow_s: 3.0", self.config)
 
     def test_restores_payload_return_and_terminal_protocol(self):
         for symbol in (
-            '"PAYLOAD_RELEASE_TRIGGERED"',
-            '"PAYLOAD_RELEASE_COMPLETE"',
-            '"CAR_SPEEDUP_REQUESTED"',
-            '"RETURN_HOME_STARTED"',
-            '"MISSION_CONTROLLER_FINISHED"',
-            'topic("mission_reset", "/uav_protocol/mission_reset")',
+            '"PAYLOAD_RELEASE_STARTED"',
+            '"PAYLOAD_RELEASED_SPEED_UP"',
+            '"PAYLOAD_RELEASED_RETURN_HOME"',
+            '"MISSION_COMPLETE"',
+            '"MISSION_ABORTED"',
+            'topic("payload_release", "/d_task/payload/release")',
             'topic("local_tracking", "/uav_protocol/local_tracking")',
         ):
             self.assertIn(symbol, self.node)
 
     def test_payload_and_drop_gate_match_field_configuration(self):
         for setting in (
-            "initial_offset_distance_m: 1.00",
-            "initial_offset_clockwise_deg: 20.0",
-            "forward_search_distance_m: 0.00",
-            "drop_alignment_stable_s: 1.00",
-            "enabled: true",
-            "backend: gpio",
-            "gpio_wiringpi_pin: 9",
-            "pulse_duration_s: 5.0",
+            "alignment_tolerance_norm: 0.10",
+            "alignment_hold_s: 0.50",
+            "drop_min_follow_s: 3.0",
+            "payload_release_pulse_s: 0.70",
+            "wiringpi_pin: 9",
+            "active_high: true",
         ):
             self.assertIn(setting, self.config)
 

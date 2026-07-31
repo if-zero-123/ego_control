@@ -146,10 +146,7 @@ FixedHeightDropFlowOutput FixedHeightDropFlow::update(
                 }
                 break;
             case FixedHeightDropState::MOVE_TO_SEARCH_START:
-                if (input.tag_detected) {
-                    transition(FixedHeightDropState::FOLLOW_CAR,
-                               input.now_s, output);
-                } else if (input.offset_reached) {
+                if (input.offset_reached) {
                     transition(FixedHeightDropState::FORWARD_SEARCH,
                                input.now_s, output);
                 }

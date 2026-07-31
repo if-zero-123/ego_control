@@ -59,12 +59,12 @@ class MissionConfigSenderContractTests(unittest.TestCase):
         for setting in (
             "initial_offset_distance_m: 1.00",
             "initial_offset_clockwise_deg: 20.0",
-            "forward_search_distance_m: 0.00",
+            "hover_time_s: 3.0",
         ):
             self.assertIn(setting, self.mission_config_source)
         self.assertIn("home_yaw_", self.mission_node_source)
         self.assertIn("offset_target_x_", self.mission_node_source)
-        self.assertIn("forward_target_x_", self.mission_node_source)
+        self.assertIn('setState("HOVER_3S"', self.mission_node_source)
 
     def test_gateway_preserves_fixed_search_states(self):
         self.assertIn('"MOVE_TO_SEARCH_START"', self.gateway_node_source)
