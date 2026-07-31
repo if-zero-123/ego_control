@@ -90,8 +90,12 @@ class StartDTaskUavScriptTest(unittest.TestCase):
             camera = root / "video0"
             camera.touch()
 
-            for setup_name in ("ros_setup", "positioning_setup", "catkin_setup"):
+            for setup_name in ("ros_setup", "positioning_setup"):
                 (root / setup_name).write_text(":\n", encoding="utf-8")
+            (root / "catkin_setup").write_text(
+                'printf "%s\\n" "$*" > "$FAKE_ROS_STATE/catkin_setup_args"\n',
+                encoding="utf-8",
+            )
 
             self.write_executable(
                 bin_dir / "roscore",
@@ -112,7 +116,16 @@ case "$1" in
   d_task_uav_control) marker=backend ;;
   *) exit 64 ;;
 esac
+if test "${FAKE_FAIL_COMPONENT:-}" = "$marker"; then
+  echo "simulated $marker launch failure" >&2
+  exit 1
+fi
 touch "$FAKE_ROS_STATE/$marker"
+if test "${FAKE_EXIT_COMPONENT:-}" = "$marker"; then
+  sleep 0.2
+  rm -f "$FAKE_ROS_STATE/$marker"
+  exit 7
+fi
 cleanup() { rm -f "$FAKE_ROS_STATE/$marker"; exit 0; }
 trap cleanup INT TERM
 while true; do sleep 0.05; done
@@ -131,11 +144,16 @@ case "$1" in
   ping)
     node="${@: -1}"
     case "$node" in
-      /mavros) test -e "$FAKE_ROS_STATE/mavros" ;;
-      /livox_lidar_publisher2) test -e "$FAKE_ROS_STATE/livox" ;;
-      /d_task_mission) test -e "$FAKE_ROS_STATE/backend" ;;
+      /mavros) marker=mavros ;;
+      /livox_lidar_publisher2) marker=livox ;;
+      /d_task_mission) marker=backend ;;
       *) exit 1 ;;
     esac
+    if test -e "$FAKE_ROS_STATE/$marker"; then
+      echo "xmlrpc reply from http://fake:12345 time=1ms"
+    else
+      echo "cannot ping [$node]: unknown node" >&2
+    fi
     ;;
   *) exit 2 ;;
 esac
@@ -190,6 +208,54 @@ echo 'connected: True'
             self.assertFalse((state_dir / "mavros").exists())
             self.assertFalse((state_dir / "livox").exists())
             self.assertFalse((state_dir / "backend").exists())
+            self.assertEqual(
+                (state_dir / "catkin_setup_args").read_text(encoding="utf-8").strip(),
+                "--extend",
+            )
+
+            (state_dir / "commands").write_text("", encoding="utf-8")
+            failed_env = env.copy()
+            failed_env["FAKE_FAIL_COMPONENT"] = "livox"
+            failed_env["D_TASK_STARTUP_TIMEOUT_S"] = "1"
+            failed = subprocess.run(
+                ["bash", str(SCRIPT_PATH), "--video-device", str(camera)],
+                env=failed_env,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+            )
+
+            self.assertNotEqual(failed.returncode, 0, failed.stdout)
+            self.assertIn("MID360 驱动在 1s 内未就绪", failed.stdout)
+            self.assertNotIn("全部软件已启动", failed.stdout)
+            failed_commands = (state_dir / "commands").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            self.assertNotIn("d_task_uav_control", [
+                line.split()[0] for line in failed_commands
+            ])
+            self.assertFalse((state_dir / "master").exists())
+            self.assertFalse((state_dir / "mavros").exists())
+            self.assertFalse((state_dir / "backend").exists())
+
+            (state_dir / "commands").write_text("", encoding="utf-8")
+            exited_env = env.copy()
+            exited_env["FAKE_EXIT_COMPONENT"] = "backend"
+            exited = subprocess.run(
+                ["bash", str(SCRIPT_PATH), "--video-device", str(camera)],
+                env=exited_env,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+            )
+
+            self.assertNotEqual(exited.returncode, 0, exited.stdout)
+            self.assertIn("d_task_uav 异常退出，状态码：7", exited.stdout)
+            self.assertNotIn("某个受管 ROS 进程", exited.stdout)
 
 
 if __name__ == "__main__":

@@ -110,9 +110,14 @@ skip_mqtt_check="${D_TASK_SKIP_MQTT_CHECK:-false}"
 
 for setup_file in "$ros_setup" "$positioning_setup" "$catkin_setup"; do
   [[ -r "$setup_file" ]] || die "找不到环境文件：$setup_file"
-  # shellcheck disable=SC1090
-  source "$setup_file"
 done
+# shellcheck disable=SC1090
+source "$ros_setup"
+# shellcheck disable=SC1090
+source "$positioning_setup"
+# 保留定位工作空间，使 livox_ros_driver2 与当前任务包同时可见。
+# shellcheck disable=SC1090
+source "$catkin_setup" --extend
 
 for required_command in roscore roslaunch rosnode rostopic setsid timeout; do
   command -v "$required_command" >/dev/null 2>&1 \
@@ -124,6 +129,7 @@ log_dir="$log_root/$run_id"
 mkdir -p "$log_dir"
 
 pids=()
+process_names=()
 cleanup_started=false
 
 log() {
@@ -179,6 +185,7 @@ start_component() {
   log "启动 $name，日志：$log_file"
   setsid "$@" >"$log_file" 2>&1 &
   pids+=("$!")
+  process_names+=("$name")
 }
 
 node_exists() {
@@ -199,9 +206,10 @@ wait_for_master() {
 
 wait_for_node() {
   local node="$1"
-  local attempt
+  local attempt response
   for ((attempt = 0; attempt < startup_timeout_s * 10; ++attempt)); do
-    if rosnode ping -c 1 "$node" >/dev/null 2>&1; then
+    response="$(rosnode ping -c 1 "$node" 2>&1 || true)"
+    if grep -q 'xmlrpc reply from' <<<"$response"; then
       return 0
     fi
     sleep 0.1
@@ -270,8 +278,21 @@ log "全部日志：$log_dir"
 log "按 Ctrl+C 停止本脚本启动的进程"
 
 if wait -n "${pids[@]}"; then
-  die "某个受管 ROS 进程意外退出"
+  status=0
 else
   status=$?
-  die "某个受管 ROS 进程异常退出，状态码：$status"
+fi
+
+exited_name="某个受管 ROS 进程"
+for index in "${!pids[@]}"; do
+  if ! kill -0 "${pids[$index]}" 2>/dev/null; then
+    exited_name="${process_names[$index]}"
+    break
+  fi
+done
+
+if ((status == 0)); then
+  die "$exited_name 意外退出"
+else
+  die "$exited_name 异常退出，状态码：$status"
 fi
