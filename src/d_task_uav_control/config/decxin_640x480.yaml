@@ -5,15 +5,15 @@ camera_name: head_camera
 camera_matrix:
   rows: 3
   cols: 3
-  data: [909.375000, 0.0, 319.500000,
-         0.0, 909.418101, 239.500000,
+  data: [854.64215684, 0.0, 322.79506911,
+         0.0, 858.77973527, 237.32768003,
          0.0, 0.0, 1.0]
 
 distortion_model: plumb_bob
 distortion_coefficients:
   rows: 1
   cols: 5
-  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+  data: [0.1898368982, -0.9235811664, 0.0042989883, 0.0011198578, 0.0]
 
 rectification_matrix:
   rows: 3
@@ -25,6 +25,6 @@ rectification_matrix:
 projection_matrix:
   rows: 3
   cols: 4
-  data: [909.375000, 0.0, 319.500000, 0.0,
-         0.0, 909.418101, 239.500000, 0.0,
+  data: [854.64215684, 0.0, 322.79506911, 0.0,
+         0.0, 858.77973527, 237.32768003, 0.0,
          0.0, 0.0, 1.0, 0.0]

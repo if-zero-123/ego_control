@@ -12,9 +12,11 @@
 #include <json/json.h>
 #include <nav_msgs/Odometry.h>
 #include <opencv2/aruco.hpp>
+#include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
 #include <sensor_msgs/image_encodings.h>
+#include <sensor_msgs/CameraInfo.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/String.h>
 #include <std_msgs/UInt8.h>
@@ -87,6 +89,10 @@ private:
         private_node_.param("simple_follow/landing_retry_s", landing_retry_s_, 0.50);
         private_node_.param("simple_follow/min_tag_side_px", min_tag_side_px_, 8.0);
         private_node_.param("simple_follow/tag_id", tag_id_, 0);
+        private_node_.param("simple_follow/target_offset_u_px",
+                            target_offset_u_px_, 0.0);
+        private_node_.param("simple_follow/target_offset_v_px",
+                            target_offset_v_px_, 0.0);
         private_node_.param("simple_follow/initial_offset_distance_m",
                             initial_offset_distance_m_, 0.50);
         private_node_.param("simple_follow/initial_offset_clockwise_deg",
@@ -114,6 +120,8 @@ private:
             || forward_search_distance_m_ < 0.0
             || forward_search_reach_radius_m_ <= 0.0 || follow_duration_s_ <= 0.0
             || pre_land_hover_s_ < 0.0
+            || !std::isfinite(target_offset_u_px_)
+            || !std::isfinite(target_offset_v_px_)
             || tag_id_ < 0 || kp_ < 0.0 || ki_ < 0.0 || kd_ < 0.0
             || deadband_ < 0.0 || integral_limit_ < 0.0
             || max_speed_mps_ <= 0.0) {
@@ -147,6 +155,9 @@ private:
         image_subscriber_ = image_transport_.subscribe(
             topic("image", "/usb_camera_vision/usb_cam/image_raw"), 1,
             &Tag0FixedHeightFollowNode::imageCallback, this);
+        camera_info_subscriber_ = node_.subscribe(
+            topic("camera_info", "/usb_camera_vision/usb_cam/camera_info"), 1,
+            &Tag0FixedHeightFollowNode::cameraInfoCallback, this);
     }
 
     void advertiseTopics() {
@@ -241,6 +252,31 @@ private:
         control_mode_ = message->data;
     }
 
+    void cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& message) {
+        const double fx = message->K[0];
+        const double fy = message->K[4];
+        const double cx = message->K[2];
+        const double cy = message->K[5];
+        if (!std::isfinite(fx) || !std::isfinite(fy)
+            || !std::isfinite(cx) || !std::isfinite(cy)
+            || fx <= 0.0 || fy <= 0.0
+            || message->width == 0U || message->height == 0U
+            || !std::all_of(message->D.begin(), message->D.end(),
+                            [](double value) { return std::isfinite(value); })) {
+            ROS_WARN_THROTTLE(2.0, "[tag0_follow] invalid CameraInfo; using image centre");
+            return;
+        }
+        camera_matrix_ = (cv::Mat_<double>(3, 3)
+            << fx, 0.0, cx,
+               0.0, fy, cy,
+               0.0, 0.0, 1.0);
+        distortion_coefficients_ = message->D.empty()
+            ? cv::Mat() : cv::Mat(message->D).clone();
+        camera_info_width_ = message->width;
+        camera_info_height_ = message->height;
+        camera_info_ready_ = true;
+    }
+
     void imageCallback(const sensor_msgs::ImageConstPtr& message) {
         try {
             const cv_bridge::CvImageConstPtr image = cv_bridge::toCvShare(
@@ -274,6 +310,8 @@ private:
                 tag_center_ = centre * 0.25F;
                 image_width_ = message->width;
                 image_height_ = message->height;
+                servoPixels(servo_observed_u_, servo_observed_v_,
+                            servo_target_u_, servo_target_v_);
                 tag_confidence_ = std::min(1.0, minimum_side / 40.0);
                 last_tag_s_ = ros::Time::now().toSec();
                 geometry_msgs::PointStamped output;
@@ -303,6 +341,45 @@ private:
         return std::abs(value) <= width ? 0.0 : value;
     }
 
+    void servoPixels(double& observed_u, double& observed_v,
+                     double& target_u, double& target_v) const {
+        observed_u = tag_center_.x;
+        observed_v = tag_center_.y;
+        target_u = 0.5 * static_cast<double>(image_width_) + target_offset_u_px_;
+        target_v = 0.5 * static_cast<double>(image_height_) + target_offset_v_px_;
+        if (!camera_info_ready_ || camera_info_width_ == 0U
+            || camera_info_height_ == 0U) {
+            return;
+        }
+
+        const double scale_x = static_cast<double>(image_width_)
+            / static_cast<double>(camera_info_width_);
+        const double scale_y = static_cast<double>(image_height_)
+            / static_cast<double>(camera_info_height_);
+        cv::Mat scaled_camera_matrix = camera_matrix_.clone();
+        scaled_camera_matrix.at<double>(0, 0) *= scale_x;
+        scaled_camera_matrix.at<double>(0, 2) *= scale_x;
+        scaled_camera_matrix.at<double>(1, 1) *= scale_y;
+        scaled_camera_matrix.at<double>(1, 2) *= scale_y;
+
+        std::vector<cv::Point2f> source{tag_center_};
+        std::vector<cv::Point2f> rectified;
+        try {
+            cv::undistortPoints(source, rectified, scaled_camera_matrix,
+                                distortion_coefficients_, cv::noArray(),
+                                scaled_camera_matrix);
+        } catch (const cv::Exception& error) {
+            ROS_WARN_THROTTLE(2.0, "[tag0_follow] undistort failed: %s", error.what());
+            return;
+        }
+        if (rectified.size() == 1U) {
+            observed_u = rectified.front().x;
+            observed_v = rectified.front().y;
+            target_u = scaled_camera_matrix.at<double>(0, 2) + target_offset_u_px_;
+            target_v = scaled_camera_matrix.at<double>(1, 2) + target_offset_v_px_;
+        }
+    }
+
     void resetPid() {
         integral_forward_ = 0.0;
         integral_left_ = 0.0;
@@ -323,10 +400,12 @@ private:
             return;
         }
 
-        const double normal_u = 2.0 * tag_center_.x
-            / static_cast<double>(image_width_) - 1.0;
-        const double normal_v = 2.0 * tag_center_.y
-            / static_cast<double>(image_height_) - 1.0;
+        servoPixels(servo_observed_u_, servo_observed_v_,
+                    servo_target_u_, servo_target_v_);
+        const double normal_u = 2.0 * (servo_observed_u_ - servo_target_u_)
+            / static_cast<double>(image_width_);
+        const double normal_v = 2.0 * (servo_observed_v_ - servo_target_v_)
+            / static_cast<double>(image_height_);
         forward_error = deadband(-normal_v, deadband_);
         left_error = deadband(-normal_u, deadband_);
         const double dt = previous_pid_s_ < 0.0
@@ -572,6 +651,11 @@ private:
         value["tag0_found"] = tagFresh(now_s);
         value["tag0_u"] = tag_center_.x;
         value["tag0_v"] = tag_center_.y;
+        value["servo_observed_u"] = servo_observed_u_;
+        value["servo_observed_v"] = servo_observed_v_;
+        value["servo_target_u"] = servo_target_u_;
+        value["servo_target_v"] = servo_target_v_;
+        value["camera_info_ready"] = camera_info_ready_;
         value["forward_error"] = forward_error;
         value["left_error"] = left_error;
         value["command_vx"] = command_vx;
@@ -604,6 +688,7 @@ private:
     ros::Subscriber odom_subscriber_;
     ros::Subscriber bridge_state_subscriber_;
     ros::Subscriber control_mode_subscriber_;
+    ros::Subscriber camera_info_subscriber_;
     ros::Publisher task_state_publisher_;
     ros::Publisher event_publisher_;
     ros::Publisher fault_publisher_;
@@ -621,13 +706,18 @@ private:
     std::string last_fault_key_;
     nav_msgs::Odometry latest_odom_;
     cv::Point2f tag_center_;
+    cv::Mat camera_matrix_;
+    cv::Mat distortion_coefficients_;
     bool has_odom_ = false;
     bool tag_found_ = false;
     bool positioning_ready_ = false;
     bool started_ = false;
+    bool camera_info_ready_ = false;
     uint8_t control_mode_ = 0;
     unsigned int image_width_ = 0;
     unsigned int image_height_ = 0;
+    unsigned int camera_info_width_ = 0;
+    unsigned int camera_info_height_ = 0;
     int tag_id_ = 0;
     double last_odom_s_ = -1.0;
     double last_tag_s_ = -1.0;
@@ -646,6 +736,12 @@ private:
     double hold_y_ = 0.0;
     double hold_yaw_ = 0.0;
     double tag_confidence_ = 0.0;
+    double target_offset_u_px_ = 0.0;
+    double target_offset_v_px_ = 0.0;
+    double servo_observed_u_ = 0.0;
+    double servo_observed_v_ = 0.0;
+    double servo_target_u_ = 0.0;
+    double servo_target_v_ = 0.0;
 
     double flight_height_m_ = 1.50;
     double control_rate_hz_ = 30.0;

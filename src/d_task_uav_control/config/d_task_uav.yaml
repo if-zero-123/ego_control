@@ -24,6 +24,7 @@ topics:
   bridge_state: /ego_bridge/flight_state
   control_mode: /ego_bridge/control_mode
   image: /usb_camera_vision/usb_cam/image_raw
+  camera_info: /usb_camera_vision/usb_cam/camera_info
   task_state: /uav_protocol/task_state
   local_event: /uav_protocol/local_event
   local_fault: /uav_protocol/local_fault
@@ -43,6 +44,11 @@ simple_follow:
   landing_retry_s: 0.50
   min_tag_side_px: 8.0
   tag_id: 0
+
+  # Rectified-image target relative to the calibrated principal point.
+  # Positive u is image-right; positive v is image-down.
+  target_offset_u_px: 0.0
+  target_offset_v_px: 0.0
 
   # After takeoff, first move 0.5 m at 1 o'clock relative to the locked
   # takeoff heading (12 o'clock is forward; clockwise is right).
