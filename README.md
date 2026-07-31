@@ -275,6 +275,20 @@ D=[0.1898368982,-0.9235811664,0.0042989883,0.0011198578,0.0]
 `servo_observed_u-cx` 和 `servo_observed_v-cy`，调整后 `servo_observed` 应收敛到
 `servo_target`。正常运行时 `camera_info_ready` 必须为 `true`。
 
+自动标定偏移时先停止完整任务后端，拆桨并保持机体水平。要补偿相机相对机体的安装
+位置，应把机体中心而不是相机本体放在 ID 0 正上方；相机到标签距离尽量接近实际
+1.50m 伴飞高度。执行：
+
+```bash
+roslaunch d_task_uav_control tag0_offset_calibration.launch
+```
+
+该入口只启动 USB 相机和标定节点，不启动 MAVROS、`ego_bridge`、任务节点、MQTT 或
+Fast-LIO。节点默认采集90帧去畸变中心，像素标准差不超过1.5时自动更新
+`config/d_task_uav.yaml`，随后关闭相机并退出。原配置备份到
+`~/.ros/d_task_uav/calibration_backups/`；超时或画面抖动时不会写配置。配置修改后需
+重启正式任务后端才会生效。
+
 拆桨、禁止解锁后，可观察识别与切换状态：
 
 ```bash

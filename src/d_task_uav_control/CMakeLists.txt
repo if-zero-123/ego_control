@@ -36,6 +36,7 @@ target_link_libraries(d_task_mission_node
 )
 
 catkin_install_python(PROGRAMS
+  scripts/calibrate_tag0_offset.py
   scripts/fastlio_supervisor_node.py
   scripts/payload_gpio_test_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -53,3 +54,8 @@ install(TARGETS d_task_mission_node
 install(DIRECTORY config launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_nosetests(test/test_tag0_offset_calibration.py)
+  catkin_add_nosetests(test/test_tag0_offset_calibration_launch.py)
+endif()

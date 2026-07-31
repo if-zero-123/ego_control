@@ -1,0 +1,42 @@
+<launch>
+  <!-- Read-only flight boundary: this launch contains no bridge, MAVROS or mission node. -->
+  <arg name="config_file"
+       default="$(find d_task_uav_control)/config/d_task_uav.yaml"/>
+  <arg name="camera_calibration_file"
+       default="$(find d_task_uav_control)/config/decxin_640x480.yaml"/>
+  <arg name="video_device"
+       default="/dev/v4l/by-id/usb-DCX-250107-ZW_DECXIN-video-index0"/>
+  <arg name="sample_count" default="90"/>
+  <arg name="max_stddev_px" default="1.5"/>
+  <arg name="timeout_s" default="45.0"/>
+
+  <group ns="tag0_offset_calibration">
+    <node pkg="usb_cam" type="usb_cam_node" name="usb_cam" output="screen">
+      <param name="camera_name" value="head_camera"/>
+      <param name="camera_info_url" value="file://$(arg camera_calibration_file)"/>
+      <param name="video_device" value="$(arg video_device)"/>
+      <param name="image_width" value="640"/>
+      <param name="image_height" value="480"/>
+      <param name="framerate" value="30"/>
+      <param name="pixel_format" value="yuyv"/>
+      <param name="camera_frame_id" value="usb_camera_link"/>
+      <param name="io_method" value="mmap"/>
+    </node>
+
+    <node pkg="d_task_uav_control" type="calibrate_tag0_offset.py"
+          name="calibrate_tag0_offset" output="screen" required="true">
+      <param name="image_topic"
+             value="/tag0_offset_calibration/usb_cam/image_raw"/>
+      <param name="camera_info_topic"
+             value="/tag0_offset_calibration/usb_cam/camera_info"/>
+      <param name="config_file" value="$(arg config_file)"/>
+      <param name="backup_root"
+             value="$(env HOME)/.ros/d_task_uav/calibration_backups"/>
+      <param name="tag_id" value="0"/>
+      <param name="sample_count" value="$(arg sample_count)"/>
+      <param name="max_stddev_px" value="$(arg max_stddev_px)"/>
+      <param name="timeout_s" value="$(arg timeout_s)"/>
+      <param name="min_tag_side_px" value="8.0"/>
+    </node>
+  </group>
+</launch>
