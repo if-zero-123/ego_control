@@ -17,6 +17,13 @@ class MissionConfigSenderContractTests(unittest.TestCase):
             / "uav_protocol_gateway"
             / "gateway_core.py"
         ).read_text(encoding="utf-8")
+        cls.gateway_node_source = (
+            REPOSITORY_SRC
+            / "uav_protocol_gateway"
+            / "src"
+            / "uav_protocol_gateway"
+            / "gateway_node.py"
+        ).read_text(encoding="utf-8")
         cls.supervisor_source = (
             PACKAGE_ROOT
             / "src"
@@ -25,6 +32,9 @@ class MissionConfigSenderContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         cls.mission_node_source = (
             PACKAGE_ROOT / "src" / "d_task_mission_node.cpp"
+        ).read_text(encoding="utf-8")
+        cls.mission_config_source = (
+            PACKAGE_ROOT / "config" / "d_task_uav.yaml"
         ).read_text(encoding="utf-8")
 
     def test_gateway_authorizes_car_mission_config(self):
@@ -48,6 +58,28 @@ class MissionConfigSenderContractTests(unittest.TestCase):
 
         self.assertIn('root.get("sender", "").asString() != "car"', callback)
         self.assertNotIn('root.get("sender", "").asString() != "ground"', callback)
+
+    def test_fixed_drop_search_path_is_loaded_from_yaml(self):
+        self.assertIn("search_start_x_m: 0.746", self.mission_config_source)
+        self.assertIn("search_start_y_m: -0.379", self.mission_config_source)
+        self.assertIn("search_forward_distance_m: 1.50", self.mission_config_source)
+        self.assertIn(
+            'LOAD_MISSION_PARAM("search_start_x_m", search_start_x_m)',
+            self.mission_node_source,
+        )
+        self.assertIn(
+            'LOAD_MISSION_PARAM("search_start_y_m", search_start_y_m)',
+            self.mission_node_source,
+        )
+        self.assertRegex(
+            self.mission_node_source,
+            r'LOAD_MISSION_PARAM\("search_forward_distance_m",\s*'
+            r"search_forward_distance_m\)",
+        )
+
+    def test_gateway_preserves_fixed_search_states(self):
+        self.assertIn('"MOVE_TO_SEARCH_START"', self.gateway_node_source)
+        self.assertIn('"FORWARD_SEARCH"', self.gateway_node_source)
 
 
 if __name__ == "__main__":

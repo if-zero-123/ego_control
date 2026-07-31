@@ -280,6 +280,10 @@ private:
         LOAD_MISSION_PARAM("phase_stable_time_s", phase_stable_time_s);
         LOAD_MISSION_PARAM("release_settle_time_s", release_settle_time_s);
         LOAD_MISSION_PARAM("platform_hold_time_s", platform_hold_time_s);
+        LOAD_MISSION_PARAM("search_start_x_m", search_start_x_m);
+        LOAD_MISSION_PARAM("search_start_y_m", search_start_y_m);
+        LOAD_MISSION_PARAM("search_forward_distance_m",
+                           search_forward_distance_m);
         LOAD_MISSION_PARAM("drop_height_m", drop_height_m);
         LOAD_MISSION_PARAM("drop_apriltag_distance_m",
                            drop_apriltag_distance_m);
@@ -338,6 +342,10 @@ private:
 
     static void validateControllerConfig(const MissionControllerConfig& config) {
         if (config.cruise_height_m <= 0.3
+            || !std::isfinite(config.search_start_x_m)
+            || !std::isfinite(config.search_start_y_m)
+            || !std::isfinite(config.search_forward_distance_m)
+            || config.search_forward_distance_m <= 0.0
             || config.high_descent_height_m <= config.low_descent_height_m
             || config.low_descent_height_m <= 0.0
             || config.drop_height_m <= 0.0

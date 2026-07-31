@@ -18,6 +18,8 @@ enum class MissionState : uint8_t {
     WAIT_START,
     TAKEOFF,
     HOVER_3S,
+    MOVE_TO_SEARCH_START,
+    FORWARD_SEARCH,
     SEARCH_CAR,
     LOCK_CAR,
     FOLLOW_CAR,
@@ -54,6 +56,9 @@ struct MissionControllerConfig {
     double release_settle_time_s = 0.50;
     double platform_hold_time_s = 5.20;
 
+    double search_start_x_m = 0.746;
+    double search_start_y_m = -0.379;
+    double search_forward_distance_m = 1.50;
     double drop_height_m = 0.40;
     double drop_apriltag_distance_m = 0.40;
     double high_descent_height_m = 0.80;
@@ -177,6 +182,7 @@ private:
     bool requestDue(double now_s, double& last_request_s);
     bool aligned(const MissionInput& input) const;
     bool atRelativeHeight(const MissionInput& input, double height_m) const;
+    bool atSearchPoint(const MissionInput& input, double x, double y) const;
     double cruiseZ() const;
     void commandPlatform(const MissionInput& input, double target_z,
                          double target_vz, MissionCommand& output) const;

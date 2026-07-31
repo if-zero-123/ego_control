@@ -19,6 +19,7 @@ from d_task_protocol import (  # noqa: E402
     Mode,
     ProtocolCodec,
     Sender,
+    UavState,
     build_car_pose,
     build_mission_config,
     build_mission_start,
@@ -152,6 +153,12 @@ class GatewayCoreTests(unittest.TestCase):
 
         self.assertEqual(message.payload["state"], "DROP_DESCEND")
         self.assertTrue(message.payload["follow_established"])
+
+    def test_fixed_search_phases_are_valid_uav_states(self):
+        self.assertEqual(
+            UavState.MOVE_TO_SEARCH_START.value, "MOVE_TO_SEARCH_START"
+        )
+        self.assertEqual(UavState.FORWARD_SEARCH.value, "FORWARD_SEARCH")
 
     def test_follow_established_latches_only_after_stable_follow_states(self):
         self.assertFalse(

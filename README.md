@@ -153,6 +153,10 @@ YOLO。离开这两个状态后自动回到仅 YOLO。
 - `apriltag.reacquire_distance_px`：重捕获跳变阈值，默认 `120px`；超过后直接重置滤波。
 - `pixel_servo.*`：像素滤波、死区、最大横移速度及图像轴到机体系轴的映射；必须先完成台架四方向确认。
 - `mission.cruise_height_m`、`drop_height_m`、两段下降高度和速度；
+- `mission.search_start_x_m/y_m`：任务1固定搜索起点，当前为
+  `(0.746, -0.379)m`；
+- `mission.search_forward_distance_m`：到达搜索起点后沿世界坐标 `+X` 的搜索距离，
+  当前为 `1.50m`；
 - `mission.drop_apriltag_distance_m`：任务1的 AprilTag 码面投递距离，当前为 `0.40m`；
 - `mission.apriltag_range_timeout_s`：码测距新鲜度窗口，当前为 `0.35s`。
 - `mission.follow_xy_kp/kd`：高空伴飞外环 PD 增益，默认 `0.80/0.25`。
@@ -409,3 +413,13 @@ C++ 任务节点三处契约，防止后续再次出现本地二次校验不一�
 `120 tests, 0 errors, 0 failures`，`uav_protocol_gateway` 为
 `22 tests, 0 errors, 0 failures`，完整 launch 节点解析通过。本次没有重启运行节点、
 解锁飞控或修改 Kill Switch。
+
+2026-07-31 任务1固定搜索航迹更新记录：起飞悬停后新增
+`MOVE_TO_SEARCH_START` 和 `FORWARD_SEARCH`，先飞到世界坐标
+`(0.746, -0.379)`，再沿 `+X` 搜索 1.50m；途中发现有效平台估计和真实 YOLO
+检测后立即进入原有视觉锁定、伴飞和投递流程，到达 `(2.246, -0.379)` 仍未发现
+平台则报错返航并最终以 `ABORT` 结束。动态起降任务继续使用原有 `SEARCH_CAR`。
+完整 `catkin_make` 成功；`d_task_uav_control` 为
+`130 tests, 0 errors, 0 failures`，`uav_protocol_gateway` 为
+`23 tests, 0 errors, 0 failures`，Python 语法检查和完整 launch 参数导出通过。
+本次未启动相机、飞控、任务状态机、自动解锁或投放 GPIO。

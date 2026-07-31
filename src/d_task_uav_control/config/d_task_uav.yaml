@@ -157,6 +157,11 @@ mission:
   release_settle_time_s: 0.50
   platform_hold_time_s: 5.20
 
+  # DROP 固定搜索航迹：先到起点，再沿无人机世界坐标 +X 前进指定距离。
+  search_start_x_m: 0.746
+  search_start_y_m: -0.379
+  search_forward_distance_m: 1.50
+
   # DROP_DESCEND aims for this world-frame relative height, but payload release
   # additionally requires a fresh AprilTag plane distance <= 0.40 m.
   drop_height_m: 0.40

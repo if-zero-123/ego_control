@@ -58,17 +58,29 @@ void prepareAndStart(MissionController& controller, MissionMode mode) {
 }
 
 void advanceToFollow(MissionController& controller, MissionInput& input) {
-    for (int index = 0; index < 8
+    for (int index = 0; index < 12
          && controller.state() != MissionState::FOLLOW_CAR; ++index) {
+        if (controller.state() == MissionState::MOVE_TO_SEARCH_START) {
+            input.uav_x = 0.746;
+            input.uav_y = -0.379;
+            input.uav_z = 1.5;
+        }
         input.now_s += 0.01;
         controller.update(input);
     }
     ASSERT_EQ(controller.state(), MissionState::FOLLOW_CAR);
+    input.uav_x = input.platform_x;
+    input.uav_y = input.platform_y;
 }
 
 void advanceToLock(MissionController& controller, MissionInput& input) {
-    for (int index = 0; index < 8
+    for (int index = 0; index < 12
          && controller.state() != MissionState::LOCK_CAR; ++index) {
+        if (controller.state() == MissionState::MOVE_TO_SEARCH_START) {
+            input.uav_x = 0.746;
+            input.uav_y = -0.379;
+            input.uav_z = 1.5;
+        }
         input.now_s += 0.01;
         controller.update(input);
     }
@@ -120,6 +132,107 @@ TEST(MissionController, RequestsConfiguredHeightRelativeToHome) {
 
     ASSERT_TRUE(command.request_takeoff);
     EXPECT_DOUBLE_EQ(command.target_z, 1.7);
+}
+
+TEST(MissionController, DropMovesToFixedSearchStartAfterHover) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    input.platform_valid = false;
+    input.platform_vision_detected = false;
+    input.pixel_valid = false;
+
+    controller.update(input);
+    input.now_s += 0.01;
+    controller.update(input);
+    input.now_s += 0.01;
+    const MissionCommand command = controller.update(input);
+
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_DOUBLE_EQ(command.target_x, 0.746);
+    EXPECT_DOUBLE_EQ(command.target_y, -0.379);
+    EXPECT_DOUBLE_EQ(command.target_z, 1.5);
+    EXPECT_DOUBLE_EQ(command.target_vx, 0.0);
+    EXPECT_DOUBLE_EQ(command.target_vy, 0.0);
+}
+
+TEST(MissionController, DropSearchesOnePointFiveMetresAlongPositiveX) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    input.platform_valid = false;
+    input.platform_vision_detected = false;
+    input.pixel_valid = false;
+
+    controller.update(input);
+    input.now_s += 0.01;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::MOVE_TO_SEARCH_START);
+
+    input.uav_x = 0.746;
+    input.uav_y = -0.379;
+    input.uav_z = 1.5;
+    input.now_s += 0.01;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::FORWARD_SEARCH);
+
+    input.now_s += 0.01;
+    const MissionCommand command = controller.update(input);
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_DOUBLE_EQ(command.target_x, 2.246);
+    EXPECT_DOUBLE_EQ(command.target_y, -0.379);
+    EXPECT_DOUBLE_EQ(command.target_z, 1.5);
+}
+
+TEST(MissionController, DropLocksPlatformDetectedDuringForwardSearch) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+
+    controller.update(input);
+    input.now_s += 0.01;
+    controller.update(input);
+    input.uav_x = 0.746;
+    input.uav_y = -0.379;
+    input.uav_z = 1.5;
+    input.now_s += 0.01;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::FORWARD_SEARCH);
+
+    input.uav_x = 1.2;
+    input.platform_x = 1.2;
+    input.platform_y = -0.379;
+    input.now_s += 0.01;
+    controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::LOCK_CAR);
+}
+
+TEST(MissionController, DropReturnsHomeWhenSearchEndpointHasNoDetection) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    input.platform_valid = false;
+    input.platform_vision_detected = false;
+    input.pixel_valid = false;
+
+    controller.update(input);
+    input.now_s += 0.01;
+    controller.update(input);
+    input.uav_x = 0.746;
+    input.uav_y = -0.379;
+    input.uav_z = 1.5;
+    input.now_s += 0.01;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::FORWARD_SEARCH);
+
+    input.uav_x = 2.246;
+    input.now_s += 0.01;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::RETURN_HOME);
+    EXPECT_EQ(command.fault_code, 2104);
+    EXPECT_EQ(command.fault_text, "platform_not_found_on_search_path");
 }
 
 TEST(MissionController, DropReleasesAtConfiguredAprilTagDistance) {
@@ -291,13 +404,13 @@ TEST(MissionController, LockUsesPixelCorrectionBeforePixelAlignment) {
     EXPECT_EQ(controller.state(), MissionState::LOCK_CAR);
 }
 
-TEST(MissionController, SearchUsesCoordinatePdBeforeYoloIsVisible) {
+TEST(MissionController, DynamicSearchUsesCoordinatePdBeforeYoloIsVisible) {
     MissionControllerConfig config = fastConfig();
     config.follow_position_deadband_m = 0.0;
     config.follow_max_correction_mps = 10.0;
     config.follow_max_total_speed_mps = 10.0;
     MissionController controller(config);
-    prepareAndStart(controller, MissionMode::DROP);
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
     MissionInput input = nominalInput();
     input.pixel_valid = false;
     input.pixel_aligned = false;
@@ -327,7 +440,7 @@ TEST(MissionController, FollowPdClampsTotalHorizontalSpeed) {
     config.follow_max_correction_mps = 0.30;
     config.follow_max_total_speed_mps = 0.50;
     MissionController controller(config);
-    prepareAndStart(controller, MissionMode::DROP);
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
     MissionInput input = nominalInput();
     input.pixel_valid = false;
     input.pixel_aligned = false;
@@ -351,7 +464,7 @@ TEST(MissionController, FollowPdLimitsAccelerationBetweenCommands) {
     config.follow_max_total_speed_mps = 10.0;
     config.follow_max_accel_mps2 = 0.50;
     MissionController controller(config);
-    prepareAndStart(controller, MissionMode::DROP);
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
     MissionInput input = nominalInput();
     input.pixel_valid = false;
     input.pixel_aligned = false;

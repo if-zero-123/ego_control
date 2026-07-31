@@ -48,6 +48,8 @@ _UAV_STATES = {
     "READY",
     "TAKEOFF",
     "HOVER_3S",
+    "MOVE_TO_SEARCH_START",
+    "FORWARD_SEARCH",
     "SEARCH_CAR",
     "LOCK_CAR",
     "FOLLOW_CAR",

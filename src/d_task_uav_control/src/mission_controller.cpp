@@ -31,6 +31,8 @@ const char* missionStateName(MissionState state) {
         case MissionState::WAIT_START: return "WAIT_START";
         case MissionState::TAKEOFF: return "TAKEOFF";
         case MissionState::HOVER_3S: return "HOVER_3S";
+        case MissionState::MOVE_TO_SEARCH_START: return "MOVE_TO_SEARCH_START";
+        case MissionState::FORWARD_SEARCH: return "FORWARD_SEARCH";
         case MissionState::SEARCH_CAR: return "SEARCH_CAR";
         case MissionState::LOCK_CAR: return "LOCK_CAR";
         case MissionState::FOLLOW_CAR: return "FOLLOW_CAR";
@@ -171,6 +173,14 @@ bool MissionController::atRelativeHeight(const MissionInput& input,
                                          double height_m) const {
     return std::abs((input.uav_z - input.platform_z) - height_m)
         <= config_.height_tolerance_m;
+}
+
+bool MissionController::atSearchPoint(const MissionInput& input,
+                                      double x, double y) const {
+    return std::hypot(input.uav_x - x, input.uav_y - y)
+            <= config_.xy_tolerance_m
+        && std::abs(input.uav_z - cruiseZ())
+            <= config_.height_tolerance_m;
 }
 
 double MissionController::cruiseZ() const {
@@ -361,9 +371,53 @@ MissionCommand MissionController::update(const MissionInput& input) {
         case MissionState::HOVER_3S:
             if (input.now_s - state_enter_s_ + kTimeEpsilon
                     >= config_.hover_time_s) {
-                transition(MissionState::SEARCH_CAR, input.now_s);
+                transition(mode_ == MissionMode::DROP
+                               ? MissionState::MOVE_TO_SEARCH_START
+                               : MissionState::SEARCH_CAR,
+                           input.now_s);
             }
             break;
+
+        case MissionState::MOVE_TO_SEARCH_START:
+            if (input.control_mode != 1
+                && requestDue(input.now_s, last_override_request_s_)) {
+                output.override_mode_request = 1;
+            }
+            commandPosition(config_.search_start_x_m,
+                            config_.search_start_y_m,
+                            cruiseZ(), 0.0, 0.0, 0.0, output);
+            if (atSearchPoint(input, config_.search_start_x_m,
+                              config_.search_start_y_m)) {
+                transition(MissionState::FORWARD_SEARCH, input.now_s);
+            } else if (stateTimedOut(input.now_s, config_.search_timeout_s)) {
+                beginAbortReturn(input, output, 2104,
+                                 "search_start_timeout");
+            }
+            break;
+
+        case MissionState::FORWARD_SEARCH: {
+            if (input.control_mode != 1
+                && requestDue(input.now_s, last_override_request_s_)) {
+                output.override_mode_request = 1;
+            }
+            const double endpoint_x = config_.search_start_x_m
+                + config_.search_forward_distance_m;
+            commandPosition(endpoint_x, config_.search_start_y_m,
+                            cruiseZ(), 0.0, 0.0, 0.0, output);
+            if (input.platform_valid && input.pixel_valid) {
+                transition(MissionState::LOCK_CAR, input.now_s);
+            } else if (atSearchPoint(input, endpoint_x,
+                                     config_.search_start_y_m)) {
+                final_abort_ = true;
+                output.fault_code = 2104;
+                output.fault_text = "platform_not_found_on_search_path";
+                transition(MissionState::RETURN_HOME, input.now_s);
+            } else if (stateTimedOut(input.now_s, config_.search_timeout_s)) {
+                beginAbortReturn(input, output, 2104,
+                                 "platform_search_timeout");
+            }
+            break;
+        }
 
         case MissionState::SEARCH_CAR:
             if (input.control_mode != 1
