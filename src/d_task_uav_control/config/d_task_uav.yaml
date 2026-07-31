@@ -50,7 +50,9 @@ topics:
 # YOLO automatically.
 apriltag:
   image_topic: /usb_camera_vision/usb_cam/image_raw
+  camera_info_topic: /usb_camera_vision/usb_cam/camera_info
   detection_topic: /d_task/vision/platform_detection/apriltag
+  range_topic: /d_task/vision/apriltag_range
   debug_image_topic: /d_task/vision/apriltag_debug
   tag_id: 0
   tag_size_m: 0.080

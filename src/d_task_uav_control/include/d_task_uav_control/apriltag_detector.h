@@ -17,6 +17,18 @@ struct AprilTagDetection {
     std::vector<cv::Point2f> corners;
 };
 
+struct AprilTagPoseEstimate {
+    bool valid = false;
+    cv::Vec3d rotation_vector;
+    cv::Vec3d translation_m;
+    double mean_side_px = 0.0;
+    double optical_axis_distance_m = 0.0;
+    double slant_range_m = 0.0;
+    double plane_distance_m = 0.0;
+    double tag_tilt_deg = 0.0;
+    double reprojection_error_px = 0.0;
+};
+
 class AprilTagDetector {
 public:
     explicit AprilTagDetector(int target_id = 0, double min_side_px = 8.0);
@@ -29,6 +41,12 @@ private:
     cv::Ptr<cv::aruco::Dictionary> dictionary_;
     cv::Ptr<cv::aruco::DetectorParameters> parameters_;
 };
+
+AprilTagPoseEstimate estimateAprilTagPose(
+    const AprilTagDetection& detection,
+    double tag_size_m,
+    const cv::Mat& camera_matrix,
+    const cv::Mat& distortion_coefficients);
 
 }  // namespace d_task_uav_control
 

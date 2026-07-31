@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
+#include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -10,8 +13,10 @@
 #include <opencv2/aruco.hpp>
 #include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
+#include <sensor_msgs/CameraInfo.h>
 #include <sensor_msgs/image_encodings.h>
 
+#include "d_task_uav_control/AprilTagRange.h"
 #include "d_task_uav_control/PlatformDetection.h"
 #include "d_task_uav_control/apriltag_detector.h"
 
@@ -31,6 +36,12 @@ public:
             "apriltag/detection_topic", detection_topic_,
             "/d_task/vision/platform_detection/apriltag");
         private_node_.param<std::string>(
+            "apriltag/camera_info_topic", camera_info_topic_,
+            "/usb_camera_vision/usb_cam/camera_info");
+        private_node_.param<std::string>(
+            "apriltag/range_topic", range_topic_,
+            "/d_task/vision/apriltag_range");
+        private_node_.param<std::string>(
             "apriltag/debug_image_topic", debug_image_topic_,
             "/d_task/vision/apriltag_debug");
         private_node_.param(
@@ -40,18 +51,25 @@ public:
         if (!std::isfinite(tag_size_m_) || tag_size_m_ <= 0.0) {
             throw std::runtime_error("apriltag/tag_size_m must be positive");
         }
+        loadFallbackIntrinsics();
 
         detection_publisher_ = node_.advertise<PlatformDetection>(
             detection_topic_, 1);
+        range_publisher_ = node_.advertise<AprilTagRange>(range_topic_, 1);
         if (publish_debug_image_) {
             debug_publisher_ = image_transport_.advertise(debug_image_topic_, 1);
         }
+        camera_info_subscriber_ = node_.subscribe(
+            camera_info_topic_, 1,
+            &AprilTagDetectorNode::cameraInfoCallback, this);
         image_subscriber_ = image_transport_.subscribe(
             image_topic_, 1, &AprilTagDetectorNode::imageCallback, this);
         ROS_INFO(
-            "[apriltag_detector] family=36h11 id=%d size=%.3fm image=%s output=%s",
+            "[apriltag_detector] family=36h11 id=%d size=%.3fm image=%s "
+            "output=%s range=%s camera_info=%s intrinsics=%s",
             target_id_, tag_size_m_, image_topic_.c_str(),
-            detection_topic_.c_str());
+            detection_topic_.c_str(), range_topic_.c_str(),
+            camera_info_topic_.c_str(), intrinsics_source_.c_str());
     }
 
 private:
@@ -68,12 +86,118 @@ private:
         return min_side_px_;
     }
 
+    void loadFallbackIntrinsics() {
+        double fx = 400.0;
+        double fy = 400.0;
+        double cx = 320.0;
+        double cy = 240.0;
+        private_node_.param("camera/fx", fx, fx);
+        private_node_.param("camera/fy", fy, fy);
+        private_node_.param("camera/cx", cx, cx);
+        private_node_.param("camera/cy", cy, cy);
+        if (!std::isfinite(fx) || !std::isfinite(fy)
+            || !std::isfinite(cx) || !std::isfinite(cy)
+            || fx <= 0.0 || fy <= 0.0) {
+            throw std::runtime_error(
+                "camera fallback intrinsics must be finite with positive fx/fy");
+        }
+        camera_matrix_ = (cv::Mat_<double>(3, 3)
+            << fx, 0.0, cx,
+               0.0, fy, cy,
+               0.0, 0.0, 1.0);
+        distortion_coefficients_ = cv::Mat::zeros(1, 5, CV_64F);
+        intrinsics_source_ = "config_fallback";
+    }
+
+    void cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& message) {
+        if (!std::isfinite(message->K[0]) || !std::isfinite(message->K[4])
+            || !std::isfinite(message->K[2]) || !std::isfinite(message->K[5])
+            || message->K[0] <= 0.0 || message->K[4] <= 0.0) {
+            ROS_WARN_THROTTLE(
+                5.0,
+                "[apriltag_detector] CameraInfo is uncalibrated; "
+                "using YAML fallback intrinsics");
+            return;
+        }
+        camera_matrix_ = (cv::Mat_<double>(3, 3)
+            << message->K[0], message->K[1], message->K[2],
+               message->K[3], message->K[4], message->K[5],
+               message->K[6], message->K[7], message->K[8]);
+        distortion_coefficients_ =
+            cv::Mat::zeros(1, std::max<std::size_t>(5U, message->D.size()),
+                           CV_64F);
+        bool distortion_valid = true;
+        for (std::size_t index = 0; index < message->D.size(); ++index) {
+            if (!std::isfinite(message->D[index])) {
+                distortion_valid = false;
+                break;
+            }
+            distortion_coefficients_.at<double>(0, index) = message->D[index];
+        }
+        if (!distortion_valid) {
+            distortion_coefficients_ = cv::Mat::zeros(1, 5, CV_64F);
+            ROS_WARN_THROTTLE(
+                5.0,
+                "[apriltag_detector] CameraInfo distortion is invalid; "
+                "using zero distortion");
+        }
+        intrinsics_source_ = "camera_info";
+    }
+
+    static double meanSidePixels(const AprilTagDetection& detection) {
+        if (!detection.found || detection.corners.size() != 4U) {
+            return 0.0;
+        }
+        double total = 0.0;
+        for (std::size_t index = 0; index < 4U; ++index) {
+            total += cv::norm(
+                detection.corners[(index + 1U) % 4U]
+                - detection.corners[index]);
+        }
+        return total * 0.25;
+    }
+
+    void publishRange(
+        const std_msgs::Header& header,
+        const AprilTagDetection& detection,
+        const AprilTagPoseEstimate& pose) {
+        AprilTagRange output;
+        output.header = header;
+        output.detected = detection.found;
+        output.pose_valid = pose.valid;
+        output.tag_id = detection.found ? detection.id : target_id_;
+        output.intrinsics_source = intrinsics_source_;
+        output.tag_size_m = tag_size_m_;
+        output.mean_side_px =
+            pose.valid ? pose.mean_side_px : meanSidePixels(detection);
+        const double invalid = std::numeric_limits<double>::quiet_NaN();
+        output.camera_x_m = pose.valid ? pose.translation_m[0] : invalid;
+        output.camera_y_m = pose.valid ? pose.translation_m[1] : invalid;
+        output.optical_axis_distance_m =
+            pose.valid ? pose.optical_axis_distance_m : invalid;
+        output.slant_range_m = pose.valid ? pose.slant_range_m : invalid;
+        output.plane_distance_m = pose.valid ? pose.plane_distance_m : invalid;
+        output.tag_tilt_deg = pose.valid ? pose.tag_tilt_deg : invalid;
+        output.reprojection_error_px =
+            pose.valid ? pose.reprojection_error_px : invalid;
+        range_publisher_.publish(output);
+    }
+
+    static std::string fixed(double value, int precision) {
+        std::ostringstream stream;
+        stream << std::fixed << std::setprecision(precision) << value;
+        return stream.str();
+    }
+
     void imageCallback(const sensor_msgs::ImageConstPtr& message) {
         try {
             const cv_bridge::CvImageConstPtr image = cv_bridge::toCvShare(
                 message, sensor_msgs::image_encodings::BGR8);
             const AprilTagDetection detection =
                 detector_.detect(image->image);
+            const AprilTagPoseEstimate pose = estimateAprilTagPose(
+                detection, tag_size_m_, camera_matrix_,
+                distortion_coefficients_);
 
             PlatformDetection output;
             output.header = message->header;
@@ -92,9 +216,10 @@ private:
                 output.bbox_height = detection.bbox.height;
             }
             detection_publisher_.publish(output);
+            publishRange(message->header, detection, pose);
 
             if (publish_debug_image_) {
-                publishDebug(message->header, image->image, detection);
+                publishDebug(message->header, image->image, detection, pose);
             }
         } catch (const cv_bridge::Exception& error) {
             ROS_WARN_THROTTLE(
@@ -108,7 +233,8 @@ private:
     void publishDebug(
         const std_msgs::Header& header,
         const cv::Mat& input,
-        const AprilTagDetection& detection) {
+        const AprilTagDetection& detection,
+        const AprilTagPoseEstimate& pose) {
         cv::Mat annotated = input.clone();
         if (detection.found) {
             std::vector<std::vector<cv::Point2f>> corners{detection.corners};
@@ -117,13 +243,34 @@ private:
             cv::circle(annotated, detection.center, 4, cv::Scalar(0, 255, 255), -1);
         }
         const std::string label = detection.found
-            ? "APRILTAG 36h11 ID 0"
+            ? "APRILTAG 36h11 ID " + std::to_string(detection.id)
+                + " side=" + fixed(meanSidePixels(detection), 1) + "px"
             : "APRILTAG SEARCH";
         cv::putText(
             annotated, label, cv::Point(8, 24), cv::FONT_HERSHEY_SIMPLEX,
             0.65, detection.found ? cv::Scalar(0, 255, 0)
                                   : cv::Scalar(0, 165, 255),
             2, cv::LINE_AA);
+        const std::string range_label = pose.valid
+            ? "z=" + fixed(pose.optical_axis_distance_m, 3)
+                + "m range=" + fixed(pose.slant_range_m, 3)
+                + "m plane=" + fixed(pose.plane_distance_m, 3) + "m"
+            : "distance=N/A";
+        cv::putText(
+            annotated, range_label, cv::Point(8, 50),
+            cv::FONT_HERSHEY_SIMPLEX, 0.58,
+            pose.valid ? cv::Scalar(255, 255, 0)
+                       : cv::Scalar(0, 165, 255),
+            2, cv::LINE_AA);
+        const std::string quality_label = pose.valid
+            ? "tilt=" + fixed(pose.tag_tilt_deg, 1)
+                + "deg reproj=" + fixed(pose.reprojection_error_px, 2)
+                + "px K=" + intrinsics_source_
+            : "K=" + intrinsics_source_;
+        cv::putText(
+            annotated, quality_label, cv::Point(8, 76),
+            cv::FONT_HERSHEY_SIMPLEX, 0.52,
+            cv::Scalar(255, 255, 0), 2, cv::LINE_AA);
         debug_publisher_.publish(
             cv_bridge::CvImage(
                 header, sensor_msgs::image_encodings::BGR8, annotated)
@@ -135,13 +282,20 @@ private:
     image_transport::ImageTransport image_transport_;
     image_transport::Subscriber image_subscriber_;
     image_transport::Publisher debug_publisher_;
+    ros::Subscriber camera_info_subscriber_;
     ros::Publisher detection_publisher_;
+    ros::Publisher range_publisher_;
     int target_id_ = 0;
     double min_side_px_ = 8.0;
     double tag_size_m_ = 0.080;
     bool publish_debug_image_ = true;
+    cv::Mat camera_matrix_;
+    cv::Mat distortion_coefficients_;
+    std::string intrinsics_source_;
     std::string image_topic_;
+    std::string camera_info_topic_;
     std::string detection_topic_;
+    std::string range_topic_;
     std::string debug_image_topic_;
     AprilTagDetector detector_;
 };

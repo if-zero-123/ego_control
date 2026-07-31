@@ -24,6 +24,7 @@ find_package(OpenCV REQUIRED)
 catkin_python_setup()
 
 add_message_files(FILES
+  AprilTagRange.msg
   PlatformDetection.msg
   PlatformEstimate.msg
 )
@@ -150,6 +151,7 @@ install(DIRECTORY config launch
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_positioning_readiness.py)
   catkin_add_nosetests(test/test_pixel_servo_debug_launch.py)
+  catkin_add_nosetests(test/test_apriltag_range_debug_launch.py)
   catkin_add_nosetests(test/test_payload_gpio.py)
   catkin_add_nosetests(test/test_start_d_task_uav_script.py)
   catkin_add_gtest(test_platform_tracker test/test_platform_tracker.cpp)

@@ -172,12 +172,37 @@ YOLO 使用单类别平台标靶模型 `model_2_yolo_target_yolov8n_640_rk3588_i
 /d_task/vision/platform_detection/yolo       # 高空 YOLO
 /d_task/vision/platform_detection/apriltag   # 近距 AprilTag
 /d_task/vision/platform_detection            # 状态门控后的公共输入
+/d_task/vision/apriltag_range                 # AprilTag 三维测距与质量
 /d_task/vision/apriltag_debug                 # AprilTag 调试图
 ```
 
 相关参数在 `apriltag.*` 和 `detection_mux.*`。默认码 ID 为 `0`、物理边长
 `0.080m`、检测源新鲜度窗口 `0.35s`。公共话题接口未改变，因此现有像素伺服、
 卡尔曼跟踪器和任务状态机无需同时运行第二套控制器。
+
+投递高度先用 AprilTag 测距实测，不直接猜值。拆桨后运行只读入口：
+
+```bash
+roslaunch d_task_uav_control apriltag_range_debug.launch
+rostopic echo /d_task/vision/apriltag_range
+rqt_image_view /d_task/vision/apriltag_debug
+```
+
+该 launch 只启动 USB 相机和 AprilTag 检测，不启动 `ego_bridge`、任务状态机、
+MQTT 或投放执行器。`apriltag_range` 每帧发布：
+
+- `detected/pose_valid`：是否看到码、是否成功解算位姿；
+- `optical_axis_distance_m`：沿相机光轴的 Z 距离；
+- `slant_range_m`：相机光心到码中心的空间直线距离；
+- `plane_distance_m`：相机光心到码平面的垂直距离，下视相机选投递高度时重点观察；
+- `mean_side_px`、`tag_tilt_deg`、`reprojection_error_px`：码大小、倾角和解算质量；
+- `intrinsics_source`：`camera_info` 表示使用相机标定，`config_fallback` 表示使用
+  YAML 中 `fx/fy/cx/cy` 的临时内参。
+
+当前 USB 相机 launch 没有配置标定文件；如果看到
+`intrinsics_source: config_fallback`，距离只能用于趋势观察，不能直接作为最终投递
+高度。应先完成相机内参标定，使 Topic 显示 `camera_info`，再从高到低记录稳定识别
+下限、`plane_distance_m` 波动和重投影误差，最后确定留有安全裕量的投递高度。
 
 拆桨、禁止解锁后，可观察识别与切换状态：
 
@@ -186,6 +211,7 @@ rostopic echo /uav_protocol/task_state
 rostopic echo /d_task/vision/platform_detection/yolo
 rostopic echo /d_task/vision/platform_detection/apriltag
 rostopic echo /d_task/vision/platform_detection
+rostopic echo /d_task/vision/apriltag_range
 rqt_image_view /d_task/vision/apriltag_debug
 ```
 
@@ -274,3 +300,10 @@ AprilTag 检测、检测源门控和协议伴飞锁存均有独立测试。
 按坐标接近、PD 总速度限幅、加速度限幅，以及投递前坐标/相对速度/像素三重对齐。
 `roslaunch --nodes d_task_uav_control d_task_uav.launch` 已通过启动链解析。
 验证仅包含编译、自动测试与 launch 解析，未启动飞行、解锁或投放硬件。
+
+2026-07-31 AprilTag 测距调试验证记录：完整 `catkin_make` 成功；
+`d_task_uav_control` 汇总为 `94 tests, 0 errors, 0 failures`。合成投影测试以
+`80mm` 标签、已知 `0.600m` 光轴距离验证 PnP 回算，并覆盖无效内参拒绝。
+`roslaunch --nodes d_task_uav_control apriltag_range_debug.launch` 仅列出 USB 相机和
+测距节点，`rosmsg show d_task_uav_control/AprilTagRange` 字段生成正确。本次没有打开
+相机、飞控、解锁或投放硬件，`drop_height_m` 仍保持原值，等待现场测距后再确定。
