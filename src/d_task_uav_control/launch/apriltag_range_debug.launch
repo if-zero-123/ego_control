@@ -21,6 +21,9 @@
     <param name="framerate" value="$(arg framerate)"/>
     <param name="pixel_format" value="$(arg pixel_format)"/>
     <param name="camera_frame_id" value="usb_camera_link"/>
+    <param name="camera_name" value="head_camera"/>
+    <param name="camera_info_url"
+           value="file://$(find d_task_uav_control)/config/decxin_640x480.yaml"/>
     <param name="io_method" value="mmap"/>
   </node>
 

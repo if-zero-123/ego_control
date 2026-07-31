@@ -199,10 +199,21 @@ MQTT 或投放执行器。`apriltag_range` 每帧发布：
 - `intrinsics_source`：`camera_info` 表示使用相机标定，`config_fallback` 表示使用
   YAML 中 `fx/fy/cx/cy` 的临时内参。
 
-当前 USB 相机 launch 没有配置标定文件；如果看到
-`intrinsics_source: config_fallback`，距离只能用于趋势观察，不能直接作为最终投递
-高度。应先完成相机内参标定，使 Topic 显示 `camera_info`，再从高到低记录稳定识别
-下限、`plane_distance_m` 波动和重投影误差，最后确定留有安全裕量的投递高度。
+DECXIN 相机当前固定使用 640×480、无畸变图像。实测时把黑色边长 80mm 的标签正对
+镜头，镜头平面到码面为 0.500m；连续 120 帧得到水平/垂直边长中位数
+145.500px/145.507px，据此反标：
+
+```text
+fx=909.375000  fy=909.418101
+cx=319.500000  cy=239.500000
+D=[0,0,0,0,0]
+```
+
+标定文件为 `config/decxin_640x480.yaml`，完整任务和只读测距入口都会给 `usb_cam`
+加载该文件；正常情况下 Topic 应显示 `intrinsics_source: camera_info`。该结果是服务于
+平台中心测距的单距离正视标定，不等同于多姿态棋盘格完整标定。仍应从高到低记录稳定
+识别下限、`plane_distance_m` 与卷尺真值的误差和重投影误差，再确定留有安全裕量的
+投递高度。
 
 拆桨、禁止解锁后，可观察识别与切换状态：
 
@@ -307,3 +318,11 @@ AprilTag 检测、检测源门控和协议伴飞锁存均有独立测试。
 `roslaunch --nodes d_task_uav_control apriltag_range_debug.launch` 仅列出 USB 相机和
 测距节点，`rosmsg show d_task_uav_control/AprilTagRange` 字段生成正确。本次没有打开
 相机、飞控、解锁或投放硬件，`drop_height_m` 仍保持原值，等待现场测距后再确定。
+
+2026-07-31 DECXIN 内参实测记录：80mm 标签位于镜头平面到码面 0.500m 时，
+120 帧水平/垂直边长中位数为 145.500px/145.507px，反标得到
+`fx=909.375000`、`fy=909.418101`。实际启动确认 CameraInfo 正确发布该 K、全零 D，
+测距消息使用 `intrinsics_source=camera_info`；完整任务与只读入口的 launch 参数导出
+均指向同一标定文件。完整 `catkin_make` 成功，包测试为
+`97 tests, 0 errors, 0 failures`。加载新 K 后复核时标签已离开当前画面，因此仍需在
+码重新进入画面后用卷尺距离复核最终误差；投递高度尚未修改。

@@ -73,10 +73,12 @@ detection_mux:
 # CameraInfo；收不到 CameraInfo 时使用这里的标定值。
 camera:
   use_camera_info: true
-  fx: 400.0
-  fy: 400.0
-  cx: 320.0
-  cy: 240.0
+  # DECXIN 640x480，使用 80mm AprilTag 在镜头平面至码面 0.500m
+  # 的 120 帧正视采样反标；无畸变输出，D=[0,0,0,0,0]。
+  fx: 909.375000
+  fy: 909.418101
+  cx: 319.500000
+  cy: 239.500000
   body_r_camera: [0.0, -1.0, 0.0,
                   -1.0, 0.0, 0.0,
                   0.0, 0.0, -1.0]

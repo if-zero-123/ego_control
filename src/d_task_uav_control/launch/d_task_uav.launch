@@ -49,6 +49,12 @@
   </node>
 
   <group if="$(arg start_vision)">
+    <!-- 给 include 内的 usb_cam 注入同一份实测 CameraInfo。 -->
+    <param name="/usb_camera_vision/usb_cam/camera_name"
+           value="head_camera"/>
+    <param name="/usb_camera_vision/usb_cam/camera_info_url"
+           value="file://$(find d_task_uav_control)/config/decxin_640x480.yaml"/>
+
     <include file="$(find metal_ball_rknn)/launch/usb_camera_detector.launch">
       <arg name="video_device" value="$(arg video_device)"/>
       <arg name="model_path" value="$(arg model_path)"/>
