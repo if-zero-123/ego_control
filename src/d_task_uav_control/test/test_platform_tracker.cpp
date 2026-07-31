@@ -29,8 +29,59 @@ TEST(PixelProjector, ProjectsNadirCenterOntoPlatformPlane) {
     EXPECT_NEAR(result.z(), 0.3, 1e-9);
 }
 
+TEST(PlatformTracker, DefaultTrackerIgnoresCarOnlyMeasurement) {
+    PlatformTracker tracker;
+
+    tracker.updateCar(CarMeasurement{
+        0.0, -8.0, 4.0, 0.0, -1.0, 0.5, 1.0});
+    const PlatformState state = tracker.stateAt(0.0);
+
+    EXPECT_FALSE(state.valid);
+    EXPECT_EQ(state.mode, FilterMode::INVALID);
+}
+
+TEST(PlatformTracker, CarMeasurementCannotPullVisualStateBackward) {
+    PlatformTracker tracker;
+    ASSERT_TRUE(tracker.updateVision(
+        VisionMeasurement{0.0, 1.0, 2.0, 1.0}));
+    const PlatformState visual_state = tracker.stateAt(0.0);
+
+    tracker.updateCar(CarMeasurement{
+        0.0, -10.0, -10.0, 0.0, -2.0, -2.0, 1.0});
+    const PlatformState after_car = tracker.stateAt(0.0);
+
+    ASSERT_TRUE(after_car.valid);
+    EXPECT_NEAR(after_car.x, visual_state.x, 1e-9);
+    EXPECT_NEAR(after_car.y, visual_state.y, 1e-9);
+    EXPECT_NEAR(after_car.vx, visual_state.vx, 1e-9);
+    EXPECT_NEAR(after_car.vy, visual_state.vy, 1e-9);
+}
+
+TEST(PlatformTracker, KeepsOnlyVisualPredictionForOneSecond) {
+    TrackerConfig config;
+    config.source_timeout_s = 0.30;
+    config.prediction_timeout_s = 1.0;
+    PlatformTracker tracker(config);
+
+    ASSERT_TRUE(tracker.updateVision(
+        VisionMeasurement{0.0, 1.0, 2.0, 1.0}));
+    ASSERT_TRUE(tracker.updateVision(
+        VisionMeasurement{0.2, 1.1, 2.0, 1.0}));
+    tracker.updateCar(CarMeasurement{
+        0.4, -10.0, -10.0, 0.0, -2.0, -2.0, 1.0});
+
+    const PlatformState short_prediction = tracker.stateAt(1.1);
+    EXPECT_TRUE(short_prediction.valid);
+    EXPECT_EQ(short_prediction.mode, FilterMode::PREDICTED);
+
+    const PlatformState expired_prediction = tracker.stateAt(1.21);
+    EXPECT_FALSE(expired_prediction.valid);
+    EXPECT_EQ(expired_prediction.mode, FilterMode::STALE);
+}
+
 TEST(PlatformTracker, LocksVisualOffsetAndUsesCarFallback) {
     TrackerConfig config;
+    config.use_car_measurements = true;
     config.max_visual_residual_m = 1.0;
     config.source_timeout_s = 0.3;
     config.prediction_timeout_s = 1.0;
@@ -52,6 +103,7 @@ TEST(PlatformTracker, LocksVisualOffsetAndUsesCarFallback) {
 
 TEST(PlatformTracker, RejectsVisualOutlierAndEventuallyBecomesStale) {
     TrackerConfig config;
+    config.use_car_measurements = true;
     config.max_visual_residual_m = 0.5;
     config.source_timeout_s = 0.3;
     config.prediction_timeout_s = 1.0;
@@ -66,6 +118,7 @@ TEST(PlatformTracker, RejectsVisualOutlierAndEventuallyBecomesStale) {
 
 TEST(PlatformTracker, RotatesAndTranslatesCarPositionVelocityAndHeading) {
     TrackerConfig config;
+    config.use_car_measurements = true;
     config.frame_offset_x_m = 10.0;
     config.frame_offset_y_m = -2.0;
     config.frame_yaw_offset_rad = 1.5707963267948966;

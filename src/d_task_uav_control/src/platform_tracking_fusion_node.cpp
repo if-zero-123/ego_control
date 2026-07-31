@@ -71,7 +71,9 @@ public:
         private_node_.param("tracking/platform_height_m", platform_height_m_, 0.30);
         private_node_.param("tracking/uav_odom_timeout_s", uav_odom_timeout_s_, 0.30);
         private_node_.param("tracking/use_visual_projection",
-                            use_visual_projection_, false);
+                            use_visual_projection_, true);
+        private_node_.param("tracking/use_car_measurements",
+                            use_car_measurements_, false);
         private_node_.param("tracking/release_max_xy_error_m",
                             release_max_xy_error_m_, 0.15);
         private_node_.param("tracking/release_max_relative_speed_mps",
@@ -126,8 +128,11 @@ public:
             camera_info_topic, 1, &PlatformTrackingFusionNode::cameraInfoCallback, this);
         uav_odom_subscriber_ = node_.subscribe(
             uav_odom_topic, 10, &PlatformTrackingFusionNode::uavOdomCallback, this);
-        car_pose_subscriber_ = node_.subscribe(
-            car_pose_topic, 10, &PlatformTrackingFusionNode::carPoseCallback, this);
+        if (use_car_measurements_) {
+            car_pose_subscriber_ = node_.subscribe(
+                car_pose_topic, 10,
+                &PlatformTrackingFusionNode::carPoseCallback, this);
+        }
         mission_config_subscriber_ = node_.subscribe(
             mission_config_topic, 2,
             &PlatformTrackingFusionNode::missionConfigCallback, this);
@@ -154,9 +159,10 @@ public:
             ros::Duration(1.0 / publish_rate_hz),
             &PlatformTrackingFusionNode::publishTimerCallback, this);
 
-        ROS_INFO("[platform_tracking] detection=%s car_pose=%s odom=%s",
-                 detection_topic.c_str(), car_pose_topic.c_str(),
-                 uav_odom_topic.c_str());
+        ROS_INFO("[platform_tracking] mode=%s detection=%s odom=%s car_pose=%s",
+                 use_car_measurements_ ? "car_visual_fusion" : "apriltag_only",
+                 detection_topic.c_str(), uav_odom_topic.c_str(),
+                 use_car_measurements_ ? car_pose_topic.c_str() : "disabled");
     }
 
 private:
@@ -164,6 +170,9 @@ private:
         TrackerConfig config;
         private_node_.param("tracking/process_noise", config.process_noise,
                             config.process_noise);
+        private_node_.param("tracking/use_car_measurements",
+                            config.use_car_measurements,
+                            config.use_car_measurements);
         private_node_.param("tracking/car_position_noise_m",
                             config.car_position_noise,
                             config.car_position_noise);
@@ -408,7 +417,8 @@ private:
     nav_msgs::Odometry latest_uav_odom_;
     bool has_uav_odom_ = false;
     bool use_camera_info_ = true;
-    bool use_visual_projection_ = false;
+    bool use_visual_projection_ = true;
+    bool use_car_measurements_ = false;
     bool last_detection_found_ = false;
     bool last_detection_predicted_ = false;
     double last_uav_odom_received_s_ = -1.0;

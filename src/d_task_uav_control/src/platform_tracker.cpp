@@ -104,6 +104,9 @@ Eigen::Vector2d PlatformTracker::carPlatformPosition(
 }
 
 void PlatformTracker::updateCar(const CarMeasurement& measurement) {
+    if (!config_.use_car_measurements) {
+        return;
+    }
     const Eigen::Vector2d position = carPlatformPosition(measurement);
     const Eigen::Vector2d velocity = carWorldVelocity(measurement);
     if (!initialised_) {

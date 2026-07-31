@@ -103,9 +103,11 @@ tracking:
   platform_height_m: 0.30
   publish_rate_hz: 20.0
   uav_odom_timeout_s: 0.30
-  # 像素伺服主链路不依赖内参；默认不允许视觉投影改变小车世界坐标滤波。
-  use_visual_projection: false
+  # 平台 X/Y/VX/VY 只由 AprilTag 平台中心投影和视觉滤波产生。
+  use_visual_projection: true
+  use_car_measurements: false
 
+  # 以下小车融合参数仅为旧方案兼容项；use_car_measurements=false 时完全不使用。
   # 小车 ROS2 地图系到无人机本地系的二维刚体变换。标定时小车圆点为
   # (0, 0)，无人机放在圆点中心时本地坐标为下列 X/Y；两坐标系均为
   # X 向前、Y 向左，因此不取反，航向偏移保持 0。
@@ -181,7 +183,7 @@ mission:
   follow_lead_time_s: 0.15
 
   # SEARCH/LOCK/FOLLOW/DROP use direct ego_bridge OVERRIDE commands.
-  # v_cmd = filtered_car_v + Kp*position_error + Kd*relative_velocity
+  # v_cmd = filtered_apriltag_v + Kp*position_error + Kd*relative_velocity
   #         + bounded visual trim. No EGO-Planner or obstacle avoidance.
   follow_xy_kp: 0.80
   follow_xy_kd: 0.25
@@ -207,7 +209,7 @@ mission:
   tracking_loss_timeout_s: 1.0
   descent_timeout_s: 20.0
   platform_contact_timeout_s: 8.0
-  landing_prediction_timeout_s: 5.0
+  landing_prediction_timeout_s: 1.0
   landing_visual_handoff_s: 0.25
   platform_takeoff_timeout_s: 20.0
   return_timeout_s: 35.0

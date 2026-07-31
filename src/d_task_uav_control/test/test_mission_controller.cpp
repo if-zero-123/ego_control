@@ -97,6 +97,11 @@ TEST(MissionController, DoesNotStartBeforePositioningReady) {
     EXPECT_EQ(controller.state(), MissionState::POSITIONING_INIT);
 }
 
+TEST(MissionController, DefaultFinalBlindPredictionIsLimitedToOneSecond) {
+    EXPECT_DOUBLE_EQ(
+        MissionControllerConfig().landing_prediction_timeout_s, 1.0);
+}
+
 TEST(MissionController, RejectsUnknownStartReason) {
     MissionController controller(fastConfig());
     ASSERT_TRUE(controller.configure("mission-1", MissionMode::DROP));
@@ -209,6 +214,34 @@ TEST(MissionController, DropLocksPlatformDetectedDuringForwardSearch) {
     EXPECT_EQ(controller.state(), MissionState::LOCK_CAR);
 }
 
+TEST(MissionController, DropDoesNotLockPredictedPlatformDuringForwardSearch) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+
+    controller.update(input);
+    input.now_s += 0.01;
+    controller.update(input);
+    input.uav_x = 0.746;
+    input.uav_y = -0.379;
+    input.uav_z = 1.5;
+    input.now_s += 0.01;
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::FORWARD_SEARCH);
+
+    input.platform_valid = true;
+    input.platform_vision_detected = false;
+    input.pixel_valid = true;
+    input.uav_x = 1.2;
+    input.now_s += 0.01;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::FORWARD_SEARCH);
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_DOUBLE_EQ(command.target_x, 2.246);
+    EXPECT_DOUBLE_EQ(command.target_y, -0.379);
+}
+
 TEST(MissionController, DropReturnsHomeWhenSearchEndpointHasNoDetection) {
     MissionController controller(fastConfig());
     prepareAndStart(controller, MissionMode::DROP);
@@ -300,6 +333,22 @@ TEST(MissionController, DropDoesNotRequireCenterTagOrRange) {
     EXPECT_EQ(controller.state(), MissionState::RELEASE);
 }
 
+TEST(MissionController, DropDoesNotReleaseFromPredictedVisualState) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DROP);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+
+    input.platform_vision_detected = false;
+    input.pixel_valid = true;
+    input.pixel_aligned = true;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    EXPECT_EQ(controller.state(), MissionState::FOLLOW_CAR);
+    EXPECT_FALSE(command.release_payload);
+}
+
 TEST(MissionController, DropKeepsCruiseHeightBeforeRelease) {
     MissionController controller(fastConfig());
     prepareAndStart(controller, MissionMode::DROP);
@@ -377,6 +426,28 @@ TEST(MissionController, PixelLossFreezesDynamicDescentImmediately) {
     ASSERT_EQ(controller.state(), MissionState::DESCEND_HIGH);
 
     input.pixel_valid = false;
+    input.now_s += 0.1;
+    const MissionCommand command = controller.update(input);
+
+    ASSERT_TRUE(command.setpoint_valid);
+    EXPECT_DOUBLE_EQ(command.target_x, input.uav_x);
+    EXPECT_DOUBLE_EQ(command.target_y, input.uav_y);
+    EXPECT_DOUBLE_EQ(command.target_z, input.uav_z);
+    EXPECT_DOUBLE_EQ(command.target_vz, 0.0);
+    EXPECT_EQ(controller.state(), MissionState::DESCEND_HIGH);
+}
+
+TEST(MissionController, PredictedPlatformFreezesDynamicDescentImmediately) {
+    MissionController controller(fastConfig());
+    prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
+    MissionInput input = nominalInput();
+    advanceToFollow(controller, input);
+    controller.update(input);
+    ASSERT_EQ(controller.state(), MissionState::DESCEND_HIGH);
+
+    input.platform_vision_detected = false;
+    input.pixel_valid = true;
+    input.uav_z = 1.35;
     input.now_s += 0.1;
     const MissionCommand command = controller.update(input);
 
@@ -489,7 +560,7 @@ TEST(MissionController, CancelsBlindLandingAtPredictionTimeout) {
     EXPECT_EQ(controller.state(), MissionState::CLIMB_TO_CRUISE);
 }
 
-TEST(MissionController, PixelFollowAddsCorrectionToCarVelocity) {
+TEST(MissionController, PixelFollowAddsCorrectionToVisualPlatformVelocity) {
     MissionController controller(fastConfig());
     prepareAndStart(controller, MissionMode::DYNAMIC_LANDING);
     MissionInput input = nominalInput();
@@ -502,7 +573,8 @@ TEST(MissionController, PixelFollowAddsCorrectionToCarVelocity) {
     const MissionCommand command = controller.update(input);
 
     ASSERT_TRUE(command.setpoint_valid);
-    // 0.20 car feed-forward + 0.25*0.20 velocity D + 0.10 visual trim.
+    // 0.20 AprilTag velocity feed-forward + 0.25*0.20 velocity D
+    // + 0.10 pixel trim.
     // The lead position error remains inside the 0.04 m deadband.
     EXPECT_NEAR(command.target_vx, 0.35, 1e-9);
     EXPECT_NEAR(command.target_vy, -0.075, 1e-9);

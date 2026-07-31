@@ -15,6 +15,7 @@ enum class FilterMode : uint8_t {
 };
 
 struct TrackerConfig {
+    bool use_car_measurements = false;
     double process_noise = 0.2;
     double car_position_noise = 0.20;
     double car_velocity_noise = 0.15;

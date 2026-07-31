@@ -435,7 +435,8 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 + config_.search_forward_distance_m;
             commandPosition(endpoint_x, config_.search_start_y_m,
                             cruiseZ(), 0.0, 0.0, 0.0, output);
-            if (input.platform_valid && input.pixel_valid) {
+            if (input.platform_valid && input.platform_vision_detected
+                && input.pixel_valid) {
                 transition(MissionState::LOCK_CAR, input.now_s);
             } else if (atSearchPoint(input, endpoint_x,
                                      config_.search_start_y_m)) {
@@ -462,7 +463,9 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 commandPosition(input.uav_x, input.uav_y, cruiseZ(),
                                 0.0, 0.0, 0.0, output);
             }
-            if (conditionHeld(input.platform_valid && input.pixel_valid,
+            if (conditionHeld(input.platform_valid
+                                  && input.platform_vision_detected
+                                  && input.pixel_valid,
                               input.now_s, config_.vision_lock_time_s)) {
                 transition(MissionState::LOCK_CAR, input.now_s);
             } else if (stateTimedOut(input.now_s, config_.search_timeout_s)) {
@@ -508,12 +511,14 @@ MissionCommand MissionController::update(const MissionInput& input) {
                 std::abs(input.uav_z - cruiseZ())
                     <= config_.height_tolerance_m;
             const bool force_drop = mode_ == MissionMode::DROP
+                && input.platform_vision_detected
                 && input.pixel_valid && input.pixel_aligned
                 && aligned(input)
                 && at_cruise_height
                 && input.distance_to_d_m
                     <= config_.drop_force_descent_distance_to_d_m;
-            if (conditionHeld(input.pixel_valid && input.pixel_aligned
+            if (conditionHeld(input.platform_vision_detected
+                                  && input.pixel_valid && input.pixel_aligned
                                   && aligned(input)
                                   && (mode_ != MissionMode::DROP
                                       || at_cruise_height),
@@ -603,7 +608,8 @@ MissionCommand MissionController::update(const MissionInput& input) {
             const double speed = high
                 ? config_.high_descent_speed_mps
                 : config_.low_descent_speed_mps;
-            if (!input.platform_valid || !input.pixel_valid) {
+            if (!input.platform_valid || !input.platform_vision_detected
+                || !input.pixel_valid) {
                 if (tracking_loss_start_s_ < 0.0) {
                     tracking_loss_start_s_ = input.now_s;
                 }

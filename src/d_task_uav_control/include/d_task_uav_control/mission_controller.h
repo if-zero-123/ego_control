@@ -90,7 +90,7 @@ struct MissionControllerConfig {
     double tracking_loss_timeout_s = 1.0;
     double descent_timeout_s = 20.0;
     double platform_contact_timeout_s = 8.0;
-    double landing_prediction_timeout_s = 5.0;
+    double landing_prediction_timeout_s = 1.0;
     double landing_visual_handoff_s = 0.25;
     double platform_takeoff_timeout_s = 20.0;
     double return_timeout_s = 35.0;

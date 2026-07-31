@@ -27,9 +27,11 @@ class PixelServoDebugLaunchTests(unittest.TestCase):
         self.assertNotIn("d_task_mission_node", ET.tostring(root, encoding="unicode"))
         self.assertNotIn("ego_bridge", ET.tostring(root, encoding="unicode"))
 
-    def test_default_configuration_disables_legacy_visual_projection(self):
+    def test_default_configuration_uses_apriltag_only_world_projection(self):
         config_path = PACKAGE_ROOT / "config" / "d_task_uav.yaml"
-        self.assertIn("use_visual_projection: false", config_path.read_text())
+        config_text = config_path.read_text()
+        self.assertIn("use_visual_projection: true", config_text)
+        self.assertIn("use_car_measurements: false", config_text)
 
 
 if __name__ == "__main__":

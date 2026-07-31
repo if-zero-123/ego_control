@@ -123,10 +123,10 @@ ID 0-4 联合解算，45mm 中心码负责低段精确对中。公共平台中�
 高空水平伴飞采用外环 PD 速度控制：
 
 ```text
-v_cmd = v_car + Kp * (p_car - p_uav) + Kd * (v_car - v_uav) + vision_trim
+v_cmd = v_tag + Kp * (p_tag - p_uav) + Kd * (v_tag - v_uav) + vision_trim
 ```
 
-其中 `p_car/v_car` 均来自坐标转换后的卡尔曼平台状态。速度指令以 30Hz 通过
+其中 `p_tag/v_tag` 均来自 AprilTag 平台中心投影后的卡尔曼状态。速度指令以 30Hz 通过
 `/ego_bridge/override_cmd` 发送，始终使用 `control_mode=1`；水平目标位置填入
 无人机当前位置，避免桥接层位置环与外部 PD 重复控制，Z 方向仍使用任务目标高度。
 全流程不接入 EGO-Planner，也不启用避障。无人机像素对中连续稳定 1 秒后，网关把本任务的
@@ -140,17 +140,17 @@ DROP 投递只要求外围码融合的平台中心有效、像素/XY/相对速�
 
 `DYNAMIC_LANDING`：起飞、搜索和伴飞后分 0.80m、0.30m 两段下降，
 低段只有 ID 0 真实可见并稳定对中才进入平台接触。中心码因距离过近离开画面后，
-像素修正在 0.25s 内平滑衰减，控制器使用小车实时位姿、平台卡尔曼位置/速度和
-最后视觉校正继续随车下压，单次盲区预测最多 5.0s。桥接层确认下压误差和低垂速
+像素修正在 0.25s 内平滑衰减，控制器只使用最后 AprilTag 卡尔曼位置/速度继续随车
+下压，单次盲区预测最多 1.0s。桥接层确认下压误差和低垂速
 持续成立后锁桨，随车停留 5.20 秒，再预发 setpoint、切 OFFBOARD、解锁，
 恢复 1.50m 高度并返航。接触超时最多自动取消并重试一次。
 
-小车位姿超过 300ms 未更新时，网关关闭动态下降门。高空伴飞在视觉短时丢失、
-但小车位姿仍新鲜时按小车世界坐标继续接近；进入投放下降、动态下降或平台接触后，
-只有已经通过 ID 0 近距对中门的 `LAND_ON_PLATFORM` 可在视觉盲区继续预测下降；
-此前失视会立即停降。预测期间小车位姿过期、安全门关闭或超时会取消降落并爬升重试。
+小车位姿超过 300ms 未更新时，网关仍会关闭动态下降安全门，但小车 X/Y/速度不进入
+水平控制。高空伴飞短时失视时只按最后 AprilTag 状态预测，最多 1.0s；进入动态下降后
+要求新鲜真实标签，只有已经通过 ID 0 近距对中门的 `LAND_ON_PLATFORM` 可在最终视觉
+盲区继续预测下降。预测期间安全门关闭、视觉状态失效或超过 1.0s 会取消降落并爬升重试。
 
-### AprilTag 独立跟随设计（已确认，待本次实现）
+### AprilTag 独立跟随（当前实现）
 
 水平平台跟踪改为只使用 AprilTag：外围码或中心码经过平台布局反推得到平台中心，
 再结合相机内参、相机到机体外参和无人机姿态投影到无人机世界坐标，视觉卡尔曼状态
@@ -173,12 +173,13 @@ X/Y/速度融合。
 无人机任务常调参数集中在
 `src/d_task_uav_control/config/d_task_uav.yaml`：
 
-- `tracking.car_frame_offset_x_m/y_m`：小车 ROS 坐标系到无人机世界系的 X/Y 平移。
-- `tracking.car_frame_yaw_offset_rad`：两个坐标系之间的平面航向旋转。
+- `tracking.use_car_measurements`：当前固定配置为 `false`，小车 X/Y/速度不进入平台滤波。
+- `tracking.car_frame_offset_x_m/y_m`、`car_frame_yaw_offset_rad`：旧融合方案兼容参数；
+  `use_car_measurements=false` 时不生效。
 - 现场把无人机中心放在小车坐标圆点时，无人机本地坐标测得
   `(0.7139167116, -0.3870449346)m`，因此当前平移参数已按原符号写入；
   两边均采用 X 向前、Y 向左，`car_frame_yaw_offset_rad` 保持 `0.0`。
-- `tracking.use_visual_projection`：默认 `false`，避免未标定视觉投影影响小车世界坐标；仅保留旧方案时才开启。
+- `tracking.use_visual_projection`：当前为 `true`，将 AprilTag 平台中心投影到无人机世界系。
 - `tracking.platform_height_m`：平台中心在无人机世界系中的高度。
 - `apriltag.track_filter_alpha/beta`：AprilTag 中心和框的 α-β 滤波权重。
 - `apriltag.layout`：ID 0-4 的尺寸、相对平台中心偏移和朝向。
@@ -202,7 +203,7 @@ X/Y/速度融合。
   PD 修正和总水平速度上限，默认 `0.30m/s`、`0.50m/s`。
 - `mission.follow_max_accel_mps2`：水平速度指令加速度上限，默认 `0.50m/s²`。
 - `mission.vision_trim_max_speed_mps`：AprilTag 平台中心像素细调速度上限，默认 `0.12m/s`。
-- `mission.landing_prediction_timeout_s`：最终接触阶段中心码盲区预测上限，默认 `5.0s`。
+- `mission.landing_prediction_timeout_s`：最终接触阶段中心码盲区预测上限，默认 `1.0s`。
 - `mission.landing_visual_handoff_s`：视觉修正切换到坐标预测的平滑时间，默认 `0.25s`。
 - 对中误差、相对速度、稳定时间、超时、5.20 秒停留和重试次数。
 - `payload.*`：投放执行器预留配置。
@@ -446,8 +447,8 @@ C++ 任务节点三处契约，防止后续再次出现本地二次校验不一�
 平台中心、重投影误差剔除、任务阶段 ID 筛选均已加入。检测入口增加灰度检测、ROI 跟踪、
 每 10 帧全图重捕获、ROI 丢失重捕获、低对比度 CLAHE 回退和亚像素角点；平台中心使用
 alpha-beta 滤波，距离使用低通和跳变剔除。DROP 投递在 `1.50m` 伴飞高度进行，只要求
-外围码融合的平台中心、像素/XY/相对速度对齐并稳定 `1.0s`；中心码在低段丢失后允许结合小车实时位姿、
-速度和最后视觉修正盲区预测降落，预测预算最多 `5.0s`，小车位姿过期或安全门失败立即取消。
+外围码融合的平台中心、像素/XY/相对速度对齐并稳定 `1.0s`；该段是历史实现记录，
+其中小车位姿融合和 `5.0s` 盲区预测已被后续 AprilTag 独立跟随实现替代。
 完整 `catkin_make` 成功；`catkin_make run_tests_d_task_uav_control` 与
 `catkin_test_results build/test_results/d_task_uav_control` 汇总为
 `162 tests, 0 errors, 0 failures, 0 skipped`；完整任务、只读测距和像素调试 launch
@@ -468,3 +469,11 @@ build/test_results/d_task_uav_control` 汇总为 `164 tests, 0 errors, 0 failure
 `d_task_uav_control` 汇总为 `168 tests, 0 errors, 0 failures, 0 skipped`。测试覆盖
 录包命令白名单、启动顺序、录包进程清理及诊断字段契约；未启动真实飞行、相机、
 解锁或投放硬件。
+
+2026-07-31 AprilTag-only 平台跟踪收敛记录：平台世界坐标和速度现在只接受
+AprilTag 五码融合后的视觉投影，小车位姿默认不订阅、不初始化、不校正也不延续平台滤波；
+高空搜索必须由真实 AprilTag 才能锁定，短时丢码只允许最后视觉状态预测 1.0s。
+投递要求真实视觉对中，动态下降要求新鲜真实标签，最终中心码盲区预测上限为 1.0s，
+超时立即悬停并取消降落。新增回归覆盖错误小车坐标、视觉预测超时、搜索锁定和动态下降
+悬停；完整构建成功，`d_task_uav_control` 为 `182 tests, 0 errors, 0 failures, 0 skipped`，
+launch 节点解析通过，未启动真实飞控、相机、解锁或投放硬件。
