@@ -28,14 +28,24 @@ from d_task_protocol.topics import Topics, topic_accepts_message
 
 
 _FOLLOW_ESTABLISHED_STATES = {
-    "DROP": {"DROP_DESCEND", "RELEASE"},
+    "DROP": {"FOLLOW_TAG", "DROP_DESCEND", "RELEASE"},
     "DYNAMIC_LANDING": {
+        "FOLLOW_TAG",
         "DESCEND_HIGH",
         "DESCEND_LOW",
         "LAND_ON_PLATFORM",
         "PLATFORM_HOLD",
     },
 }
+
+_TASK_STATE_ALIASES = {
+    "FOLLOW_TAG": "FOLLOW_CAR",
+}
+
+
+def normalise_task_state(state: str) -> str:
+    """Map local task states onto the existing ground-station protocol."""
+    return _TASK_STATE_ALIASES.get(state, state)
 
 
 def follow_established_after_state(

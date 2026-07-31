@@ -97,7 +97,8 @@ private:
                             forward_search_distance_m_, 1.00);
         private_node_.param("simple_follow/forward_search_reach_radius_m",
                             forward_search_reach_radius_m_, 0.08);
-        private_node_.param("simple_follow/flight_duration_s", flight_duration_s_, 20.0);
+        private_node_.param("simple_follow/search_timeout_s", search_timeout_s_, 20.0);
+        private_node_.param("simple_follow/follow_duration_s", follow_duration_s_, 30.0);
         private_node_.param("simple_follow/pre_land_hover_s", pre_land_hover_s_, 7.0);
         private_node_.param("simple_follow/pid/kp", kp_, 0.35);
         private_node_.param("simple_follow/pid/ki", ki_, 0.0);
@@ -109,9 +110,10 @@ private:
             || odom_timeout_s_ <= 0.0 || tag_timeout_s_ <= 0.0
             || takeoff_retry_s_ <= 0.0 || landing_retry_s_ <= 0.0
             || min_tag_side_px_ <= 0.0 || initial_offset_distance_m_ < 0.0
-            || initial_offset_reach_radius_m_ <= 0.0 || flight_duration_s_ <= 0.0
+            || initial_offset_reach_radius_m_ <= 0.0 || search_timeout_s_ <= 0.0
             || forward_search_distance_m_ < 0.0
-            || forward_search_reach_radius_m_ <= 0.0 || pre_land_hover_s_ < 0.0
+            || forward_search_reach_radius_m_ <= 0.0 || follow_duration_s_ <= 0.0
+            || pre_land_hover_s_ < 0.0
             || tag_id_ < 0 || kp_ < 0.0 || ki_ < 0.0 || kd_ < 0.0
             || deadband_ < 0.0 || integral_limit_ < 0.0
             || max_speed_mps_ <= 0.0) {
@@ -179,6 +181,7 @@ private:
         positioning_ready_ = false;
         started_ = false;
         airborne_start_s_ = -1.0;
+        follow_start_s_ = -1.0;
         hold_start_s_ = -1.0;
         last_land_request_s_ = -1e9;
         resetPid();
@@ -388,6 +391,7 @@ private:
 
     void beginFollowTag(double now_s) {
         state_ = "FOLLOW_TAG";
+        follow_start_s_ = now_s;
         resetPid();
         publishEvent("TAG_FOLLOW_STARTED");
         ROS_INFO("[tag0_follow] tag acquired after %.2fs airborne",
@@ -443,7 +447,7 @@ private:
         if (started_ && state_ == "INITIAL_OFFSET") {
             if (!odomFresh(now_s)) {
                 publishFault(2101, "uav_odometry_stale");
-            } else if (now_s - airborne_start_s_ >= flight_duration_s_) {
+            } else if (now_s - airborne_start_s_ >= search_timeout_s_) {
                 beginPreLandHover(now_s);
             } else if (requestOverrideIfNeeded()) {
                 const double dx = offset_target_x_ - latest_odom_.pose.pose.position.x;
@@ -456,7 +460,7 @@ private:
         } else if (started_ && state_ == "FORWARD_SEARCH") {
             if (!odomFresh(now_s)) {
                 publishFault(2101, "uav_odometry_stale");
-            } else if (now_s - airborne_start_s_ >= flight_duration_s_) {
+            } else if (now_s - airborne_start_s_ >= search_timeout_s_) {
                 beginPreLandHover(now_s);
             } else if (tagFresh(now_s)) {
                 beginFollowTag(now_s);
@@ -473,7 +477,7 @@ private:
         } else if (started_ && state_ == "FOLLOW_TAG") {
             if (!odomFresh(now_s)) {
                 publishFault(2101, "uav_odometry_stale");
-            } else if (now_s - airborne_start_s_ >= flight_duration_s_) {
+            } else if (now_s - follow_start_s_ >= follow_duration_s_) {
                 beginPreLandHover(now_s);
             } else {
                 if (requestOverrideIfNeeded()) {
@@ -579,6 +583,8 @@ private:
         value["forward_search_target_y"] = forward_target_y_;
         value["airborne_elapsed_s"] = airborne_start_s_ < 0.0
             ? 0.0 : now_s - airborne_start_s_;
+        value["follow_elapsed_s"] = follow_start_s_ < 0.0
+            ? 0.0 : now_s - follow_start_s_;
         std_msgs::String message;
         message.data = writeJson(value);
         debug_publisher_.publish(message);
@@ -628,6 +634,7 @@ private:
     double last_takeoff_request_s_ = -1e9;
     double last_land_request_s_ = -1e9;
     double airborne_start_s_ = -1.0;
+    double follow_start_s_ = -1.0;
     double hold_start_s_ = -1.0;
     double home_z_ = 0.0;
     double home_yaw_ = 0.0;
@@ -652,7 +659,8 @@ private:
     double initial_offset_reach_radius_m_ = 0.08;
     double forward_search_distance_m_ = 1.00;
     double forward_search_reach_radius_m_ = 0.08;
-    double flight_duration_s_ = 20.0;
+    double search_timeout_s_ = 20.0;
+    double follow_duration_s_ = 30.0;
     double pre_land_hover_s_ = 7.0;
     double kp_ = 0.35;
     double ki_ = 0.0;

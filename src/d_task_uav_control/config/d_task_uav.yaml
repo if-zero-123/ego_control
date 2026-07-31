@@ -55,10 +55,10 @@ simple_follow:
   forward_search_distance_m: 1.00
   forward_search_reach_radius_m: 0.08
 
-  # The 20-second airborne window includes the diagonal offset and forward
-  # search.  On expiry, hold for seven seconds, then request the bridge's
-  # built-in slow landing (default 0.18 m/s).
-  flight_duration_s: 20.0
+  # Abort the pre-follow path if the diagonal offset and forward search cannot
+  # finish within this window.  Once FOLLOW_TAG starts, use its own timer.
+  search_timeout_s: 20.0
+  follow_duration_s: 30.0
   pre_land_hover_s: 7.0
 
   pid:

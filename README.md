@@ -123,8 +123,9 @@ v_cmd = v_tag + Kp * (p_tag - p_uav) + Kd * (v_tag - v_uav) + vision_trim
 其中 `p_tag/v_tag` 均来自 AprilTag 平台中心投影后的卡尔曼状态。速度指令以 30Hz 通过
 `/ego_bridge/override_cmd` 发送，始终使用 `control_mode=1`；水平目标位置填入
 无人机当前位置，避免桥接层位置环与外部 PD 重复控制，Z 方向仍使用任务目标高度。
-全流程不接入 EGO-Planner，也不启用避障。无人机像素对中连续稳定 1 秒后，网关把本任务的
-`follow_established=true` 持续回传给小车，小车据此从低速切到正常速度。平台中心和
+全流程不接入 EGO-Planner，也不启用避障。当前简化任务识别到 ID 0 并进入
+`FOLLOW_TAG` 后，网关立即把 `follow_established=true` 持续回传给小车，小车据此从
+低速切到正常速度；伴飞从进入 `FOLLOW_TAG` 时独立计时 30 秒。平台中心和
 检测范围先经过 α-β 滤波，码面距离另经低通和跳变门限；瞬间丢码时最多按像素速度
 预测 `0.18s`（30Hz 下约 5 帧），预测置信度随时间衰减。
 DROP 投递只要求外围码融合的平台中心有效、像素/XY/相对速度对准并稳定 `1.0s`；

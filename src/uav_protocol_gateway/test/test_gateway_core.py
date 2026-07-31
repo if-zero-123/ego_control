@@ -32,6 +32,7 @@ from uav_protocol_gateway.gateway_core import (  # noqa: E402
     UavGatewayCore,
     follow_established_after_state,
     normalise_local_event,
+    normalise_task_state,
 )
 
 
@@ -164,12 +165,18 @@ class GatewayCoreTests(unittest.TestCase):
         self.assertFalse(
             follow_established_after_state(False, "DROP", "FOLLOW_CAR"))
         self.assertTrue(
+            follow_established_after_state(False, "DROP", "FOLLOW_TAG"))
+        self.assertTrue(
             follow_established_after_state(False, "DROP", "DROP_DESCEND"))
         self.assertTrue(
             follow_established_after_state(True, "DROP", "RETURN_HOME"))
         self.assertTrue(
             follow_established_after_state(
                 False, "DYNAMIC_LANDING", "DESCEND_HIGH"))
+
+    def test_simple_follow_state_uses_existing_ground_station_state(self):
+        self.assertEqual(normalise_task_state("FOLLOW_TAG"), "FOLLOW_CAR")
+        self.assertEqual(normalise_task_state("FORWARD_SEARCH"), "FORWARD_SEARCH")
 
     def test_duplicate_mission_config_only_emits_duplicate_ack(self):
         first = self.mission_config(command_id="config-duplicate")

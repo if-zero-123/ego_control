@@ -37,6 +37,7 @@ from .gateway_core import (
     UavGatewayCore,
     follow_established_after_state,
     normalise_local_event,
+    normalise_task_state,
 )
 
 
@@ -530,11 +531,12 @@ class UavProtocolGateway:
             if not expected_ids or (mission_id and mission_id not in expected_ids):
                 return
             if state:
-                self.state = self._normalise_state(str(state))
+                local_state = str(state)
+                self.state = self._normalise_state(local_state)
                 self.follow_established = follow_established_after_state(
                     self.follow_established,
                     str(mode or self.mode),
-                    self.state,
+                    local_state,
                 )
                 self.last_task_state_ms = _now_ms()
             if mode in (Mode.DROP.value, Mode.DYNAMIC_LANDING.value):
@@ -767,7 +769,7 @@ class UavProtocolGateway:
 
     @staticmethod
     def _normalise_state(state: str) -> str:
-        value = _EGO_BRIDGE_STATE_MAP.get(state, state)
+        value = normalise_task_state(_EGO_BRIDGE_STATE_MAP.get(state, state))
         return value if value in _UAV_STATES else "READY"
 
     def _default_tracking(self) -> Dict[str, Any]:
