@@ -57,9 +57,9 @@ class MissionConfigSenderContractTests(unittest.TestCase):
 
     def test_drop_search_path_is_takeoff_relative(self):
         for setting in (
-            "initial_offset_distance_m: 0.50",
-            "initial_offset_clockwise_deg: 30.0",
-            "forward_search_distance_m: 1.00",
+            "initial_offset_distance_m: 1.50",
+            "initial_offset_clockwise_deg: 20.0",
+            "forward_search_distance_m: 0.00",
         ):
             self.assertIn(setting, self.mission_config_source)
         self.assertIn("home_yaw_", self.mission_node_source)

@@ -43,6 +43,8 @@ class FixedHeightMissionContractTests(unittest.TestCase):
             self.assertNotIn(removed, self.node)
             self.assertNotIn(removed, self.config)
         self.assertIn("conditionHeld(input.aligned", self.flow)
+        self.assertIn("case FixedHeightDropState::MOVE_TO_SEARCH_START", self.flow)
+        self.assertIn("if (input.tag_detected)", self.flow)
         self.assertIn("config_.release_duration_s", self.flow)
         self.assertIn("conditionHeld(input.home_reached", self.flow)
 
@@ -60,6 +62,9 @@ class FixedHeightMissionContractTests(unittest.TestCase):
 
     def test_payload_and_drop_gate_match_field_configuration(self):
         for setting in (
+            "initial_offset_distance_m: 1.50",
+            "initial_offset_clockwise_deg: 20.0",
+            "forward_search_distance_m: 0.00",
             "drop_alignment_stable_s: 1.00",
             "enabled: true",
             "backend: gpio",
