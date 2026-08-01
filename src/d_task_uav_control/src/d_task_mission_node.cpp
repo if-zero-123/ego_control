@@ -86,6 +86,8 @@ private:
         private_node_.param("simple_follow/odom_timeout_s", odom_timeout_s_, 0.30);
         private_node_.param("simple_follow/tag_timeout_s", tag_timeout_s_, 0.20);
         private_node_.param("simple_follow/takeoff_retry_s", takeoff_retry_s_, 0.50);
+        private_node_.param("simple_follow/takeoff_height_tolerance_m",
+                            takeoff_height_tolerance_m_, 0.10);
         private_node_.param("simple_follow/landing_retry_s", landing_retry_s_, 0.50);
         private_node_.param("simple_follow/platform_request_retry_s",
                             platform_request_retry_s_, 0.50);
@@ -136,7 +138,8 @@ private:
         private_node_.param("simple_follow/pid/max_speed_mps", max_speed_mps_, 0.35);
         if (flight_height_m_ <= 0.0 || control_rate_hz_ < 2.0
             || odom_timeout_s_ <= 0.0 || tag_timeout_s_ <= 0.0
-            || takeoff_retry_s_ <= 0.0 || landing_retry_s_ <= 0.0
+            || takeoff_retry_s_ <= 0.0 || takeoff_height_tolerance_m_ <= 0.0
+            || landing_retry_s_ <= 0.0
             || platform_request_retry_s_ <= 0.0
             || min_tag_side_px_ <= 0.0 || initial_offset_distance_m_ < 0.0
             || initial_offset_reach_radius_m_ <= 0.0 || hover_time_s_ < 3.0
@@ -223,6 +226,7 @@ private:
         state_ = "POSITIONING_INIT";
         positioning_ready_ = false;
         started_ = false;
+        takeoff_accepted_by_bridge_ = false;
         mission_start_s_ = -1.0;
         state_enter_s_ = -1.0;
         follow_start_s_ = -1.0;
@@ -282,6 +286,10 @@ private:
         mission_start_s_ = ros::Time::now().toSec();
         state_enter_s_ = mission_start_s_;
         last_takeoff_request_s_ = -1e9;
+        // A previous mission can leave ego_bridge in HOVER.  That state is not
+        // evidence that this mission has taken off, so require a fresh
+        // PRE_OFFBOARD/TAKEOFF acknowledgement after this start command.
+        takeoff_accepted_by_bridge_ = false;
         publishEvent("MISSION_STARTED");
         publishTaskState();
     }
@@ -301,6 +309,10 @@ private:
 
     void bridgeStateCallback(const std_msgs::String::ConstPtr& message) {
         bridge_state_ = message->data;
+        if (started_ && state_ == "TAKEOFF"
+            && (bridge_state_ == "PRE_OFFBOARD" || bridge_state_ == "TAKEOFF")) {
+            takeoff_accepted_by_bridge_ = true;
+        }
     }
 
     void controlModeCallback(const std_msgs::UInt8::ConstPtr& message) {
@@ -612,15 +624,17 @@ private:
                 ego_api_->requestTakeoffTo(cruiseZ());
                 last_takeoff_request_s_ = now_s;
             }
-            if (bridge_state_ == "HOVER") {
-                if (!odomFresh(now_s)) {
-                    publishFault(2101, "uav_odometry_stale");
-                } else {
-                    home_x_ = latest_odom_.pose.pose.position.x;
-                    home_y_ = latest_odom_.pose.pose.position.y;
-                    home_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
-                    setState("HOVER_3S", now_s, "CRUISE_HOVER_STARTED");
-                }
+            const double altitude_error = std::abs(
+                latest_odom_.pose.pose.position.z - cruiseZ());
+            if (takeoff_accepted_by_bridge_ && bridge_state_ == "HOVER"
+                && odomFresh(now_s)
+                && altitude_error <= takeoff_height_tolerance_m_) {
+                home_x_ = latest_odom_.pose.pose.position.x;
+                home_y_ = latest_odom_.pose.pose.position.y;
+                home_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
+                setState("HOVER_3S", now_s, "CRUISE_HOVER_STARTED");
+            } else if (!odomFresh(now_s)) {
+                publishFault(2101, "uav_odometry_stale");
             }
         } else if (started_ && state_ == "HOVER_3S") {
             if (!odomFresh(now_s)) {
@@ -970,6 +984,7 @@ private:
     bool tag_found_ = false;
     bool positioning_ready_ = false;
     bool started_ = false;
+    bool takeoff_accepted_by_bridge_ = false;
     bool initial_offset_pending_ = true;
     bool payload_released_ = false;
     bool payload_release_active_ = false;
@@ -1010,6 +1025,7 @@ private:
     double odom_timeout_s_ = 0.30;
     double tag_timeout_s_ = 0.20;
     double takeoff_retry_s_ = 0.50;
+    double takeoff_height_tolerance_m_ = 0.10;
     double landing_retry_s_ = 0.50;
     double platform_request_retry_s_ = 0.50;
     double min_tag_side_px_ = 8.0;

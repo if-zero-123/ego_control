@@ -38,6 +38,16 @@ class CompetitionMissionContractTests(unittest.TestCase):
         self.assertIn("hover_time_s: 3.0", self.config)
         self.assertIn("drop_min_follow_s: 1.5", self.config)
 
+    def test_new_mission_does_not_accept_stale_hover_as_takeoff_complete(self):
+        for symbol in (
+            "takeoff_accepted_by_bridge_",
+            'bridge_state_ == "PRE_OFFBOARD"',
+            'bridge_state_ == "TAKEOFF"',
+            "takeoff_height_tolerance_m_",
+        ):
+            self.assertIn(symbol, self.node)
+        self.assertIn("takeoff_height_tolerance_m: 0.10", self.config)
+
     def test_restores_payload_return_and_terminal_protocol(self):
         for symbol in (
             '"PAYLOAD_RELEASE_STARTED"',

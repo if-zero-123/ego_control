@@ -46,6 +46,9 @@ simple_follow:
   odom_timeout_s: 0.30
   tag_timeout_s: 0.20
   takeoff_retry_s: 0.50
+  # A new mission must observe a fresh bridge takeoff acknowledgement and
+  # reach this altitude tolerance before entering HOVER_3S.
+  takeoff_height_tolerance_m: 0.10
   landing_retry_s: 0.50
   platform_request_retry_s: 0.50
   min_tag_side_px: 8.0
