@@ -1,0 +1,20 @@
+[Unit]
+Description=D-task UAV ROS mission stack
+Requires=d-task-uav-wifi.service
+After=d-task-uav-wifi.service
+
+[Service]
+Type=simple
+User=orangepi
+Group=orangepi
+WorkingDirectory=/home/orangepi/catkin_ws
+Environment=HOME=/home/orangepi
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/orangepi/catkin_ws/src/ego_control/src/d_task_uav_control/scripts/d_task_uav_autostart.sh
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target

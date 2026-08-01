@@ -7,6 +7,21 @@ MQTT Broker 运行在小车 `192.168.0.198`，图形地面站运行在本机
 
 ## 启动顺序
 
+## 开机自启动
+
+小车和无人机均保存了 `316` 的 NetworkManager 配置。开机服务会先等待
+`wlan0` 成功连接该网络，再启动任务后端；服务只拉起通信、传感器和任务节点，
+不会自行发布起飞或小车启动指令。
+
+无人机使用 `d-task-uav-wifi.service` 和 `d-task-uav-autostart.service`，
+不要启用旧的 `craic-autostart.service`，后者启动的是其他比赛的 Web 控制栈。
+现场查看状态和日志：
+
+```bash
+sudo systemctl status d-task-uav-autostart.service
+journalctl -u d-task-uav-autostart.service -f
+```
+
 1. 启动 PX4、MAVROS，并确认 `/mavros/state`、
    `/mavros/local_position/odom` 正常。
 2. MID360 驱动只启动一次并保持常驻：

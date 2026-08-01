@@ -1,0 +1,13 @@
+[Unit]
+Description=D-task UAV Wi-Fi 316 readiness
+Wants=NetworkManager.service network-online.target
+After=NetworkManager.service network-online.target
+Before=d-task-uav-autostart.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/orangepi/catkin_ws/src/ego_control/src/d_task_uav_control/scripts/wait_for_316.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
