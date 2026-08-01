@@ -154,7 +154,7 @@ class CompetitionMissionContractTests(unittest.TestCase):
             'search_speed_mps * dy / distance',
         ):
             self.assertIn(symbol, self.node)
-        self.assertIn('drop_search_speed_mps: 0.45', self.config)
+        self.assertIn('drop_search_speed_mps: 0.40', self.config)
         self.assertIn('dynamic_search_speed_mps: 0.73', self.config)
         search_loop = self.node[self.node.index('state_ == "SEARCH_CAR"'):
                                 self.node.index('state_ == "FOLLOW_CAR"')]
