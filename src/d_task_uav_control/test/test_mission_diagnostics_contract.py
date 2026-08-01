@@ -46,7 +46,7 @@ class CompetitionMissionContractTests(unittest.TestCase):
             "takeoff_height_tolerance_m_",
         ):
             self.assertIn(symbol, self.node)
-        self.assertIn("takeoff_height_tolerance_m: 0.10", self.config)
+        self.assertIn("takeoff_height_tolerance_m: 0.16", self.config)
 
     def test_restores_payload_return_and_terminal_protocol(self):
         for symbol in (
@@ -154,8 +154,8 @@ class CompetitionMissionContractTests(unittest.TestCase):
             'search_speed_mps * dy / distance',
         ):
             self.assertIn(symbol, self.node)
-        self.assertIn('drop_search_speed_mps: 0.50', self.config)
-        self.assertIn('dynamic_search_speed_mps: 0.40', self.config)
+        self.assertIn('drop_search_speed_mps: 0.45', self.config)
+        self.assertIn('dynamic_search_speed_mps: 0.73', self.config)
         search_loop = self.node[self.node.index('state_ == "SEARCH_CAR"'):
                                 self.node.index('state_ == "FOLLOW_CAR"')]
         self.assertNotIn('offset_target_x_, offset_target_y_, cruiseZ(), home_yaw_',
