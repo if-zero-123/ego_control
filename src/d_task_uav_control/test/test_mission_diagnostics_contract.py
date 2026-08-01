@@ -111,6 +111,18 @@ class CompetitionMissionContractTests(unittest.TestCase):
             self.node,
         )
 
+    def test_dynamic_landing_search_uses_035_mps_velocity_and_acquires_tag_in_motion(self):
+        for symbol in (
+            'simple_follow/dynamic_search_speed_mps',
+            'dynamic_search_speed_mps_',
+            'if (!isDropMode() && tagFresh(now_s))',
+            'DYNAMIC_TAG_ACQUIRED_DURING_SEARCH',
+            'dynamic_search_speed_mps_ * dx / distance',
+            'dynamic_search_speed_mps_ * dy / distance',
+        ):
+            self.assertIn(symbol, self.node)
+        self.assertIn('dynamic_search_speed_mps: 0.35', self.config)
+
 
 if __name__ == "__main__":
     unittest.main()

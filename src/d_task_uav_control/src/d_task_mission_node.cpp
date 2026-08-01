@@ -99,6 +99,8 @@ private:
                             initial_offset_clockwise_deg_, 20.0);
         private_node_.param("simple_follow/initial_offset_reach_radius_m",
                             initial_offset_reach_radius_m_, 0.08);
+        private_node_.param("simple_follow/dynamic_search_speed_mps",
+                            dynamic_search_speed_mps_, 0.35);
         private_node_.param("simple_follow/hover_time_s", hover_time_s_, 3.0);
         private_node_.param("simple_follow/mission_timeout_s", mission_timeout_s_, 80.0);
         private_node_.param("simple_follow/vision_acquire_timeout_s",
@@ -143,6 +145,7 @@ private:
             || platform_request_retry_s_ <= 0.0
             || min_tag_side_px_ <= 0.0 || initial_offset_distance_m_ < 0.0
             || initial_offset_reach_radius_m_ <= 0.0 || hover_time_s_ < 3.0
+            || dynamic_search_speed_mps_ <= 0.0
             || mission_timeout_s_ <= hover_time_s_ || vision_acquire_timeout_s_ <= 0.0
             || home_reach_radius_m_ <= 0.0 || state_settle_time_s_ < 0.0
             || alignment_tolerance_norm_ <= 0.0 || alignment_tolerance_norm_ > 1.0
@@ -669,10 +672,29 @@ private:
                 // Wait for the bridge to acknowledge OVERRIDE before sending a
                 // competition command to the moving platform.
             } else if (initial_offset_pending_) {
-                sendPositionCommand(offset_target_x_, offset_target_y_, cruiseZ(), home_yaw_);
                 const double dx = offset_target_x_ - latest_odom_.pose.pose.position.x;
                 const double dy = offset_target_y_ - latest_odom_.pose.pose.position.y;
-                if (std::hypot(dx, dy) <= initial_offset_reach_radius_m_) {
+                const double distance = std::hypot(dx, dy);
+                if (!isDropMode() && tagFresh(now_s)) {
+                    follow_start_s_ = now_s;
+                    resetPid();
+                    publishEvent("DYNAMIC_TAG_ACQUIRED_DURING_SEARCH");
+                    setState("FOLLOW_CAR", now_s, "FOLLOW_CAR_ESTABLISHED");
+                } else if (isDropMode()) {
+                    sendPositionCommand(
+                        offset_target_x_, offset_target_y_, cruiseZ(), home_yaw_);
+                } else if (distance > initial_offset_reach_radius_m_) {
+                    const double search_vx = dynamic_search_speed_mps_ * dx / distance;
+                    const double search_vy = dynamic_search_speed_mps_ * dy / distance;
+                    sendPositionCommand(
+                        latest_odom_.pose.pose.position.x,
+                        latest_odom_.pose.pose.position.y,
+                        cruiseZ(), home_yaw_, search_vx, search_vy);
+                } else {
+                    holdAtCurrent(cruiseZ());
+                }
+                if (state_ == "SEARCH_CAR"
+                    && distance <= initial_offset_reach_radius_m_) {
                     initial_offset_pending_ = false;
                     state_enter_s_ = now_s;
                     publishEvent("SEARCH_OFFSET_REACHED");
@@ -1093,6 +1115,7 @@ private:
     double initial_offset_distance_m_ = 0.50;
     double initial_offset_clockwise_deg_ = 20.0;
     double initial_offset_reach_radius_m_ = 0.08;
+    double dynamic_search_speed_mps_ = 0.35;
     double hover_time_s_ = 3.0;
     double mission_timeout_s_ = 80.0;
     double vision_acquire_timeout_s_ = 20.0;
