@@ -129,6 +129,9 @@ class CompetitionMissionContractTests(unittest.TestCase):
             '"DESCEND_BLIND"',
             '"DYNAMIC_DESCENT_TAG_LOST_FINAL_SLOW"',
             '"DYNAMIC_PLATFORM_LANDED_SPEED_UP"',
+            '"DYNAMIC_PLATFORM_TAKEOFF_MEDIUM_SPEED"',
+            '"DYNAMIC_CLIMB_REACHED_0P65_FAST_SPEED"',
+            'dynamic_speed_up_height_m_',
             'blind_descent_x_',
             'platformZ() - landing_press_depth_m_',
         ):

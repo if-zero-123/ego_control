@@ -137,6 +137,8 @@ private:
                             landing_vertical_speed_mps_, 0.12);
         private_node_.param("simple_follow/landing_height_tolerance_m",
                             landing_height_tolerance_m_, 0.05);
+        private_node_.param("simple_follow/dynamic_speed_up_height_m",
+                            dynamic_speed_up_height_m_, 0.65);
         private_node_.param("simple_follow/platform_hold_s", platform_hold_s_, 5.0);
         private_node_.param("simple_follow/platform_contact_timeout_s",
                             platform_contact_timeout_s_, 12.0);
@@ -164,7 +166,8 @@ private:
             || alignment_hold_s_ < 0.0 || drop_min_follow_s_ < 0.0
             || payload_release_pulse_s_ <= 0.0 || landing_approach_height_m_ <= 0.0
             || landing_press_depth_m_ < 0.0 || landing_vertical_speed_mps_ <= 0.0
-            || landing_height_tolerance_m_ <= 0.0 || platform_hold_s_ < 5.0
+            || landing_height_tolerance_m_ <= 0.0 || dynamic_speed_up_height_m_ <= 0.0
+            || dynamic_speed_up_height_m_ > flight_height_m_ || platform_hold_s_ < 5.0
             || platform_contact_timeout_s_ <= 0.0 || platform_takeoff_timeout_s_ <= 0.0
             || tag_id_ < 0 || kp_ < 0.0 || ki_ < 0.0 || kd_ < 0.0
             || deadband_ < 0.0 || integral_limit_ < 0.0
@@ -260,6 +263,7 @@ private:
         last_platform_request_s_ = -1e9;
         payload_released_ = false;
         payload_release_active_ = false;
+        dynamic_fast_profile_event_sent_ = false;
         initial_offset_pending_ = true;
         mission_failed_ = false;
         resetPid();
@@ -839,19 +843,29 @@ private:
             } else if (now_s - platform_hold_start_s_ >= platform_hold_s_) {
                 platform_takeoff_start_s_ = now_s;
                 last_platform_request_s_ = -1e9;
-                setState("PLATFORM_TAKEOFF", now_s, "PLATFORM_TAKEOFF_STARTED");
+                setState("PLATFORM_TAKEOFF", now_s,
+                         "DYNAMIC_PLATFORM_TAKEOFF_MEDIUM_SPEED");
                 requestPlatformTakeoff(now_s);
             }
         } else if (started_ && state_ == "PLATFORM_TAKEOFF") {
-            if (bridge_state_ == "HOVER") {
-                beginReturnHome(now_s, "PLATFORM_TAKEOFF_COMPLETE_RETURN_HOME");
-            } else if (!odomFresh(now_s)) {
+            if (!odomFresh(now_s)) {
                 publishFault(2101, "uav_odometry_stale");
-            } else if (now_s - platform_takeoff_start_s_ > platform_takeoff_timeout_s_) {
-                mission_failed_ = true;
-                publishFault(2204, "platform_takeoff_timeout");
-                setState("ABORT", now_s, "PLATFORM_TAKEOFF_ABORT");
             } else {
+                const double height_above_home =
+                    latest_odom_.pose.pose.position.z - home_z_;
+                if (!dynamic_fast_profile_event_sent_
+                    && height_above_home >= dynamic_speed_up_height_m_) {
+                    dynamic_fast_profile_event_sent_ = true;
+                    publishEvent("DYNAMIC_CLIMB_REACHED_0P65_FAST_SPEED");
+                }
+                if (bridge_state_ == "HOVER") {
+                    beginReturnHome(now_s, "PLATFORM_TAKEOFF_COMPLETE_RETURN_HOME");
+                } else if (now_s - platform_takeoff_start_s_
+                           > platform_takeoff_timeout_s_) {
+                    mission_failed_ = true;
+                    publishFault(2204, "platform_takeoff_timeout");
+                    setState("ABORT", now_s, "PLATFORM_TAKEOFF_ABORT");
+                } else {
                 const double yaw = yawFromQuaternion(
                     latest_odom_.pose.pose.orientation);
                 if (tagFresh(now_s)) {
@@ -867,7 +881,8 @@ private:
                                     latest_odom_.pose.pose.position.y,
                                     cruiseZ(), yaw, command_vx, command_vy,
                                     0.0);
-                requestPlatformTakeoff(now_s);
+                    requestPlatformTakeoff(now_s);
+                }
             }
         } else if (started_ && state_ == "CLIMB_TO_CRUISE") {
             if (!odomFresh(now_s)) {
@@ -1129,6 +1144,7 @@ private:
     bool initial_offset_pending_ = true;
     bool payload_released_ = false;
     bool payload_release_active_ = false;
+    bool dynamic_fast_profile_event_sent_ = false;
     bool mission_failed_ = false;
     bool px4_landed_ = false;
     bool return_setpoint_initialized_ = false;
@@ -1200,6 +1216,7 @@ private:
     double landing_press_depth_m_ = 0.07;
     double landing_vertical_speed_mps_ = 0.12;
     double landing_height_tolerance_m_ = 0.05;
+    double dynamic_speed_up_height_m_ = 0.65;
     double platform_hold_s_ = 5.0;
     double platform_contact_timeout_s_ = 12.0;
     double platform_takeoff_timeout_s_ = 12.0;

@@ -99,6 +99,9 @@ simple_follow:
   landing_press_depth_m: 0.07
   landing_vertical_speed_mps: 0.12
   landing_height_tolerance_m: 0.05
+  # After the five-second platform hold, the car returns to medium speed.
+  # It returns to fast speed once this climb height above mission home is reached.
+  dynamic_speed_up_height_m: 0.65
   platform_hold_s: 5.0
   platform_contact_timeout_s: 12.0
   platform_takeoff_timeout_s: 12.0
