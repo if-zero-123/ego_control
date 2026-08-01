@@ -81,7 +81,7 @@ simple_follow:
 
   # A release is allowed only after the centred tag has remained stable while
   # following.  The output is a single active pulse on topics.payload_release.
-  alignment_tolerance_norm: 0.10
+  alignment_tolerance_norm: 0.135
   alignment_hold_s: 0.50
   drop_min_follow_s: 1.5
   payload_release_pulse_s: 0.70

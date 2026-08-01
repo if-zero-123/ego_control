@@ -93,7 +93,7 @@ class CompetitionMissionContractTests(unittest.TestCase):
 
     def test_payload_and_drop_gate_match_field_configuration(self):
         for setting in (
-            "alignment_tolerance_norm: 0.10",
+            "alignment_tolerance_norm: 0.135",
             "alignment_hold_s: 0.50",
             "drop_min_follow_s: 1.5",
             "payload_release_pulse_s: 0.70",
