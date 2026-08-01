@@ -24,4 +24,5 @@ wait_for_mqtt_broker() {
 }
 
 wait_for_mqtt_broker
+export D_TASK_AUTOSTART_NONINTERACTIVE=true
 exec "$mission_script" --mqtt-host "$broker_host" --mqtt-port "$broker_port"

@@ -137,6 +137,10 @@ skip_mqtt_check="${D_TASK_SKIP_MQTT_CHECK:-false}"
 for setup_file in "$ros_setup" "$positioning_setup" "$catkin_setup"; do
   [[ -r "$setup_file" ]] || die "找不到环境文件：$setup_file"
 done
+# ROS Noetic setup hooks read optional variables without defaults.  The
+# systemd launcher intentionally uses nounset, so suspend it only while
+# importing those generated environment files.
+set +u
 # shellcheck disable=SC1090
 source "$ros_setup"
 # shellcheck disable=SC1090
@@ -144,6 +148,7 @@ source "$positioning_setup"
 # 保留定位工作空间，使 livox_ros_driver2 与当前任务包同时可见。
 # shellcheck disable=SC1090
 source "$catkin_setup" --extend
+set -u
 
 for required_command in roscore roslaunch rosnode rostopic rosbag setsid timeout; do
   command -v "$required_command" >/dev/null 2>&1 \
