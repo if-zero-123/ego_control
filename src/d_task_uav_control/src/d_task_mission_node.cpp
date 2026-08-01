@@ -10,6 +10,8 @@
 #include <geometry_msgs/PointStamped.h>
 #include <image_transport/image_transport.h>
 #include <json/json.h>
+#include <mavros_msgs/ExtendedState.h>
+#include <mavros_msgs/SetMode.h>
 #include <nav_msgs/Odometry.h>
 #include <opencv2/aruco.hpp>
 #include <opencv2/imgproc.hpp>
@@ -179,6 +181,9 @@ private:
         odom_subscriber_ = node_.subscribe(
             topic("px4_odom", "/mavros/local_position/odom"), 5,
             &Tag0FixedHeightFollowNode::odomCallback, this);
+        px4_extended_state_subscriber_ = node_.subscribe(
+            topic("px4_extended_state", "/mavros/extended_state"), 5,
+            &Tag0FixedHeightFollowNode::px4ExtendedStateCallback, this);
         bridge_state_subscriber_ = node_.subscribe(
             topic("bridge_state", "/ego_bridge/flight_state"), 5,
             &Tag0FixedHeightFollowNode::bridgeStateCallback, this);
@@ -188,6 +193,8 @@ private:
         image_subscriber_ = image_transport_.subscribe(
             topic("image", "/usb_camera_vision/usb_cam/image_raw"), 1,
             &Tag0FixedHeightFollowNode::imageCallback, this);
+        px4_set_mode_client_ = node_.serviceClient<mavros_msgs::SetMode>(
+            topic("px4_set_mode", "/mavros/set_mode"));
     }
 
     void advertiseTopics() {
@@ -236,6 +243,10 @@ private:
         platform_takeoff_start_s_ = -1.0;
         return_setpoint_initialized_ = false;
         return_setpoint_stamp_ = ros::Time(0);
+        last_px4_auto_land_request_s_ = -1e9;
+        px4_auto_land_accepted_s_ = -1.0;
+        px4_landed_ = false;
+        last_px4_extended_state_s_ = -1.0;
         last_platform_request_s_ = -1e9;
         payload_released_ = false;
         payload_release_active_ = false;
@@ -295,6 +306,13 @@ private:
         latest_odom_ = *message;
         has_odom_ = true;
         last_odom_s_ = ros::Time::now().toSec();
+    }
+
+    void px4ExtendedStateCallback(
+        const mavros_msgs::ExtendedState::ConstPtr& message) {
+        px4_landed_ = message->landed_state
+            == mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND;
+        last_px4_extended_state_s_ = ros::Time::now().toSec();
     }
 
     void bridgeStateCallback(const std_msgs::String::ConstPtr& message) {
@@ -549,6 +567,23 @@ private:
         resetPid();
         setState("DESCEND_BLIND", now_s,
                  "DYNAMIC_DESCENT_TAG_LOST_FINAL_SLOW");
+    }
+
+    bool requestPx4AutoLand(double now_s) {
+        mavros_msgs::SetMode request;
+        request.request.base_mode = 0;
+        request.request.custom_mode = "AUTO.LAND";
+        last_px4_auto_land_request_s_ = now_s;
+        if (!px4_set_mode_client_.call(request)
+            || !request.response.mode_sent) {
+            publishFault(2205, "px4_auto_land_mode_rejected");
+            return false;
+        }
+        if (px4_auto_land_accepted_s_ < 0.0) {
+            px4_auto_land_accepted_s_ = now_s;
+            publishEvent("PX4_AUTO_LAND_REQUESTED");
+        }
+        return true;
     }
 
     void requestPlatformLanding(double now_s) {
@@ -877,20 +912,23 @@ private:
                 if (distance <= home_reach_radius_m_
                     && std::abs(latest_odom_.pose.pose.position.z - cruiseZ())
                         <= landing_height_tolerance_m_) {
-                    setState("LAND_HOME", now_s,
-                             "HOME_REACHED_BRIDGE_LIMITED_LAND");
-                    // ego_bridge keeps the current home XY and descends at its
-                    // configured landing speed instead of handing descent to PX4.
-                    ego_api_->requestLand();
-                    publishEvent("BRIDGE_LIMITED_LAND_REQUESTED");
+                    setState("LAND_HOME", now_s, "HOME_REACHED_PX4_AUTO_LAND");
+                    // Stop OVERRIDE commands before PX4 takes ownership of
+                    // the final descent and landing.
+                    ego_api_->requestOverrideMode(false);
+                    requestPx4AutoLand(now_s);
                 }
             }
         } else if (started_ && state_ == "LAND_HOME") {
-            if (bridge_state_ == "IDLE") {
+            if (px4_auto_land_accepted_s_ >= 0.0 && px4_landed_
+                && last_px4_extended_state_s_ >= px4_auto_land_accepted_s_) {
                 setState(mission_failed_ ? "ABORT" : "COMPLETE", now_s,
                          mission_failed_ ? "MISSION_ABORTED" : "MISSION_COMPLETE");
-            } else if (bridge_state_ == "HOVER" || bridge_state_ == "TRACKING") {
-                ego_api_->requestLand();
+            } else {
+                ego_api_->requestOverrideMode(false);
+                if (now_s - last_px4_auto_land_request_s_ >= landing_retry_s_) {
+                    requestPx4AutoLand(now_s);
+                }
             }
         }
 
@@ -1031,6 +1069,7 @@ private:
     ros::Subscriber mission_start_subscriber_;
     ros::Subscriber positioning_subscriber_;
     ros::Subscriber odom_subscriber_;
+    ros::Subscriber px4_extended_state_subscriber_;
     ros::Subscriber bridge_state_subscriber_;
     ros::Subscriber control_mode_subscriber_;
     ros::Publisher task_state_publisher_;
@@ -1042,6 +1081,7 @@ private:
     ros::Publisher tag_center_publisher_;
     ros::Publisher payload_release_publisher_;
     ros::Publisher debug_publisher_;
+    ros::ServiceClient px4_set_mode_client_;
     ros::Timer control_timer_;
 
     std::string bridge_namespace_;
@@ -1061,6 +1101,7 @@ private:
     bool payload_released_ = false;
     bool payload_release_active_ = false;
     bool mission_failed_ = false;
+    bool px4_landed_ = false;
     bool return_setpoint_initialized_ = false;
     uint8_t control_mode_ = 0;
     unsigned int image_width_ = 0;
@@ -1069,6 +1110,9 @@ private:
     double last_odom_s_ = -1.0;
     double last_tag_s_ = -1.0;
     double last_takeoff_request_s_ = -1e9;
+    double last_px4_auto_land_request_s_ = -1e9;
+    double px4_auto_land_accepted_s_ = -1.0;
+    double last_px4_extended_state_s_ = -1.0;
     double last_platform_request_s_ = -1e9;
     ros::Time return_setpoint_stamp_;
     double mission_start_s_ = -1.0;

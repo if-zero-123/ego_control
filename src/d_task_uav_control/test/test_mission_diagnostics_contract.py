@@ -74,16 +74,22 @@ class CompetitionMissionContractTests(unittest.TestCase):
         self.assertNotIn("return_vx", return_loop)
         self.assertNotIn("return_vy", return_loop)
 
-    def test_home_landing_uses_bridge_limited_descent(self):
+    def test_home_landing_requests_px4_auto_land_and_waits_for_feedback(self):
         for symbol in (
-            '"HOME_REACHED_BRIDGE_LIMITED_LAND"',
-            '"BRIDGE_LIMITED_LAND_REQUESTED"',
-            'ego_api_->requestLand();',
-            'bridge_state_ == "IDLE"',
+            '#include <mavros_msgs/ExtendedState.h>',
+            '#include <mavros_msgs/SetMode.h>',
+            'topic("px4_set_mode", "/mavros/set_mode")',
+            'request.request.custom_mode = "AUTO.LAND"',
+            '"HOME_REACHED_PX4_AUTO_LAND"',
+            '"PX4_AUTO_LAND_REQUESTED"',
+            'mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND',
+            'last_px4_extended_state_s_ >= px4_auto_land_accepted_s_',
         ):
             self.assertIn(symbol, self.node)
-        self.assertNotIn('request.request.custom_mode = "AUTO.LAND"', self.node)
-        self.assertNotIn('px4_set_mode: /mavros/set_mode', self.config)
+        self.assertNotIn('"HOME_REACHED_BRIDGE_LIMITED_LAND"', self.node)
+        self.assertNotIn('ego_api_->requestLand();', self.node)
+        self.assertIn('px4_extended_state: /mavros/extended_state', self.config)
+        self.assertIn('px4_set_mode: /mavros/set_mode', self.config)
 
     def test_payload_and_drop_gate_match_field_configuration(self):
         for setting in (
