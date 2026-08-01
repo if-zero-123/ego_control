@@ -33,6 +33,9 @@ class PlatformLandingContractTests(unittest.TestCase):
                              node.index("void runPlatformLanded")]
         self.assertNotIn("setAutoLandMode", platform_loop)
         self.assertIn("forceDisarmDrone()", platform_loop)
+        self.assertNotIn("position_error_z", platform_loop)
+        self.assertNotIn("platform_land_pos_deviation", platform_loop)
+        self.assertNotIn("platform_min_landing_detect_time", node)
 
 
 if __name__ == "__main__":

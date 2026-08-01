@@ -96,18 +96,14 @@ landing:
 
 # ====================== 4.1 移动平台着陆 ======================
 platform_landing:
-  # 开始平台接触阶段后，至少等待该时间才允许判定触地
-  min_detect_time: 0.5
-  # 下压目标相对实际高度的阈值，必须为负值
-  land_pos_deviation: -0.06
   # 触地时允许的最大垂直速度绝对值
   land_vel_threshold: 0.10
-  # 下压且低垂速持续时间
+  # 低垂速持续时间
   land_hold_time: 0.8
   # 无人机静置在小车平台上时的 Fast-LIO 机体高度。
   contact_height_m: 0.20299748653883895
   # 接触高度判定允许的里程计误差。
-  contact_height_tolerance_m: 0.03
+  contact_height_tolerance_m: 0.15
 
 platform_takeoff:
   # 平台重新解锁后先低目标预热，避免直接跳到巡航高度

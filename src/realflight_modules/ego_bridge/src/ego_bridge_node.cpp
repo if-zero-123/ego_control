@@ -109,8 +109,6 @@ struct Params {
     double land_hold_time;           // 着陆检测：条件持续满足多久判定着陆(秒)
 
     // ── 移动平台降落/再起飞参数 ──
-    double platform_min_landing_detect_time;
-    double platform_land_pos_deviation;
     double platform_land_vel_threshold;
     double platform_land_hold_time;
     double platform_contact_height_m;
@@ -165,10 +163,6 @@ struct Params {
         nh.param("landing/land_vel_threshold",  land_vel_threshold,     0.08);
         nh.param("landing/land_hold_time",      land_hold_time,         1.0);
 
-        nh.param("platform_landing/min_detect_time",
-                 platform_min_landing_detect_time, 0.5);
-        nh.param("platform_landing/land_pos_deviation",
-                 platform_land_pos_deviation, -0.06);
         nh.param("platform_landing/land_vel_threshold",
                  platform_land_vel_threshold, 0.10);
         nh.param("platform_landing/land_hold_time",
@@ -329,8 +323,7 @@ private:
     bool            land_detect_active_ = false; // 着陆检测是否激活
 
     // ── 移动平台降落/再起飞状态 ──
-    ego_bridge::PlatformLandingDetector platform_contact_detector_{
-        0.5, -0.06, 0.10, 0.8};
+    ego_bridge::PlatformLandingDetector platform_contact_detector_{0.10, 0.8};
     ros::Time platform_landing_start_time_;
     geometry_msgs::PoseStamped platform_takeoff_target_;
     double platform_takeoff_target_z_ = 0.0;
@@ -658,8 +651,6 @@ private:
         control_mode_ = 1;
         platform_landing_start_time_ = ros::Time::now();
         platform_contact_detector_ = ego_bridge::PlatformLandingDetector(
-            params_.platform_min_landing_detect_time,
-            params_.platform_land_pos_deviation,
             params_.platform_land_vel_threshold,
             params_.platform_land_hold_time);
         platform_force_disarm_last_try_time_ = ros::Time(0);
@@ -1251,10 +1242,8 @@ private:
     }
 
     void runPlatformLanding(const ros::Time& now) {
-        double commanded_z = odom_pos_.z();
         if (overrideCommandFresh(now)) {
             pub_setpoint_.publish(fullTrackingSetpoint(override_cmd_));
-            commanded_z = override_cmd_.position.z;
         } else {
             pub_setpoint_.publish(posOnlySetpoint(odom_pos_, odom_yaw_));
             ROS_WARN_THROTTLE(
@@ -1263,7 +1252,6 @@ private:
         }
 
         const double elapsed = (now - platform_landing_start_time_).toSec();
-        const double position_error_z = commanded_z - odom_pos_.z();
         const bool at_contact_height =
             std::abs(odom_pos_.z() - params_.platform_contact_height_m)
             <= params_.platform_contact_height_tolerance_m;
@@ -1271,8 +1259,7 @@ private:
             platform_contact_detector_.reset();
             return;
         }
-        if (platform_contact_detector_.update(
-                elapsed, position_error_z, odom_vel_.z())) {
+        if (platform_contact_detector_.update(elapsed, odom_vel_.z())) {
             if ((now - platform_force_disarm_last_try_time_).toSec() < 1.0) {
                 return;
             }

@@ -7,21 +7,14 @@ namespace ego_bridge {
 
 class PlatformLandingDetector {
 public:
-    PlatformLandingDetector(double minimum_detection_time_s,
-                            double position_error_threshold_m,
-                            double vertical_speed_threshold_mps,
+    PlatformLandingDetector(double vertical_speed_threshold_mps,
                             double hold_time_s)
-        : minimum_detection_time_s_(minimum_detection_time_s),
-          position_error_threshold_m_(position_error_threshold_m),
-          vertical_speed_threshold_mps_(vertical_speed_threshold_mps),
+        : vertical_speed_threshold_mps_(vertical_speed_threshold_mps),
           hold_time_s_(hold_time_s) {}
 
-    bool update(double elapsed_s, double position_error_z_m,
-                double vertical_speed_mps) {
+    bool update(double elapsed_s, double vertical_speed_mps) {
         const bool contact_condition =
-            elapsed_s >= minimum_detection_time_s_
-            && position_error_z_m < position_error_threshold_m_
-            && std::abs(vertical_speed_mps) < vertical_speed_threshold_mps_;
+            std::abs(vertical_speed_mps) < vertical_speed_threshold_mps_;
         if (!contact_condition) {
             active_ = false;
             return false;
@@ -40,8 +33,6 @@ public:
     }
 
 private:
-    double minimum_detection_time_s_;
-    double position_error_threshold_m_;
     double vertical_speed_threshold_mps_;
     double hold_time_s_;
     bool active_ = false;
