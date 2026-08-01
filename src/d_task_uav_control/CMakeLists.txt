@@ -8,6 +8,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   ego_api
   image_transport
+  mavros_msgs
   nav_msgs
   roscpp
   rospy
@@ -20,7 +21,7 @@ find_package(jsoncpp REQUIRED)
 catkin_python_setup()
 
 catkin_package(
-  CATKIN_DEPENDS cv_bridge ego_api image_transport nav_msgs roscpp rospy sensor_msgs std_msgs
+  CATKIN_DEPENDS cv_bridge ego_api image_transport mavros_msgs nav_msgs roscpp rospy sensor_msgs std_msgs
   DEPENDS OpenCV
 )
 

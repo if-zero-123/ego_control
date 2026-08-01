@@ -50,6 +50,22 @@ class CompetitionMissionContractTests(unittest.TestCase):
         ):
             self.assertIn(symbol, self.node)
 
+    def test_home_landing_requests_px4_auto_land_and_waits_for_px4_feedback(self):
+        for symbol in (
+            '#include <mavros_msgs/ExtendedState.h>',
+            '#include <mavros_msgs/SetMode.h>',
+            'topic("px4_set_mode", "/mavros/set_mode")',
+            'request.request.custom_mode = "AUTO.LAND"',
+            '"HOME_REACHED_PX4_AUTO_LAND"',
+            '"PX4_AUTO_LAND_REQUESTED"',
+            'mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND',
+            'last_px4_extended_state_s_ >= px4_auto_land_accepted_s_',
+        ):
+            self.assertIn(symbol, self.node)
+        self.assertNotIn("ego_api_->requestLand();", self.node)
+        self.assertIn("px4_extended_state: /mavros/extended_state", self.config)
+        self.assertIn("px4_set_mode: /mavros/set_mode", self.config)
+
     def test_payload_and_drop_gate_match_field_configuration(self):
         for setting in (
             "alignment_tolerance_norm: 0.10",
