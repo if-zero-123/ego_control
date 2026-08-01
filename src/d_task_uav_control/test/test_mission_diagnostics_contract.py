@@ -97,6 +97,8 @@ class CompetitionMissionContractTests(unittest.TestCase):
             "alignment_hold_s: 0.50",
             "drop_min_follow_s: 1.5",
             "payload_release_pulse_s: 0.70",
+            "kp: 0.45",
+            "max_speed_mps: 0.53",
             "wiringpi_pin: 9",
             "active_high: true",
         ):
