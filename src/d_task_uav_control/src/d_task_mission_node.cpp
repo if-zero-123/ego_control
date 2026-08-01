@@ -110,7 +110,7 @@ private:
         private_node_.param("simple_follow/alignment_hold_s",
                             alignment_hold_s_, 0.50);
         private_node_.param("simple_follow/drop_min_follow_s",
-                            drop_min_follow_s_, 3.0);
+                            drop_min_follow_s_, 1.5);
         private_node_.param("simple_follow/payload_release_pulse_s",
                             payload_release_pulse_s_, 0.70);
         private_node_.param("simple_follow/platform_height_offset_m",
@@ -1023,7 +1023,7 @@ private:
     double state_settle_time_s_ = 0.50;
     double alignment_tolerance_norm_ = 0.10;
     double alignment_hold_s_ = 0.50;
-    double drop_min_follow_s_ = 3.0;
+    double drop_min_follow_s_ = 1.5;
     double payload_release_pulse_s_ = 0.70;
     double platform_height_offset_m_ = 0.0;
     double landing_approach_height_m_ = 0.25;

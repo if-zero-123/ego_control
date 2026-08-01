@@ -36,7 +36,7 @@ class CompetitionMissionContractTests(unittest.TestCase):
         self.assertIn("alignedFor(now_s, alignment_hold_s_)", self.node)
         self.assertIn("payload_release_pulse_s_", self.node)
         self.assertIn("hover_time_s: 3.0", self.config)
-        self.assertIn("drop_min_follow_s: 3.0", self.config)
+        self.assertIn("drop_min_follow_s: 1.5", self.config)
 
     def test_restores_payload_return_and_terminal_protocol(self):
         for symbol in (
@@ -70,7 +70,7 @@ class CompetitionMissionContractTests(unittest.TestCase):
         for setting in (
             "alignment_tolerance_norm: 0.10",
             "alignment_hold_s: 0.50",
-            "drop_min_follow_s: 3.0",
+            "drop_min_follow_s: 1.5",
             "payload_release_pulse_s: 0.70",
             "wiringpi_pin: 9",
             "active_high: true",

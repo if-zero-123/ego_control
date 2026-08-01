@@ -75,7 +75,7 @@ simple_follow:
   # following.  The output is a single active pulse on topics.payload_release.
   alignment_tolerance_norm: 0.10
   alignment_hold_s: 0.50
-  drop_min_follow_s: 3.0
+  drop_min_follow_s: 1.5
   payload_release_pulse_s: 0.70
 
   # Simple visual dynamic landing.  There is intentionally no range/PnP
