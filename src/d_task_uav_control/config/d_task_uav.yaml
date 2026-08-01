@@ -60,9 +60,9 @@ simple_follow:
   initial_offset_clockwise_deg: 20.0
   initial_offset_reach_radius_m: 0.08
   # Initial vehicle search is velocity-controlled for both tasks.
-  # DROP (task 1) searches at 0.50 m/s; dynamic landing (task 2) at 0.40 m/s.
-  drop_search_speed_mps: 0.50
-  dynamic_search_speed_mps: 0.40
+  # DROP (task 1) searches at 0.40 m/s; dynamic landing (task 2) at 0.63 m/s.
+  drop_search_speed_mps: 0.40
+  dynamic_search_speed_mps: 0.63
 
   # Competition flow: rise to the cruise height, remain stable for three
   # seconds, then search/follow.  A task that cannot complete safely returns
