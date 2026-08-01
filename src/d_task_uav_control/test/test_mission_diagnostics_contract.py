@@ -126,17 +126,24 @@ class CompetitionMissionContractTests(unittest.TestCase):
             self.node,
         )
 
-    def test_dynamic_landing_search_uses_035_mps_velocity_and_acquires_tag_in_motion(self):
+    def test_both_modes_search_with_mode_specific_velocity_and_acquire_tag_in_motion(self):
         for symbol in (
+            'simple_follow/drop_search_speed_mps',
             'simple_follow/dynamic_search_speed_mps',
+            'drop_search_speed_mps_',
             'dynamic_search_speed_mps_',
-            'if (!isDropMode() && tagFresh(now_s))',
+            'if (tagFresh(now_s))',
             'DYNAMIC_TAG_ACQUIRED_DURING_SEARCH',
-            'dynamic_search_speed_mps_ * dx / distance',
-            'dynamic_search_speed_mps_ * dy / distance',
+            'search_speed_mps * dx / distance',
+            'search_speed_mps * dy / distance',
         ):
             self.assertIn(symbol, self.node)
-        self.assertIn('dynamic_search_speed_mps: 0.35', self.config)
+        self.assertIn('drop_search_speed_mps: 0.50', self.config)
+        self.assertIn('dynamic_search_speed_mps: 0.40', self.config)
+        search_loop = self.node[self.node.index('state_ == "SEARCH_CAR"'):
+                                self.node.index('state_ == "FOLLOW_CAR"')]
+        self.assertNotIn('offset_target_x_, offset_target_y_, cruiseZ(), home_yaw_',
+                         search_loop)
 
 
 if __name__ == "__main__":
