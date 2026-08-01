@@ -129,8 +129,24 @@ v_cmd = v_tag + Kp * (p_tag - p_uav) + Kd * (v_tag - v_uav) + vision_trim
 无人机当前位置，避免桥接层位置环与外部 PD 重复控制，Z 方向仍使用任务目标高度。
 全流程不接入 EGO-Planner，也不启用避障。水平控制只读取下视相机 ID 0 的去畸变中心，
 小车上传的 X/Y/速度不进入无人机 PID。短时丢码时水平指令归零并保持固定高度；只有新鲜
-真实标签重新稳定对中才允许投递。`DYNAMIC_LANDING` 不由当前简化生产节点执行；选择该
-模式会被任务节点明确拒绝，避免把动态降落错误地当成 DROP 流程飞行。
+真实标签重新稳定对中才允许投递。`DYNAMIC_LANDING` 已由当前任务节点执行：无人机在
+AprilTag 跟随、两段下降和平台接触判定完成后进入 `PLATFORM_LANDED`，再按既有的悬停、
+起飞、返航流程收尾；它不是 DROP 的降级或替代流程。
+
+### 小车三档速度联动
+
+小车的 `d_task_car_gateway` 是 `/line_tracking/profile_select` 的唯一任务控制方：
+`0` 为停止、`1` 为慢速、`2` 为中速、`3` 为快速。选择任务后网关先选择初始档位，
+但在合法 `mission_start` 之前不会把线循命令放行到底盘；因此定位初始化期间不会提前行驶。
+
+- `DROP`：选择任务即置慢档 `1`。任务节点进入 `RELEASE` 时小车仍保持慢档；只有 GPIO
+  投放脉冲结束、输出已恢复低电平后，任务节点发布 QoS 1 事件
+  `PAYLOAD_RELEASED_SPEED_UP`。小车确认 `sender=uav` 与 mission ID 一致后切换快档 `3`。
+- `DYNAMIC_LANDING`：选择任务即置中档 `2`。最终视觉丢失导致的盲降事件
+  `DYNAMIC_DESCENT_TAG_LOST_FINAL_SLOW` 不改变小车档位，保持中档；只有飞控确认
+  `PLATFORM_LANDED` 并发布 `DYNAMIC_PLATFORM_LANDED_SPEED_UP` 后，小车才切换快档 `3`。
+- 小车路线完成、任务中止或 `mission_start` MQTT 发送失败时，网关均发布档位 `0`，
+  线循停止并由网关向底盘发布零速度。
 
 小车位姿超过 300ms 未更新时，网关仍会关闭动态下降安全门，但小车 X/Y/速度不进入
 水平控制。高空伴飞短时失视时只按最后 AprilTag 状态预测，最多 1.0s；进入动态下降后
