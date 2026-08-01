@@ -133,6 +133,46 @@ class GatewayCoreTests(unittest.TestCase):
         )
         self.assertFalse(self.core.positioning_ready)
 
+    def test_new_config_replaces_active_mission_and_restarts_positioning(self):
+        self.prepare()
+        self.core.receive(
+            Topics.MISSION_START,
+            ProtocolCodec.encode(self.mission_start(command_id="start-initial")),
+            now_ms=self.clock[0],
+        )
+        self.assertEqual(self.core.mission_id, "mission-0001")
+        self.clock[0] += 1
+        self.core.receive(
+            Topics.CAR_POSE,
+            ProtocolCodec.encode(self.car_pose("mission-0001")),
+            now_ms=self.clock[0],
+        )
+
+        replacement = self.mission_config(
+            mission_id="mission-0002",
+            mode=Mode.DYNAMIC_LANDING,
+            command_id="config-replacement",
+        )
+        self.clock[0] += 1
+        result = self.core.receive(
+            Topics.MISSION_CONFIG,
+            ProtocolCodec.encode(replacement),
+            now_ms=self.clock[0],
+        )
+
+        self.assertEqual(
+            [action.kind for action in result.actions], ["ack", "mission_config"]
+        )
+        self.assertEqual(result.actions[0].message.payload["result"], "accepted")
+        self.assertEqual(
+            result.actions[0].message.payload["reason_code"], "mission_reconfigured"
+        )
+        self.assertEqual(self.core.configured_mission_id, "mission-0002")
+        self.assertEqual(self.core.configured_mode, Mode.DYNAMIC_LANDING)
+        self.assertFalse(self.core.positioning_ready)
+        self.assertEqual(self.core.mission_id, "")
+        self.assertIsNone(self.core.last_car_pose)
+
     def test_rejects_ground_as_the_mission_config_authority(self):
         message = build_mission_config(
             self.ground_factory,

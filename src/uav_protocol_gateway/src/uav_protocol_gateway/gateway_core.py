@@ -256,6 +256,12 @@ class UavGatewayCore:
 
         if not self.mission_id or mission_id != self.mission_id:
             return False
+        self._clear_mission_context()
+        return True
+
+    def _clear_mission_context(self) -> None:
+        """Discard all state that belongs to the active/configured mission."""
+
         self.mission_id = ""
         self.mode = ""
         self.configured_mission_id = ""
@@ -265,7 +271,6 @@ class UavGatewayCore:
         self.last_car_pose_rx_ms = None
         self.last_car_pose_sent_ms = None
         self.last_car_pose = None
-        return True
 
     def set_positioning_ready(self, mission_id: str, ready: bool) -> bool:
         if not mission_id or mission_id != self.configured_mission_id:
@@ -281,11 +286,13 @@ class UavGatewayCore:
             result.reason = "missing_command_id"
             result.actions.append(self._ack(message, AckResult.REJECTED, result.reason))
             return
-        if self.mission_id:
-            result.rejected = True
-            result.reason = "mission_busy"
-            result.actions.append(self._ack(message, AckResult.BUSY, result.reason))
-            return
+        replacing_active_mission = bool(self.mission_id)
+        if replacing_active_mission:
+            # A new, de-duplicated configuration is the car's explicit task
+            # replacement command.  Clear the old start/pose context before
+            # forwarding it, so the mission node and FAST-LIO supervisor both
+            # receive the configuration and initialise for the new task.
+            self._clear_mission_context()
         if self.configured_mission_id == message.mission_id:
             if self.configured_mode != message.payload["mode"]:
                 result.rejected = True
@@ -298,7 +305,11 @@ class UavGatewayCore:
                 # same mission (RESET_LOCALIZATION), so positioning must be
                 # restarted instead of treating it as a transport duplicate.
                 self.positioning_ready = False
-                result.actions.append(self._ack(message, AckResult.ACCEPTED, ""))
+                result.actions.append(self._ack(
+                    message,
+                    AckResult.ACCEPTED,
+                    "mission_reconfigured" if replacing_active_mission else "",
+                ))
                 result.actions.append(
                     CoreAction(kind="mission_config", topic="", message=message)
                 )
@@ -307,7 +318,11 @@ class UavGatewayCore:
         self.configured_mission_id = message.mission_id
         self.configured_mode = message.payload["mode"]
         self.positioning_ready = False
-        result.actions.append(self._ack(message, AckResult.ACCEPTED, ""))
+        result.actions.append(self._ack(
+            message,
+            AckResult.ACCEPTED,
+            "mission_reconfigured" if replacing_active_mission else "",
+        ))
         result.actions.append(CoreAction(kind="mission_config", topic="", message=message))
 
     def _handle_start(self, result: ReceiveResult, current_ms: int) -> None:
