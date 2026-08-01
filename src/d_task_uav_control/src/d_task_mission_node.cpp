@@ -547,6 +547,18 @@ private:
         setState("CLIMB_TO_CRUISE", now_s, event);
     }
 
+    void beginBlindDescent(double now_s) {
+        blind_descent_x_ = latest_odom_.pose.pose.position.x;
+        blind_descent_y_ = latest_odom_.pose.pose.position.y;
+        blind_descent_yaw_ = yawFromQuaternion(
+            latest_odom_.pose.pose.orientation);
+        platform_landing_start_s_ = now_s;
+        last_platform_request_s_ = -1e9;
+        resetPid();
+        setState("DESCEND_BLIND", now_s,
+                 "DYNAMIC_DESCENT_TAG_LOST_FINAL_SLOW");
+    }
+
     bool requestPx4AutoLand(double now_s) {
         mavros_msgs::SetMode request;
         request.request.base_mode = 0;
@@ -608,7 +620,8 @@ private:
 
         const bool active_flight_state = state_ == "SEARCH_CAR"
             || state_ == "FOLLOW_CAR" || state_ == "DESCEND_HIGH"
-            || state_ == "LAND_ON_PLATFORM" || state_ == "CLIMB_TO_CRUISE";
+            || state_ == "DESCEND_BLIND" || state_ == "LAND_ON_PLATFORM"
+            || state_ == "CLIMB_TO_CRUISE";
         if (started_ && mission_start_s_ >= 0.0
             && now_s - mission_start_s_ > mission_timeout_s_
             && active_flight_state) {
@@ -632,7 +645,13 @@ private:
                 home_x_ = latest_odom_.pose.pose.position.x;
                 home_y_ = latest_odom_.pose.pose.position.y;
                 home_yaw_ = yawFromQuaternion(latest_odom_.pose.pose.orientation);
-                setState("HOVER_3S", now_s, "CRUISE_HOVER_STARTED");
+                if (isDropMode()) {
+                    setState("HOVER_3S", now_s, "CRUISE_HOVER_STARTED");
+                } else {
+                    ego_api_->requestOverrideMode(true);
+                    beginSearch(now_s);
+                    publishEvent("DYNAMIC_CRUISE_SEARCH_STARTED");
+                }
             } else if (!odomFresh(now_s)) {
                 publishFault(2101, "uav_odometry_stale");
             }
@@ -719,7 +738,7 @@ private:
                                            -landing_vertical_speed_mps_,
                                            command_vx, command_vy,
                                            forward_error, left_error)) {
-                beginRecoveryClimb(now_s, "DESCENT_TAG_LOST_RECOVERY");
+                beginBlindDescent(now_s);
             } else if (std::abs(latest_odom_.pose.pose.position.z
                                 - (platformZ() + landing_approach_height_m_))
                            <= landing_height_tolerance_m_
@@ -728,10 +747,33 @@ private:
                 last_platform_request_s_ = -1e9;
                 setState("LAND_ON_PLATFORM", now_s, "PLATFORM_CONTACT_STARTED");
             }
+        } else if (started_ && state_ == "DESCEND_BLIND") {
+            if (bridge_state_ == "PLATFORM_LANDED") {
+                platform_hold_start_s_ = now_s;
+                setState("PLATFORM_HOLD", now_s,
+                         "DYNAMIC_PLATFORM_LANDED_SPEED_UP");
+            } else if (!odomFresh(now_s)) {
+                abortOnStaleOdom(now_s);
+            } else if (now_s - platform_landing_start_s_
+                       > platform_contact_timeout_s_) {
+                ego_api_->requestPlatformLandingCancel();
+                publishFault(2201, "platform_contact_timeout");
+                beginRecoveryClimb(
+                    now_s, "DYNAMIC_BLIND_PLATFORM_CONTACT_TIMEOUT");
+            } else if (!requestOverrideIfNeeded()) {
+                // Wait for OVERRIDE before the final fixed-pose descent.
+            } else {
+                sendPositionCommand(blind_descent_x_, blind_descent_y_,
+                                    platformZ() - landing_press_depth_m_,
+                                    blind_descent_yaw_, 0.0, 0.0,
+                                    -landing_vertical_speed_mps_);
+                requestPlatformLanding(now_s);
+            }
         } else if (started_ && state_ == "LAND_ON_PLATFORM") {
             if (bridge_state_ == "PLATFORM_LANDED") {
                 platform_hold_start_s_ = now_s;
-                setState("PLATFORM_HOLD", now_s, "PLATFORM_LANDED");
+                setState("PLATFORM_HOLD", now_s,
+                         "DYNAMIC_PLATFORM_LANDED_SPEED_UP");
             } else if (!odomFresh(now_s)) {
                 abortOnStaleOdom(now_s);
             } else if (now_s - platform_landing_start_s_ > platform_contact_timeout_s_) {
@@ -745,8 +787,7 @@ private:
                                            -landing_vertical_speed_mps_,
                                            command_vx, command_vy,
                                            forward_error, left_error)) {
-                ego_api_->requestPlatformLandingCancel();
-                beginRecoveryClimb(now_s, "PLATFORM_TAG_LOST_RECOVERY");
+                beginBlindDescent(now_s);
             } else {
                 requestPlatformLanding(now_s);
             }
@@ -763,11 +804,28 @@ private:
         } else if (started_ && state_ == "PLATFORM_TAKEOFF") {
             if (bridge_state_ == "HOVER") {
                 beginReturnHome(now_s, "PLATFORM_TAKEOFF_COMPLETE_RETURN_HOME");
+            } else if (!odomFresh(now_s)) {
+                publishFault(2101, "uav_odometry_stale");
             } else if (now_s - platform_takeoff_start_s_ > platform_takeoff_timeout_s_) {
                 mission_failed_ = true;
                 publishFault(2204, "platform_takeoff_timeout");
                 setState("ABORT", now_s, "PLATFORM_TAKEOFF_ABORT");
             } else {
+                const double yaw = yawFromQuaternion(
+                    latest_odom_.pose.pose.orientation);
+                if (tagFresh(now_s)) {
+                    computeVelocity(now_s, yaw, command_vx, command_vy,
+                                    forward_error, left_error);
+                } else {
+                    resetPid();
+                }
+                // ego_bridge consumes a fresh OVERRIDE setpoint after its
+                // platform motor warmup.  Without this 30 Hz command stream,
+                // it correctly holds in place for stale-control protection.
+                sendPositionCommand(latest_odom_.pose.pose.position.x,
+                                    latest_odom_.pose.pose.position.y,
+                                    cruiseZ(), yaw, command_vx, command_vy,
+                                    0.0);
                 requestPlatformTakeoff(now_s);
             }
         } else if (started_ && state_ == "CLIMB_TO_CRUISE") {
@@ -1018,6 +1076,9 @@ private:
     double recovery_x_ = 0.0;
     double recovery_y_ = 0.0;
     double recovery_yaw_ = 0.0;
+    double blind_descent_x_ = 0.0;
+    double blind_descent_y_ = 0.0;
+    double blind_descent_yaw_ = 0.0;
     double tag_confidence_ = 0.0;
 
     double flight_height_m_ = 1.50;

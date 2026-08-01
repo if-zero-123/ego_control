@@ -87,6 +87,30 @@ class CompetitionMissionContractTests(unittest.TestCase):
         ):
             self.assertIn(setting, self.config)
 
+    def test_dynamic_landing_skips_takeoff_hover_and_keeps_override_fresh(self):
+        self.assertIn('if (isDropMode()) {\n                    setState("HOVER_3S"', self.node)
+        self.assertIn('beginSearch(now_s);', self.node)
+        self.assertIn('state_ == "PLATFORM_TAKEOFF"', self.node)
+        self.assertIn('sendPositionCommand(', self.node)
+
+    def test_dynamic_landing_blind_descend_and_speed_events_are_explicit(self):
+        for symbol in (
+            '"DESCEND_BLIND"',
+            '"DYNAMIC_DESCENT_TAG_LOST_FINAL_SLOW"',
+            '"DYNAMIC_PLATFORM_LANDED_SPEED_UP"',
+            'blind_descent_x_',
+            'platformZ() - landing_press_depth_m_',
+        ):
+            self.assertIn(symbol, self.node)
+        self.assertIn(
+            'state_ == "DESCEND_BLIND") {\n            if (bridge_state_ == "PLATFORM_LANDED")',
+            self.node,
+        )
+        self.assertIn(
+            '"DYNAMIC_BLIND_PLATFORM_CONTACT_TIMEOUT"',
+            self.node,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

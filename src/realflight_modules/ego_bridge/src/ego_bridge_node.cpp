@@ -329,6 +329,8 @@ private:
     double platform_takeoff_yaw_ = 0.0;
     ros::Time platform_takeoff_start_time_;
     bool platform_takeoff_warmup_done_ = false;
+    bool platform_disarm_requested_ = false;
+    ros::Time platform_disarm_request_time_;
 
     // ── 到达检测：EGO 到目标点后发布 reach_status=1 ──
     ros::Time reach_detect_start_;          // 满足条件开始计时
@@ -652,6 +654,8 @@ private:
             params_.platform_land_pos_deviation,
             params_.platform_land_vel_threshold,
             params_.platform_land_hold_time);
+        platform_disarm_requested_ = false;
+        platform_disarm_request_time_ = ros::Time(0);
         if (params_.verbose_info) {
             ROS_INFO("[ego_bridge] STATE -> PLATFORM_LANDING");
         }
@@ -1338,12 +1342,24 @@ private:
     }
 
     void completePlatformLanding() {
-        if (disarmDrone()) {
+        if (!platform_disarm_requested_) {
+            if (disarmDrone()) {
+                platform_disarm_requested_ = true;
+                platform_disarm_request_time_ = ros::Time::now();
+            } else {
+                ROS_WARN_THROTTLE(
+                    1.0,
+                    "[ego_bridge] platform DISARM failed, keeping landing setpoints");
+            }
+            return;
+        }
+        if (mavros_state_stamp_ >= platform_disarm_request_time_
+            && !mavros_state_.armed) {
             enterPlatformLanded();
         } else {
             ROS_WARN_THROTTLE(
                 1.0,
-                "[ego_bridge] platform DISARM failed, keeping landing setpoints");
+                "[ego_bridge] platform landing waiting for armed=false feedback");
         }
     }
 
