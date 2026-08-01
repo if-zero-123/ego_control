@@ -54,9 +54,9 @@ simple_follow:
   min_tag_side_px: 8.0
   tag_id: 0
 
-  # After takeoff, first move 1.0 m at 1 o'clock relative to the locked
+  # After takeoff, first move 1.5 m at 1 o'clock relative to the locked
   # takeoff heading (12 o'clock is forward; clockwise is right).
-  initial_offset_distance_m: 1.00
+  initial_offset_distance_m: 1.50
   initial_offset_clockwise_deg: 20.0
   initial_offset_reach_radius_m: 0.08
   # Initial vehicle search is velocity-controlled for both tasks.

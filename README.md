@@ -177,7 +177,7 @@ X/Y/速度融合。
 `src/d_task_uav_control/config/d_task_uav.yaml`：
 
 - `simple_follow.initial_offset_distance_m/initial_offset_clockwise_deg`：悬停后右前搜索段，
-  当前为 `1.00m/20°`。
+  当前为 `1.50m/20°`。
 - `simple_follow.hover_time_s`：起飞到巡航高度后保持悬停的稳定时间，当前为 `3.0s`。
 - `simple_follow.pid.*`：ID 0 图像中心 PID；当前 `kp=0.65`，Z 始终保持任务固定高度。
 - `simple_follow.drop_alignment_tolerance/drop_alignment_stable_s`：投递前图像归一化误差
