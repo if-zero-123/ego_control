@@ -74,6 +74,20 @@ class CompetitionMissionContractTests(unittest.TestCase):
         self.assertNotIn("return_vx", return_loop)
         self.assertNotIn("return_vy", return_loop)
 
+    def test_dynamic_return_home_rate_limits_yaw_target(self):
+        self.assertIn("dynamic_return_yaw_rate_radps: 0.60", self.config)
+        return_loop = self.node[self.node.index('state_ == "RETURN_HOME"'):
+                                self.node.index('state_ == "LAND_HOME"')]
+        for symbol in (
+            "return_yaw_setpoint_initialized_",
+            "return_yaw_setpoint_",
+            "dynamic_return_yaw_rate_radps_ * dt",
+            "home_yaw_ - return_yaw_setpoint_",
+            "isDropMode() ? home_yaw_",
+            "return_yaw_setpoint_);",
+        ):
+            self.assertIn(symbol, return_loop)
+
     def test_home_landing_requests_px4_auto_land_and_waits_for_feedback(self):
         for symbol in (
             '#include <mavros_msgs/ExtendedState.h>',

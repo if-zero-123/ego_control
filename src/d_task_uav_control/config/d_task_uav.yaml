@@ -74,6 +74,9 @@ simple_follow:
   # RETURN_HOME is a velocity-limited override command, not a distant
   # position-only setpoint, to prevent PX4 from accelerating aggressively.
   return_home_speed_mps: 0.65
+  # Dynamic landing returns from the platform at a yaw-limited rate, avoiding
+  # a sudden direct correction from its platform takeoff heading to home yaw.
+  dynamic_return_yaw_rate_radps: 0.60
   state_settle_time_s: 0.50
 
   # Once the aircraft reaches the locked takeoff hover point H, mission

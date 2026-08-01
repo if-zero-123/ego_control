@@ -32,6 +32,10 @@ double clamp(double value, double lower, double upper) {
 
 constexpr double kPi = 3.14159265358979323846;
 
+double normalizedYaw(double yaw) {
+    return std::atan2(std::sin(yaw), std::cos(yaw));
+}
+
 double yawFromQuaternion(const geometry_msgs::Quaternion& quaternion) {
     return std::atan2(
         2.0 * (quaternion.w * quaternion.z
@@ -111,6 +115,8 @@ private:
                             home_reach_radius_m_, 0.15);
         private_node_.param("simple_follow/return_home_speed_mps",
                             return_home_speed_mps_, 0.30);
+        private_node_.param("simple_follow/dynamic_return_yaw_rate_radps",
+                            dynamic_return_yaw_rate_radps_, 0.60);
         private_node_.param("simple_follow/state_settle_time_s",
                             state_settle_time_s_, 0.50);
         private_node_.param("simple_follow/alignment_tolerance_norm",
@@ -152,6 +158,7 @@ private:
             || drop_search_speed_mps_ <= 0.0 || dynamic_search_speed_mps_ <= 0.0
             || mission_timeout_s_ <= hover_time_s_ || vision_acquire_timeout_s_ <= 0.0
             || home_reach_radius_m_ <= 0.0 || return_home_speed_mps_ <= 0.0
+            || dynamic_return_yaw_rate_radps_ <= 0.0
             || state_settle_time_s_ < 0.0
             || alignment_tolerance_norm_ <= 0.0 || alignment_tolerance_norm_ > 1.0
             || alignment_hold_s_ < 0.0 || drop_min_follow_s_ < 0.0
@@ -244,6 +251,7 @@ private:
         platform_landing_start_s_ = -1.0;
         platform_takeoff_start_s_ = -1.0;
         return_setpoint_initialized_ = false;
+        return_yaw_setpoint_initialized_ = false;
         return_setpoint_stamp_ = ros::Time(0);
         last_px4_auto_land_request_s_ = -1e9;
         px4_auto_land_accepted_s_ = -1.0;
@@ -547,6 +555,7 @@ private:
         mission_failed_ = mission_failed_ || failed;
         resetPid();
         return_setpoint_initialized_ = false;
+        return_yaw_setpoint_initialized_ = false;
         return_setpoint_stamp_ = ros::Time(0);
         setState("RETURN_HOME", now_s, event);
     }
@@ -889,6 +898,9 @@ private:
                     return_setpoint_y_ = latest_odom_.pose.pose.position.y;
                     return_setpoint_stamp_ = now;
                     return_setpoint_initialized_ = true;
+                    return_yaw_setpoint_ = yawFromQuaternion(
+                        latest_odom_.pose.pose.orientation);
+                    return_yaw_setpoint_initialized_ = true;
                 }
                 const double dt = clamp((now - return_setpoint_stamp_).toSec(),
                                         0.0, 0.20);
@@ -904,11 +916,25 @@ private:
                     return_setpoint_x_ += step * setpoint_dx / setpoint_distance;
                     return_setpoint_y_ += step * setpoint_dy / setpoint_distance;
                 }
-                // Advance a nearby position target toward home at a fixed rate.
+                if (!isDropMode() && return_yaw_setpoint_initialized_) {
+                    const double yaw_error = normalizedYaw(
+                        home_yaw_ - return_yaw_setpoint_);
+                    const double yaw_step = dynamic_return_yaw_rate_radps_ * dt;
+                    if (std::abs(yaw_error) <= yaw_step
+                        || std::abs(yaw_error) < 1e-4) {
+                        return_yaw_setpoint_ = home_yaw_;
+                    } else if (yaw_step > 0.0) {
+                        return_yaw_setpoint_ = normalizedYaw(
+                            return_yaw_setpoint_ + std::copysign(yaw_step, yaw_error));
+                    }
+                }
+                // Task 2 advances yaw through the same nearby-target principle;
+                // task 1 keeps its field-proven direct home yaw behaviour.
                 // PX4 therefore receives a smooth path, while the final target
                 // still converges exactly to the locked home coordinate.
                 sendPositionCommand(return_setpoint_x_, return_setpoint_y_,
-                                    cruiseZ(), home_yaw_);
+                                    cruiseZ(), isDropMode() ? home_yaw_
+                                                             : return_yaw_setpoint_);
                 const double dx = home_x_ - latest_odom_.pose.pose.position.x;
                 const double dy = home_y_ - latest_odom_.pose.pose.position.y;
                 const double distance = std::hypot(dx, dy);
@@ -1106,6 +1132,7 @@ private:
     bool mission_failed_ = false;
     bool px4_landed_ = false;
     bool return_setpoint_initialized_ = false;
+    bool return_yaw_setpoint_initialized_ = false;
     uint8_t control_mode_ = 0;
     unsigned int image_width_ = 0;
     unsigned int image_height_ = 0;
@@ -1132,6 +1159,7 @@ private:
     double home_yaw_ = 0.0;
     double return_setpoint_x_ = 0.0;
     double return_setpoint_y_ = 0.0;
+    double return_yaw_setpoint_ = 0.0;
     double offset_target_x_ = 0.0;
     double offset_target_y_ = 0.0;
     double recovery_x_ = 0.0;
@@ -1161,6 +1189,7 @@ private:
     double vision_acquire_timeout_s_ = 20.0;
     double home_reach_radius_m_ = 0.15;
     double return_home_speed_mps_ = 0.30;
+    double dynamic_return_yaw_rate_radps_ = 0.60;
     double state_settle_time_s_ = 0.50;
     double alignment_tolerance_norm_ = 0.10;
     double alignment_hold_s_ = 0.50;
