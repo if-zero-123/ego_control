@@ -21,8 +21,6 @@ topics:
   mission_start: /uav_protocol/mission_start
   positioning_status: /d_task/positioning/status
   px4_odom: /mavros/local_position/odom
-  px4_extended_state: /mavros/extended_state
-  px4_set_mode: /mavros/set_mode
   bridge_state: /ego_bridge/flight_state
   control_mode: /ego_bridge/control_mode
   image: /usb_camera_vision/usb_cam/image_raw
@@ -68,12 +66,13 @@ simple_follow:
   mission_timeout_s: 80.0
   vision_acquire_timeout_s: 20.0
   home_reach_radius_m: 0.15
+  # RETURN_HOME is a velocity-limited override command, not a distant
+  # position-only setpoint, to prevent PX4 from accelerating aggressively.
+  return_home_speed_mps: 0.65
   state_settle_time_s: 0.50
 
-  # Once the aircraft reaches the locked takeoff hover point H, the mission
-  # stops OVERRIDE control and requests PX4 AUTO.LAND through MAVROS.  PX4's
-  # extended-state feedback, rather than ego_bridge's custom descent state,
-  # confirms that the aircraft is on the ground.
+  # Once the aircraft reaches the locked takeoff hover point H, ego_bridge
+  # keeps home XY and performs its configured limited-speed descent.
 
   # A release is allowed only after the centred tag has remained stable while
   # following.  The output is a single active pulse on topics.payload_release.

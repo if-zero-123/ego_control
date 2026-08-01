@@ -77,7 +77,7 @@ takeoff:
 landing:
   # 下降速度 (m/s)，正值
   # - ⚠️ 不超过 PX4 MPC_Z_VEL_MAX_DN
-  speed: 0.18
+  speed: 0.12
 
   # 降落开始后至少等待多久才启用触地检测 (s)
   # - 防止刚进入 LANDING 时因瞬时速度很小而误判触地

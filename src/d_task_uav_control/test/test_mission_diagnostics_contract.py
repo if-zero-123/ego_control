@@ -60,21 +60,30 @@ class CompetitionMissionContractTests(unittest.TestCase):
         ):
             self.assertIn(symbol, self.node)
 
-    def test_home_landing_requests_px4_auto_land_and_waits_for_px4_feedback(self):
+    def test_return_home_advances_a_near_position_setpoint(self):
+        self.assertIn("simple_follow/return_home_speed_mps", self.node)
+        self.assertIn("return_home_speed_mps_", self.node)
+        self.assertIn("return_home_speed_mps: 0.65", self.config)
+        return_loop = self.node[self.node.index('state_ == "RETURN_HOME"'):
+                                self.node.index('state_ == "LAND_HOME"')]
+        self.assertIn("return_setpoint_initialized_", return_loop)
+        self.assertIn("return_setpoint_x_", return_loop)
+        self.assertIn("return_setpoint_y_", return_loop)
+        self.assertIn("return_home_speed_mps_ * dt", return_loop)
+        self.assertIn("sendPositionCommand(return_setpoint_x_", return_loop)
+        self.assertNotIn("return_vx", return_loop)
+        self.assertNotIn("return_vy", return_loop)
+
+    def test_home_landing_uses_bridge_limited_descent(self):
         for symbol in (
-            '#include <mavros_msgs/ExtendedState.h>',
-            '#include <mavros_msgs/SetMode.h>',
-            'topic("px4_set_mode", "/mavros/set_mode")',
-            'request.request.custom_mode = "AUTO.LAND"',
-            '"HOME_REACHED_PX4_AUTO_LAND"',
-            '"PX4_AUTO_LAND_REQUESTED"',
-            'mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND',
-            'last_px4_extended_state_s_ >= px4_auto_land_accepted_s_',
+            '"HOME_REACHED_BRIDGE_LIMITED_LAND"',
+            '"BRIDGE_LIMITED_LAND_REQUESTED"',
+            'ego_api_->requestLand();',
+            'bridge_state_ == "IDLE"',
         ):
             self.assertIn(symbol, self.node)
-        self.assertNotIn("ego_api_->requestLand();", self.node)
-        self.assertIn("px4_extended_state: /mavros/extended_state", self.config)
-        self.assertIn("px4_set_mode: /mavros/set_mode", self.config)
+        self.assertNotIn('request.request.custom_mode = "AUTO.LAND"', self.node)
+        self.assertNotIn('px4_set_mode: /mavros/set_mode', self.config)
 
     def test_payload_and_drop_gate_match_field_configuration(self):
         for setting in (
