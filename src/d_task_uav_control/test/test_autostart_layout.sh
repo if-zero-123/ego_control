@@ -13,6 +13,8 @@ done
 
 bash -n "$package_dir/scripts/wait_for_316.sh"
 bash -n "$package_dir/scripts/d_task_uav_autostart.sh"
+grep -Fq 'wait_for_mqtt_broker' \
+  "$package_dir/scripts/d_task_uav_autostart.sh"
 grep -Fxq 'Requires=d-task-uav-wifi.service' \
   "$package_dir/systemd/d-task-uav-autostart.service"
 grep -Fxq 'After=d-task-uav-wifi.service' \
