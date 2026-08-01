@@ -412,6 +412,19 @@ private:
                 < 1e-6) {
             return;
         }
+
+        // The competition mission uses PX4 AUTO.LAND directly after returning
+        // home.  In that path ego_bridge remains in HOVER even though PX4 has
+        // landed, so the next mission's targeted takeoff used to be rejected
+        // forever.  Only reset this stale HOVER state after PX4 explicitly
+        // reports that it is on the ground; an airborne HOVER must never be
+        // reinterpreted as permission to take off again.
+        if (state_ == State::HOVER
+            && extended_state_.landed_state
+                == mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND) {
+            ROS_INFO("[ego_bridge] resetting landed HOVER before targeted takeoff");
+            enterIdle();
+        }
         if (state_ != State::IDLE || !std::isfinite(msg->pose.position.z)) {
             ROS_WARN("[ego_bridge] targeted takeoff ignored: state=%s target_z=%.2f",
                      stateStr(state_), msg->pose.position.z);
