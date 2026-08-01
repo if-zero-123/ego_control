@@ -329,6 +329,8 @@ private:
     double platform_takeoff_yaw_ = 0.0;
     ros::Time platform_takeoff_start_time_;
     bool platform_takeoff_warmup_done_ = false;
+    bool platform_auto_land_requested_ = false;
+    ros::Time platform_auto_land_last_try_time_;
     bool platform_disarm_requested_ = false;
     ros::Time platform_disarm_request_time_;
 
@@ -654,6 +656,8 @@ private:
             params_.platform_land_pos_deviation,
             params_.platform_land_vel_threshold,
             params_.platform_land_hold_time);
+        platform_auto_land_requested_ = false;
+        platform_auto_land_last_try_time_ = ros::Time(0);
         platform_disarm_requested_ = false;
         platform_disarm_request_time_ = ros::Time(0);
         if (params_.verbose_info) {
@@ -801,6 +805,18 @@ private:
             return true;
         }
         ROS_WARN("[ego_bridge] Failed to set OFFBOARD mode");
+        return false;
+    }
+
+    // After platform contact, hand landing authority back to PX4 so its
+    // landed-state detector can safely authorize motor disarming.
+    bool setAutoLandMode() {
+        mavros_msgs::SetMode req;
+        req.request.custom_mode = "AUTO.LAND";
+        if (srv_set_mode_.call(req) && req.response.mode_sent) {
+            return true;
+        }
+        ROS_WARN("[ego_bridge] Failed to set AUTO.LAND mode after platform contact");
         return false;
     }
 
@@ -1227,6 +1243,20 @@ private:
     }
 
     void runPlatformLanding(const ros::Time& now) {
+        if (platform_auto_land_requested_) {
+            // AUTO.LAND owns the final descent.  Do not keep sending OFFBOARD
+            // setpoints after the platform contact detector has fired.
+            if (extended_state_.landed_state
+                == mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND) {
+                completePlatformLanding();
+            } else {
+                ROS_WARN_THROTTLE(
+                    1.0,
+                    "[ego_bridge] waiting for PX4 ON_GROUND after platform AUTO.LAND");
+            }
+            return;
+        }
+
         double commanded_z = odom_pos_.z();
         if (overrideCommandFresh(now)) {
             pub_setpoint_.publish(fullTrackingSetpoint(override_cmd_));
@@ -1248,7 +1278,14 @@ private:
         const double position_error_z = commanded_z - odom_pos_.z();
         if (platform_contact_detector_.update(
                 elapsed, position_error_z, odom_vel_.z())) {
-            completePlatformLanding();
+            if ((now - platform_auto_land_last_try_time_).toSec() < 1.0) {
+                return;
+            }
+            platform_auto_land_last_try_time_ = now;
+            if (setAutoLandMode()) {
+                platform_auto_land_requested_ = true;
+                ROS_INFO("[ego_bridge] PX4 AUTO.LAND accepted after platform contact");
+            }
         }
     }
 
@@ -1342,6 +1379,13 @@ private:
     }
 
     void completePlatformLanding() {
+        if (extended_state_.landed_state
+            != mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND) {
+            ROS_WARN_THROTTLE(
+                1.0,
+                "[ego_bridge] refusing platform DISARM before PX4 reports ON_GROUND");
+            return;
+        }
         if (!platform_disarm_requested_) {
             if (disarmDrone()) {
                 platform_disarm_requested_ = true;
