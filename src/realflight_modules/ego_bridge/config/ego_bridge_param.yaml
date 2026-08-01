@@ -108,8 +108,6 @@ platform_landing:
   contact_height_m: 0.20299748653883895
   # 接触高度判定允许的里程计误差。
   contact_height_tolerance_m: 0.03
-  # 强制停桨命令被接受后，等待 armed=false 回传的最长时间。
-  force_disarm_feedback_timeout_s: 2.0
 
 platform_takeoff:
   # 平台重新解锁后先低目标预热，避免直接跳到巡航高度

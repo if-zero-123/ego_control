@@ -115,7 +115,6 @@ struct Params {
     double platform_land_hold_time;
     double platform_contact_height_m;
     double platform_contact_height_tolerance_m;
-    double platform_force_disarm_feedback_timeout_s;
     double platform_takeoff_warmup_time;
     double platform_takeoff_warmup_height;
     double platform_takeoff_reach_threshold;
@@ -178,8 +177,6 @@ struct Params {
                  platform_contact_height_m, 0.0);
         nh.param("platform_landing/contact_height_tolerance_m",
                  platform_contact_height_tolerance_m, 0.03);
-        nh.param("platform_landing/force_disarm_feedback_timeout_s",
-                 platform_force_disarm_feedback_timeout_s, 2.0);
         nh.param("platform_takeoff/motor_warmup_time",
                  platform_takeoff_warmup_time, 0.8);
         nh.param("platform_takeoff/motor_warmup_height",
@@ -341,8 +338,6 @@ private:
     double platform_takeoff_yaw_ = 0.0;
     ros::Time platform_takeoff_start_time_;
     bool platform_takeoff_warmup_done_ = false;
-    bool platform_disarm_requested_ = false;
-    ros::Time platform_disarm_request_time_;
     ros::Time platform_force_disarm_last_try_time_;
 
     // ── 到达检测：EGO 到目标点后发布 reach_status=1 ──
@@ -539,7 +534,7 @@ private:
     }
 
     void platformCancelCb(const std_msgs::Empty::ConstPtr& /*msg*/) {
-        if (state_ != State::PLATFORM_LANDING || platform_disarm_requested_) {
+        if (state_ != State::PLATFORM_LANDING) {
             return;
         }
         platform_takeoff_yaw_ = odom_yaw_;
@@ -667,8 +662,6 @@ private:
             params_.platform_land_pos_deviation,
             params_.platform_land_vel_threshold,
             params_.platform_land_hold_time);
-        platform_disarm_requested_ = false;
-        platform_disarm_request_time_ = ros::Time(0);
         platform_force_disarm_last_try_time_ = ros::Time(0);
         if (params_.verbose_info) {
             ROS_INFO("[ego_bridge] STATE -> PLATFORM_LANDING");
@@ -1258,13 +1251,6 @@ private:
     }
 
     void runPlatformLanding(const ros::Time& now) {
-        if (platform_disarm_requested_) {
-            // The force-disarm command has been accepted.  Do not change mode
-            // or send further thrust-producing setpoints while confirmation arrives.
-            completePlatformLanding(now);
-            return;
-        }
-
         double commanded_z = odom_pos_.z();
         if (overrideCommandFresh(now)) {
             pub_setpoint_.publish(fullTrackingSetpoint(override_cmd_));
@@ -1292,8 +1278,9 @@ private:
             }
             platform_force_disarm_last_try_time_ = now;
             if (forceDisarmDrone()) {
-                platform_disarm_requested_ = true;
-                platform_disarm_request_time_ = now;
+                // MAVROS has received PX4's successful command ACK.  The
+                // mission may now publish its car speed-up event immediately.
+                enterPlatformLanded();
             }
         }
     }
@@ -1384,23 +1371,6 @@ private:
             enterIdle();
         } else {
             ROS_WARN_THROTTLE(1.0, "[ego_bridge] Disarm failed during landing, keep LANDING setpoints");
-        }
-    }
-
-    void completePlatformLanding(const ros::Time& now) {
-        if (mavros_state_stamp_ >= platform_disarm_request_time_
-            && !mavros_state_.armed) {
-            enterPlatformLanded();
-        } else if ((now - platform_disarm_request_time_).toSec()
-                   > params_.platform_force_disarm_feedback_timeout_s) {
-            ROS_ERROR_THROTTLE(
-                1.0,
-                "[ego_bridge] platform force DISARM feedback timeout; "
-                "blocking PLATFORM_LANDED");
-        } else {
-            ROS_WARN_THROTTLE(
-                1.0,
-                "[ego_bridge] platform landing waiting for armed=false feedback");
         }
     }
 

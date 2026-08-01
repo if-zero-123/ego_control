@@ -7,16 +7,16 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class PlatformLandingContractTests(unittest.TestCase):
-    def test_platform_landed_waits_for_disarmed_state_feedback(self):
+    def test_platform_landed_follows_accepted_force_disarm(self):
         node = (PACKAGE_ROOT / "src" / "ego_bridge_node.cpp").read_text(
             encoding="utf-8"
         )
-        self.assertIn("platform_disarm_requested_", node)
-        self.assertIn("platform_disarm_request_time_", node)
-        self.assertIn(
-            "mavros_state_stamp_ >= platform_disarm_request_time_", node)
-        self.assertIn("!mavros_state_.armed", node)
-        self.assertIn("platform landing waiting for armed=false feedback", node)
+        platform_loop = node[node.index("void runPlatformLanding"):
+                             node.index("void runPlatformLanded")]
+        force_disarm_branch = platform_loop[platform_loop.index(
+            "if (forceDisarmDrone()) {") :]
+        self.assertIn("enterPlatformLanded();", force_disarm_branch)
+        self.assertNotIn("completePlatformLanding", platform_loop)
 
     def test_platform_contact_force_disarms_without_auto_land_handoff(self):
         node = (PACKAGE_ROOT / "src" / "ego_bridge_node.cpp").read_text(
@@ -29,17 +29,10 @@ class PlatformLandingContractTests(unittest.TestCase):
         self.assertIn("req.request.param2 = 21196.0", node)
         self.assertIn("platform_contact_height_m", node)
         self.assertIn("platform_contact_height_tolerance_m", node)
-        self.assertIn("platform_force_disarm_feedback_timeout_s", node)
-        self.assertIn("platform force DISARM feedback timeout", node)
-
         platform_loop = node[node.index("void runPlatformLanding"):
                              node.index("void runPlatformLanded")]
         self.assertNotIn("setAutoLandMode", platform_loop)
         self.assertIn("forceDisarmDrone()", platform_loop)
-
-        platform_cancel = node[node.index("void platformCancelCb"):
-                               node.index("/// 【回调】紧急停止")]
-        self.assertIn("platform_disarm_requested_", platform_cancel)
 
 
 if __name__ == "__main__":
