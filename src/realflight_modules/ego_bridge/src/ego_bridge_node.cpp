@@ -36,6 +36,7 @@
 #include <mavros_msgs/ExtendedState.h>
 #include <mavros_msgs/SetMode.h>
 #include <mavros_msgs/CommandBool.h>
+#include <mavros_msgs/CommandLong.h>
 #include <quadrotor_msgs/PositionCommand.h>
 #include <quadrotor_msgs/TakeoffLand.h>
 
@@ -112,6 +113,9 @@ struct Params {
     double platform_land_pos_deviation;
     double platform_land_vel_threshold;
     double platform_land_hold_time;
+    double platform_contact_height_m;
+    double platform_contact_height_tolerance_m;
+    double platform_force_disarm_feedback_timeout_s;
     double platform_takeoff_warmup_time;
     double platform_takeoff_warmup_height;
     double platform_takeoff_reach_threshold;
@@ -170,6 +174,12 @@ struct Params {
                  platform_land_vel_threshold, 0.10);
         nh.param("platform_landing/land_hold_time",
                  platform_land_hold_time, 0.8);
+        nh.param("platform_landing/contact_height_m",
+                 platform_contact_height_m, 0.0);
+        nh.param("platform_landing/contact_height_tolerance_m",
+                 platform_contact_height_tolerance_m, 0.03);
+        nh.param("platform_landing/force_disarm_feedback_timeout_s",
+                 platform_force_disarm_feedback_timeout_s, 2.0);
         nh.param("platform_takeoff/motor_warmup_time",
                  platform_takeoff_warmup_time, 0.8);
         nh.param("platform_takeoff/motor_warmup_height",
@@ -228,8 +238,10 @@ public:
             pub_debug_  = pnh_.advertise<std_msgs::Float64MultiArray>("debug", 10);                        // 调试信息
 
         // ---- 服务客户端：调用 MAVROS 切模式 / 解锁 ----
-        srv_set_mode_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");       // 切换飞控模式（OFFBOARD 等）
-        srv_arming_   = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");  // 解锁/锁定电机
+        srv_set_mode_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
+        srv_arming_   = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
+        srv_command_long_ = nh_.serviceClient<mavros_msgs::CommandLong>(
+            "/mavros/cmd/command");
 
         // 主控制定时器，按 ctrl_freq 频率触发 mainLoop
         timer_ = nh_.createTimer(ros::Duration(1.0 / params_.ctrl_freq),
@@ -256,7 +268,7 @@ private:
     ros::Publisher pub_reach_, pub_flight_state_, pub_ctrl_mode_, pub_debug_;
 
     // 服务客户端
-    ros::ServiceClient srv_set_mode_, srv_arming_;
+    ros::ServiceClient srv_set_mode_, srv_arming_, srv_command_long_;
 
     // 参数集合
     Params params_;
@@ -329,10 +341,9 @@ private:
     double platform_takeoff_yaw_ = 0.0;
     ros::Time platform_takeoff_start_time_;
     bool platform_takeoff_warmup_done_ = false;
-    bool platform_auto_land_requested_ = false;
-    ros::Time platform_auto_land_last_try_time_;
     bool platform_disarm_requested_ = false;
     ros::Time platform_disarm_request_time_;
+    ros::Time platform_force_disarm_last_try_time_;
 
     // ── 到达检测：EGO 到目标点后发布 reach_status=1 ──
     ros::Time reach_detect_start_;          // 满足条件开始计时
@@ -528,7 +539,7 @@ private:
     }
 
     void platformCancelCb(const std_msgs::Empty::ConstPtr& /*msg*/) {
-        if (state_ != State::PLATFORM_LANDING) {
+        if (state_ != State::PLATFORM_LANDING || platform_disarm_requested_) {
             return;
         }
         platform_takeoff_yaw_ = odom_yaw_;
@@ -656,10 +667,9 @@ private:
             params_.platform_land_pos_deviation,
             params_.platform_land_vel_threshold,
             params_.platform_land_hold_time);
-        platform_auto_land_requested_ = false;
-        platform_auto_land_last_try_time_ = ros::Time(0);
         platform_disarm_requested_ = false;
         platform_disarm_request_time_ = ros::Time(0);
+        platform_force_disarm_last_try_time_ = ros::Time(0);
         if (params_.verbose_info) {
             ROS_INFO("[ego_bridge] STATE -> PLATFORM_LANDING");
         }
@@ -808,15 +818,20 @@ private:
         return false;
     }
 
-    // After platform contact, hand landing authority back to PX4 so its
-    // landed-state detector can safely authorize motor disarming.
-    bool setAutoLandMode() {
-        mavros_msgs::SetMode req;
-        req.request.custom_mode = "AUTO.LAND";
-        if (srv_set_mode_.call(req) && req.response.mode_sent) {
+    // This bypasses PX4's landed-state gate and is only used after the
+    // platform-contact detector has independently confirmed touchdown.
+    bool forceDisarmDrone() {
+        mavros_msgs::CommandLong req;
+        req.request.broadcast = false;
+        req.request.command = 400;  // MAV_CMD_COMPONENT_ARM_DISARM
+        req.request.confirmation = 0;
+        req.request.param1 = 0.0;   // Disarm.
+        req.request.param2 = 21196.0;  // PX4 force-disarm magic value.
+        if (srv_command_long_.call(req) && req.response.success) {
+            ROS_INFO("[ego_bridge] platform force DISARM accepted");
             return true;
         }
-        ROS_WARN("[ego_bridge] Failed to set AUTO.LAND mode after platform contact");
+        ROS_WARN("[ego_bridge] platform force DISARM command rejected");
         return false;
     }
 
@@ -1243,17 +1258,10 @@ private:
     }
 
     void runPlatformLanding(const ros::Time& now) {
-        if (platform_auto_land_requested_) {
-            // AUTO.LAND owns the final descent.  Do not keep sending OFFBOARD
-            // setpoints after the platform contact detector has fired.
-            if (extended_state_.landed_state
-                == mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND) {
-                completePlatformLanding();
-            } else {
-                ROS_WARN_THROTTLE(
-                    1.0,
-                    "[ego_bridge] waiting for PX4 ON_GROUND after platform AUTO.LAND");
-            }
+        if (platform_disarm_requested_) {
+            // The force-disarm command has been accepted.  Do not change mode
+            // or send further thrust-producing setpoints while confirmation arrives.
+            completePlatformLanding(now);
             return;
         }
 
@@ -1268,23 +1276,24 @@ private:
                 "[ego_bridge] PLATFORM_LANDING override timeout, holding position");
         }
 
-        if (extended_state_.landed_state ==
-            mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND) {
-            completePlatformLanding();
-            return;
-        }
-
         const double elapsed = (now - platform_landing_start_time_).toSec();
         const double position_error_z = commanded_z - odom_pos_.z();
+        const bool at_contact_height =
+            std::abs(odom_pos_.z() - params_.platform_contact_height_m)
+            <= params_.platform_contact_height_tolerance_m;
+        if (!at_contact_height) {
+            platform_contact_detector_.reset();
+            return;
+        }
         if (platform_contact_detector_.update(
                 elapsed, position_error_z, odom_vel_.z())) {
-            if ((now - platform_auto_land_last_try_time_).toSec() < 1.0) {
+            if ((now - platform_force_disarm_last_try_time_).toSec() < 1.0) {
                 return;
             }
-            platform_auto_land_last_try_time_ = now;
-            if (setAutoLandMode()) {
-                platform_auto_land_requested_ = true;
-                ROS_INFO("[ego_bridge] PX4 AUTO.LAND accepted after platform contact");
+            platform_force_disarm_last_try_time_ = now;
+            if (forceDisarmDrone()) {
+                platform_disarm_requested_ = true;
+                platform_disarm_request_time_ = now;
             }
         }
     }
@@ -1378,28 +1387,16 @@ private:
         }
     }
 
-    void completePlatformLanding() {
-        if (extended_state_.landed_state
-            != mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND) {
-            ROS_WARN_THROTTLE(
-                1.0,
-                "[ego_bridge] refusing platform DISARM before PX4 reports ON_GROUND");
-            return;
-        }
-        if (!platform_disarm_requested_) {
-            if (disarmDrone()) {
-                platform_disarm_requested_ = true;
-                platform_disarm_request_time_ = ros::Time::now();
-            } else {
-                ROS_WARN_THROTTLE(
-                    1.0,
-                    "[ego_bridge] platform DISARM failed, keeping landing setpoints");
-            }
-            return;
-        }
+    void completePlatformLanding(const ros::Time& now) {
         if (mavros_state_stamp_ >= platform_disarm_request_time_
             && !mavros_state_.armed) {
             enterPlatformLanded();
+        } else if ((now - platform_disarm_request_time_).toSec()
+                   > params_.platform_force_disarm_feedback_timeout_s) {
+            ROS_ERROR_THROTTLE(
+                1.0,
+                "[ego_bridge] platform force DISARM feedback timeout; "
+                "blocking PLATFORM_LANDED");
         } else {
             ROS_WARN_THROTTLE(
                 1.0,

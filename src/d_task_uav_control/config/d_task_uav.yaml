@@ -85,7 +85,9 @@ simple_follow:
   # Simple visual dynamic landing.  There is intentionally no range/PnP
   # estimate: these three values must be measured on the real vehicle before
   # a flight.  All heights are offsets from the Fast-LIO positioning home.
-  platform_height_offset_m: 0.00
+  # With the current positioning home_z=-0.0241356622, this resolves the
+  # platform contact body height to 0.2029974865 m in the Fast-LIO frame.
+  platform_height_offset_m: 0.2271331488
   landing_approach_height_m: 0.25
   landing_press_depth_m: 0.07
   landing_vertical_speed_mps: 0.12
