@@ -515,3 +515,54 @@ AprilTag 五码融合后的视觉投影，小车位姿默认不订阅、不初�
 超时立即悬停并取消降落。新增回归覆盖错误小车坐标、视觉预测超时、搜索锁定和动态下降
 悬停；完整构建成功，`d_task_uav_control` 为 `182 tests, 0 errors, 0 failures, 0 skipped`，
 launch 节点解析通过，未启动真实飞控、相机、解锁或投放硬件。
+
+## RoboCup 雷达局部占据融合（2026-10-12）
+
+`plan_env` 新增可选的 `grid_map/cloud_fusion`，默认 `false`，保持其他比赛的旧建图方式。
+`robocup_airdrop/mission.launch` 在 `start_ego=true` 时单独启用。只实现占据记忆和盲区保留；
+没有增加巡航最低高度，没有修改飞控、桥接控制或既有膨胀尺寸（垂直仍为原来的一层）。
+
+融合使用既有概率、膨胀、计数和标记数组，保存局部占据体素索引，不累积原始点云。
+所有有效当前命中立即进入避障地图；每个体素每帧只计一次。历史障碍仅在至少三帧可靠
+空闲射线确认后清除。盲区、遮挡、空帧、无效帧不能清空历史障碍；移出局部窗口后释放。
+只有经过体素内部的射线用于空闲确认，同角度取最近回波，清除射线最多 3000 条/帧，
+新命中不受这一清除预算裁减。标记作为布尔值按帧清理，不再依赖循环的 char 帧编号。
+
+点云使用 `/cloud_registered`，位姿必须来自同一 FAST-LIO 世界坐标的 `/Odometry`，
+默认 frame 为 `camera_init`。原始位姿按点云时间匹配；允许两话题不同到达顺序，
+最多保留一个待匹配点云和 100 个位姿。雷达原点为 IMU 位姿加旋转后的标定平移，
+本机参数为 `[-0.017717, -0.000485, 0.148072]`；这不是对已注册点云再做一次旋转。
+FAST-LIO 的安装/外参改变后，必须同步更新这个参数。
+
+点云缺少每束激光的运动原点，故扫描窗口内雷达位移超过四分之一体素时，继续融合命中，
+暂停清除历史障碍。当前 5cm 分辨率对应默认 1.25cm 阈值。位姿近似时间不够精确时也暂停清除。
+这可能延长运动中的障碍记忆；稳定后可恢复可靠空闲清除，不能为解除阻塞直接超时删障碍。
+
+启动时需三帧有效同步数据；有效地图输入超过 0.5 秒中断会设置已有地图超时标志。
+原 EGO FSM 可能因此进入既有 `EMERGENCY_STOP` 并关闭自动恢复，需查明原因后按原流程
+重新启动/恢复规划器；本改动没有更改该控制状态机。定位发生明显跳变时清除旧坐标地图，
+重新等待三帧数据，避免把旧障碍套到新坐标。未知/从未看到的障碍仍不能靠地图记忆解决。
+
+诊断话题：`/drone_0_ego_planner_node/grid_map/cloud_fusion_status`，JSON 包含
+`ready/reason/age/update_ms/hit_cells/rays/cleared/pruned/active_cells/clearing_enabled/work_capacity_bytes`。
+`hits_only_motion_or_pose_uncertainty` 表示仍在融合新障碍，仅暂停空闲清除，不是规划故障。
+遇到不通行时先核对膨胀图、源点云、位姿和诊断，区分真实堵塞、保守余量、定位重影或数据超时。
+
+验证：板端完整构建通过；23 项生产融合模块测试和 ASan/UBSan 内存/未定义行为检查通过；
+隔离 ROS 的 22 项接口/规划/闭环模拟/回放检查通过，另以强制点云先到方式检查跳变配对首帧。
+独立 master 为 localhost:11432，不启动 MAVROS、桥接或投递节点。实际 EGO 绕墙轨迹的密集采样
+未进入公布的膨胀障碍，闭环模拟到达目标。静态实雷达回放 118/118 帧融合，116 帧在三帧预热后 ready；
+中位约 62ms、P95 约 73ms、最大约 77ms，历史索引容量约 0.5MiB。此数据不保证运动/复杂场景最坏耗时；
+没有真实飞行验证，窄通道、移动障碍及定位漂移仍需实测。
+
+运行回归：在 catkin_ws 中 `catkin_make run_tests_plan_env`。隔离 ROS 检查脚本为
+`src/planner/plan_env/test/cloud_fusion_ros_check.py`，传 `--params`（mission.launch 的 dump-params 输出）、
+`--output`，可选 `--bag`（原始 `/cloud_registered`、`/Odometry` 和 MAVROS odom 录包）。
+脚本拒绝复用 11432 上已有 master，只关闭自己创建的进程。
+可加 `--mode synthetic` 仅运行时序、盲区、清除和定位重置检查。当前 EGO 使用单线程
+`ros::spin()`，地图更新和规划查询按回调串行执行；融合和深度入口互斥，参数需启动时加载。
+
+基线：`6da77aa` / `snapshot-20261012-ego-cloud-baseline`。原有参数备份留在原处，另归档于
+`.git/ego-cloud-baseline-backups-20261012.tgz`。新功能单独提交，不混入其他比赛改动。
+需要关闭功能时，在下一次 own mission 启动传 `ego_cloud_fusion:=false`；不要重复启动已有节点。
+需要撤销源码时仅 revert 本次功能提交，再编译，保留基线里的旧参数和文件状态。

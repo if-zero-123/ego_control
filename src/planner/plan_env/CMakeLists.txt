@@ -42,6 +42,7 @@ link_directories(${PCL_LIBRARY_DIRS})
 
 add_library( plan_env 
     src/grid_map.cpp 
+    src/cloud_fusion.cpp
     src/raycast.cpp
     src/obj_predictor.cpp 
     )
@@ -57,3 +58,12 @@ add_executable(obj_generator
 target_link_libraries(obj_generator 
     ${catkin_LIBRARIES}
     )
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(cloud_fusion_test test/cloud_fusion_test.cpp)
+  if(TARGET cloud_fusion_test)
+    target_link_libraries(cloud_fusion_test plan_env ${catkin_LIBRARIES})
+  endif()
+  add_executable(cloud_fusion_probe test/cloud_fusion_probe.cpp)
+  target_link_libraries(cloud_fusion_probe plan_env ${catkin_LIBRARIES})
+endif()

@@ -23,6 +23,8 @@
 #include <message_filters/time_synchronizer.h>
 
 #include <plan_env/raycast.h>
+#include <plan_env/cloud_fusion.h>
+#include <deque>
 
 #define logit(x) (log((x) / (1 - (x))))
 
@@ -191,6 +193,23 @@ public:
 private:
   MappingParameters mp_;
   MappingData md_;
+
+  bool cloud_fusion_enabled_ = false;
+  std::shared_ptr<plan_env::CloudFusion> cloud_fusion_;
+  std::deque<nav_msgs::Odometry> cloud_pose_cache_;
+  sensor_msgs::PointCloud2ConstPtr cloud_pending_;
+  ros::Subscriber cloud_pose_sub_;
+  ros::Publisher cloud_status_pub_;
+  Eigen::Vector3d cloud_sensor_translation_ = Eigen::Vector3d::Zero();
+  double cloud_pose_tolerance_ = 0.05, cloud_timeout_ = 0.5;
+  double cloud_jump_distance_ = 0.5, cloud_clear_motion_limit_ = 0.0125;
+  int cloud_stable_frames_ = 0;
+  ros::Time cloud_last_good_;
+  std::string cloud_expected_frame_;
+  void cloudPoseCallback(const nav_msgs::OdometryConstPtr& odom);
+  bool cloudPoseAt(const ros::Time& stamp, nav_msgs::Odometry& pose) const;
+  void fuseCloud(const sensor_msgs::PointCloud2ConstPtr& msg);
+  void cloudStatus(const std::string& reason, double update_ms = 0);
 
   // get depth image and camera pose
   void depthPoseCallback(const sensor_msgs::ImageConstPtr& img,

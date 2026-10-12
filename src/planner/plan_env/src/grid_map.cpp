@@ -1,4 +1,7 @@
 #include "plan_env/grid_map.h"
+#include <std_msgs/String.h>
+#include <sstream>
+#include <chrono>
 
 // #define current_img_ md_.depth_image_[image_cnt_ & 1]
 // #define last_img_ md_.depth_image_[!(image_cnt_ & 1)]
@@ -52,6 +55,7 @@ void GridMap::initMap(ros::NodeHandle &nh)
   node_.param("grid_map/ground_height", mp_.ground_height_, 1.0);
 
   node_.param("grid_map/odom_depth_timeout", mp_.odom_depth_timeout_, 1.0);
+  node_.param("grid_map/cloud_fusion", cloud_fusion_enabled_, false);
 
   if( mp_.virtual_ceil_height_ - mp_.ground_height_ > z_size)
   {
@@ -129,7 +133,7 @@ void GridMap::initMap(ros::NodeHandle &nh)
 
   // use odometry and point cloud
   indep_cloud_sub_ =
-      node_.subscribe<sensor_msgs::PointCloud2>("grid_map/cloud", 10, &GridMap::cloudCallback, this);
+      node_.subscribe<sensor_msgs::PointCloud2>("grid_map/cloud", cloud_fusion_enabled_ ? 1 : 10, &GridMap::cloudCallback, this);
   indep_odom_sub_ =
       node_.subscribe<nav_msgs::Odometry>("grid_map/odom", 10, &GridMap::odomCallback, this);
 
@@ -153,6 +157,47 @@ void GridMap::initMap(ros::NodeHandle &nh)
 
   md_.flag_depth_odom_timeout_ = false;
   md_.flag_use_depth_fusion = false;
+
+  if (cloud_fusion_enabled_) {
+    plan_env::CloudFusion::Options o;
+    o.resolution = mp_.resolution_; o.origin = mp_.map_origin_;
+    o.size = mp_.map_voxel_num_; o.local_range = mp_.local_update_range_;
+    o.inflate_xy = std::ceil(mp_.obstacles_inflation_ / mp_.resolution_);
+    o.inflate_z = 1; // Preserve this cloud branch's existing vertical inflation.
+    o.max_ray_length = mp_.max_ray_length_;
+    o.min_log = mp_.clamp_min_log_; o.max_log = mp_.clamp_max_log_;
+    o.occ_log = mp_.min_occupancy_log_;
+    o.hit_log = mp_.prob_hit_log_; o.miss_log = mp_.prob_miss_log_;
+    node_.param("grid_map/cloud_blind", o.blind, 0.35);
+    node_.param("grid_map/cloud_blind_margin", o.blind_margin, 0.10);
+    node_.param("grid_map/cloud_endpoint_margin", o.endpoint_margin, 0.15);
+    node_.param("grid_map/cloud_free_confirmations", o.free_confirmations, 3);
+    node_.param("grid_map/cloud_max_free_rays", o.max_free_rays, 3000);
+    node_.param("grid_map/cloud_angular_resolution", o.angular_resolution, 0.5);
+    node_.param("grid_map/cloud_pose_tolerance", cloud_pose_tolerance_, 0.05);
+    node_.param("grid_map/cloud_timeout", cloud_timeout_, 0.5);
+    node_.param("grid_map/cloud_jump_distance", cloud_jump_distance_, 0.5);
+    node_.param("grid_map/cloud_clear_motion_limit", cloud_clear_motion_limit_, mp_.resolution_*.25);
+    node_.param<std::string>("grid_map/cloud_frame", cloud_expected_frame_, "camera_init");
+    std::string pose_topic;
+    node_.param<std::string>("grid_map/cloud_pose_topic", pose_topic, "/Odometry");
+    std::vector<double> translation;
+    if (!node_.getParam("grid_map/cloud_sensor_translation", translation) || translation.size()!=3 ||
+        !std::isfinite(translation[0]) || !std::isfinite(translation[1]) || !std::isfinite(translation[2]) ||
+        !std::isfinite(cloud_pose_tolerance_) || cloud_pose_tolerance_<=0 ||
+        !std::isfinite(cloud_timeout_) || cloud_timeout_<=0 ||
+        !std::isfinite(cloud_jump_distance_) || cloud_jump_distance_<=0 ||
+        !std::isfinite(cloud_clear_motion_limit_) || cloud_clear_motion_limit_<0 ||
+        cloud_clear_motion_limit_>mp_.resolution_*.25 || cloud_expected_frame_.empty())
+      throw std::invalid_argument("cloud fusion requires calibrated sensor translation and valid timing/frame parameters");
+    cloud_sensor_translation_ = Eigen::Vector3d(translation[0],translation[1],translation[2]);
+    cloud_fusion_.reset(new plan_env::CloudFusion(o,md_.occupancy_buffer_,md_.occupancy_buffer_inflate_,
+                          md_.count_hit_,md_.count_hit_and_miss_,md_.flag_traverse_,md_.flag_rayend_));
+    cloud_pose_sub_ = node_.subscribe<nav_msgs::Odometry>(pose_topic,20,&GridMap::cloudPoseCallback,this);
+    cloud_status_pub_ = node_.advertise<std_msgs::String>("grid_map/cloud_fusion_status",1,true);
+    md_.flag_depth_odom_timeout_ = true; // Require synchronized map data before planning.
+    ROS_INFO("Cloud occupancy fusion enabled; pose=%s, free-ray budget=%d",pose_topic.c_str(),o.max_free_rays);
+  }
 
   // rand_noise_ = uniform_real_distribution<double>(-0.2, 0.2);
   // rand_noise2_ = normal_distribution<double>(0, 0.2);
@@ -662,6 +707,15 @@ void GridMap::visCallback(const ros::TimerEvent & /*event*/)
 
 void GridMap::updateOccupancyCallback(const ros::TimerEvent & /*event*/)
 {
+  if (cloud_fusion_enabled_) {
+    if (cloud_last_good_.isZero() || cloud_stable_frames_<3 ||
+        (ros::Time::now()-cloud_last_good_).toSec()<-.05 ||
+        (ros::Time::now()-cloud_last_good_).toSec()>cloud_timeout_) {
+      md_.flag_depth_odom_timeout_=true;
+      cloudStatus("waiting_or_stale_cloud");
+    }
+    return;
+  }
   if (md_.last_occ_update_time_.toSec() < 1.0 ) md_.last_occ_update_time_ = ros::Time::now();
   
   if (!md_.occ_need_update_)
@@ -707,6 +761,7 @@ void GridMap::updateOccupancyCallback(const ros::TimerEvent & /*event*/)
 void GridMap::depthPoseCallback(const sensor_msgs::ImageConstPtr &img,
                                 const geometry_msgs::PoseStampedConstPtr &pose)
 {
+  if (cloud_fusion_enabled_) return;
   /* get depth image */
   cv_bridge::CvImagePtr cv_ptr;
   cv_ptr = cv_bridge::toCvCopy(img, img->encoding);
@@ -752,8 +807,149 @@ void GridMap::odomCallback(const nav_msgs::OdometryConstPtr &odom)
   md_.has_odom_ = true;
 }
 
+namespace {
+Eigen::Vector3d cloudPosition(const nav_msgs::Odometry& p) {
+  return Eigen::Vector3d(p.pose.pose.position.x,p.pose.pose.position.y,p.pose.pose.position.z);
+}
+Eigen::Quaterniond cloudRotation(const nav_msgs::Odometry& p) {
+  const auto& q=p.pose.pose.orientation;
+  return Eigen::Quaterniond(q.w,q.x,q.y,q.z).normalized();
+}
+}
+
+void GridMap::cloudStatus(const std::string& reason,double update_ms) {
+  if(!cloud_fusion_)return;
+  const auto& s=cloud_fusion_->stats();
+  std::ostringstream out;
+  out<<"{\"ready\":"<<(md_.flag_depth_odom_timeout_?"false":"true")
+     <<",\"reason\":\""<<reason<<"\",\"stamp\":"<<std::fixed<<cloud_last_good_.toSec()
+     <<",\"age\":"<<(cloud_last_good_.isZero()?-1.:(ros::Time::now()-cloud_last_good_).toSec())
+     <<",\"update_ms\":"<<update_ms<<",\"points\":"<<s.input_points
+     <<",\"valid_points\":"<<s.valid_points<<",\"hit_cells\":"<<s.hit_cells
+     <<",\"rays\":"<<s.rays<<",\"cleared\":"<<s.cleared<<",\"pruned\":"<<s.pruned
+     <<",\"active_cells\":"<<s.active<<",\"clearing_enabled\":"<<(s.clearing_enabled?"true":"false")
+     <<",\"work_capacity_bytes\":"<<s.work_capacity_bytes<<"}";
+  std_msgs::String msg;msg.data=out.str();cloud_status_pub_.publish(msg);
+}
+
+void GridMap::cloudPoseCallback(const nav_msgs::OdometryConstPtr& msg) {
+  const auto& q=msg->pose.pose.orientation;
+  double qnorm=q.w*q.w+q.x*q.x+q.y*q.y+q.z*q.z;
+  double age=(ros::Time::now()-msg->header.stamp).toSec();
+  if(msg->header.stamp.isZero() || age>cloud_timeout_ || age<-.05 || msg->header.frame_id!=cloud_expected_frame_ ||
+     !cloudPosition(*msg).allFinite() || !std::isfinite(qnorm) || qnorm<.5 || qnorm>1.5)return;
+  if(!cloud_pose_cache_.empty()) {
+    const auto& last=cloud_pose_cache_.back();
+    if(msg->header.stamp<=last.header.stamp)return;
+    if((cloudPosition(*msg)-cloudPosition(last)).norm()>cloud_jump_distance_ ||
+       cloudRotation(*msg).angularDistance(cloudRotation(last))>.8) {
+      ROS_WARN("Cloud fusion: localization jump; reset historical map and require fresh scans");
+      cloud_fusion_->reset();cloud_pose_cache_.clear();
+      // Preserve only the pending cloud from exactly this new pose timestamp.
+      // Older-world pending endpoints must never enter the reset map.
+      if(cloud_pending_ && cloud_pending_->header.stamp!=msg->header.stamp)cloud_pending_.reset();
+      cloud_stable_frames_=0;cloud_last_good_=ros::Time(0);
+      md_.has_cloud_=false;
+      md_.flag_depth_odom_timeout_=true;
+    }
+  }
+  cloud_pose_cache_.push_back(*msg);
+  while(cloud_pose_cache_.size()>100)cloud_pose_cache_.pop_front();
+  if(cloud_pending_) {
+    auto pending=cloud_pending_;cloud_pending_.reset();
+    fuseCloud(pending); // Topic delivery order may put the cloud before its pose.
+  }
+}
+
+bool GridMap::cloudPoseAt(const ros::Time& stamp,nav_msgs::Odometry& pose) const {
+  if(cloud_pose_cache_.empty())return false;
+  auto next=std::lower_bound(cloud_pose_cache_.begin(),cloud_pose_cache_.end(),stamp,
+                            [](const nav_msgs::Odometry& p,const ros::Time& s){return p.header.stamp<s;});
+  if(next!=cloud_pose_cache_.end() && next->header.stamp==stamp){pose=*next;return true;}
+  if(next!=cloud_pose_cache_.begin() && next!=cloud_pose_cache_.end()) {
+    const auto& prev=*(next-1);
+    double a=(stamp-prev.header.stamp).toSec(),b=(next->header.stamp-stamp).toSec();
+    if(a<=cloud_pose_tolerance_ && b<=cloud_pose_tolerance_) {
+      double t=a/(a+b);pose=prev;pose.header.stamp=stamp;
+      Eigen::Vector3d p=(1-t)*cloudPosition(prev)+t*cloudPosition(*next);
+      Eigen::Quaterniond q=cloudRotation(prev).slerp(t,cloudRotation(*next));
+      pose.pose.pose.position.x=p.x();pose.pose.pose.position.y=p.y();pose.pose.pose.position.z=p.z();
+      pose.pose.pose.orientation.w=q.w();pose.pose.pose.orientation.x=q.x();
+      pose.pose.pose.orientation.y=q.y();pose.pose.pose.orientation.z=q.z();return true;
+    }
+  }
+  // Use only a nearby valid pose, never the latest unrelated MAVROS pose.
+  const nav_msgs::Odometry* closest=nullptr;
+  if(next!=cloud_pose_cache_.end())closest=&*next;
+  if(next!=cloud_pose_cache_.begin()) {
+    const auto& prev=*(next-1);
+    if(!closest || std::abs((stamp-prev.header.stamp).toSec())<std::abs((stamp-closest->header.stamp).toSec()))closest=&prev;
+  }
+  if(closest && std::abs((stamp-closest->header.stamp).toSec())<=cloud_pose_tolerance_){pose=*closest;return true;}
+  return false;
+}
+
+void GridMap::fuseCloud(const sensor_msgs::PointCloud2ConstPtr& msg) {
+  const double age=(ros::Time::now()-msg->header.stamp).toSec();
+  size_t count=size_t(msg->width)*msg->height;
+  if(msg->header.stamp.isZero() || age>cloud_timeout_ || age<-.05 ||
+     msg->header.frame_id!=cloud_expected_frame_ || msg->is_bigendian || count>200000 ||
+     size_t(msg->row_step)<size_t(msg->width)*msg->point_step ||
+     msg->data.size()<size_t(msg->row_step)*msg->height) {
+    cloudStatus("invalid_cloud_frame_time_or_size");return;
+  }
+  for(const std::string name:{"x","y","z"}) {
+    auto field=std::find_if(msg->fields.begin(),msg->fields.end(),[&](const sensor_msgs::PointField& f){return f.name==name;});
+    if(field==msg->fields.end() || field->datatype!=sensor_msgs::PointField::FLOAT32 ||
+       field->count!=1 || field->offset+sizeof(float)>msg->point_step){cloudStatus("invalid_xyz_fields");return;}
+  }
+  nav_msgs::Odometry pose;
+  if(!cloudPoseAt(msg->header.stamp,pose)) {
+    cloud_pending_=msg;cloudStatus("waiting_matching_lio_pose");return;
+  }
+  Eigen::Vector3d sensor=cloudPosition(pose)+cloudRotation(pose)*cloud_sensor_translation_;
+  // A deskewed cloud contains endpoints but not each beam's moving origin.
+  // Keep new hits, but suspend clearing old obstacles while ray origins move.
+  bool have_previous=false,clear_free=std::abs((pose.header.stamp-msg->header.stamp).toSec())<=.005;
+  for(const auto& p:cloud_pose_cache_) {
+    double dt=(msg->header.stamp-p.header.stamp).toSec();
+    if(dt<=0 || dt>.15)continue;
+    have_previous=true;
+    Eigen::Vector3d earlier=cloudPosition(p)+cloudRotation(p)*cloud_sensor_translation_;
+    if((earlier-sensor).norm()>cloud_clear_motion_limit_)clear_free=false;
+  }
+  clear_free=clear_free&&have_previous;
+  const auto start=std::chrono::steady_clock::now();
+  pcl::PointCloud<pcl::PointXYZ> cloud;
+  pcl::fromROSMsg(*msg,cloud);
+  plan_env::CloudFusion::Points points;points.reserve(cloud.size());
+  for(const auto& p:cloud)points.emplace_back(p.x,p.y,p.z);
+  if(!cloud_fusion_->update(points,sensor,cloudPosition(pose),msg->header.stamp.toSec(),clear_free)) {
+    cloudStatus("empty_invalid_or_out_of_order_scan");return;
+  }
+  md_.local_bound_min_=cloud_fusion_->lowerBound();md_.local_bound_max_=cloud_fusion_->upperBound();
+  // Existing ceiling only; do not add a minimum-height constraint.
+  if(mp_.virtual_ceil_height_>-.5) {
+    int z=int(std::floor((mp_.virtual_ceil_height_-mp_.map_origin_.z())*mp_.resolution_inv_))-1;
+    if(z>=0 && z<mp_.map_voxel_num_.z())
+      for(int x=md_.local_bound_min_.x();x<=md_.local_bound_max_.x();++x)
+        for(int y=md_.local_bound_min_.y();y<=md_.local_bound_max_.y();++y)
+          md_.occupancy_buffer_inflate_[toAddress(x,y,z)]=1;
+  }
+  if(!cloud_last_good_.isZero() && (msg->header.stamp-cloud_last_good_).toSec()>cloud_timeout_)
+    cloud_stable_frames_=0;
+  cloud_last_good_=msg->header.stamp;cloud_pending_.reset();
+  cloud_stable_frames_=std::min(3,cloud_stable_frames_+1);
+  md_.has_cloud_=true;md_.flag_depth_odom_timeout_=cloud_stable_frames_<3;
+  double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+  cloudStatus(md_.flag_depth_odom_timeout_?"warming_up":(clear_free?"ok":"hits_only_motion_or_pose_uncertainty"),ms);
+  ROS_INFO_THROTTLE(2.,"Cloud fusion: %zu hits, %zu rays, %zu remembered, %.1fms",cloud_fusion_->stats().hit_cells,
+                    cloud_fusion_->stats().rays,cloud_fusion_->stats().active,ms);
+}
+
 void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
 {
+  if (cloud_fusion_enabled_) { fuseCloud(img); return; }
 
   pcl::PointCloud<pcl::PointXYZ> latest_cloud;
   pcl::fromROSMsg(*img, latest_cloud);
@@ -991,6 +1187,7 @@ void GridMap::extrinsicCallback(const nav_msgs::OdometryConstPtr &odom)
 void GridMap::depthOdomCallback(const sensor_msgs::ImageConstPtr &img,
                                 const nav_msgs::OdometryConstPtr &odom)
 {
+  if (cloud_fusion_enabled_) return;
   /* get pose */
   Eigen::Quaterniond body_q = Eigen::Quaterniond(odom->pose.pose.orientation.w,
                                                  odom->pose.pose.orientation.x,
