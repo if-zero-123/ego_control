@@ -40,3 +40,10 @@ add_library( path_searching
 target_link_libraries( path_searching
     ${catkin_LIBRARIES} 
     )  
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(horizontal_search_test test/horizontal_search_test.cpp)
+  if(TARGET horizontal_search_test)
+    target_link_libraries(horizontal_search_test path_searching ${catkin_LIBRARIES})
+  endif()
+endif()

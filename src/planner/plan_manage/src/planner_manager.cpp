@@ -64,6 +64,9 @@ namespace ego_planner
     }
 
     bspline_optimizer_->setLocalTargetPt(local_target_pt);
+    // A* obstruction segment endpoints can already have drifted in z. Anchor
+    // its preference to the current planning target, not to those endpoints.
+    bspline_optimizer_->a_star_->setReferenceHeight(local_target_pt.z());
 
     ros::Time t_start = ros::Time::now();
     ros::Duration t_init, t_opt, t_refine;
