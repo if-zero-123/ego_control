@@ -177,7 +177,15 @@ void GridMap::initMap(ros::NodeHandle &nh)
     node_.param("grid_map/cloud_pose_tolerance", cloud_pose_tolerance_, 0.05);
     node_.param("grid_map/cloud_timeout", cloud_timeout_, 0.5);
     node_.param("grid_map/cloud_jump_distance", cloud_jump_distance_, 0.5);
-    node_.param("grid_map/cloud_clear_motion_limit", cloud_clear_motion_limit_, mp_.resolution_*.25);
+    node_.param("grid_map/cloud_scan_duration", cloud_scan_duration_, 0.10);
+    node_.param("grid_map/cloud_clear_max_origin_span", cloud_clear_max_span_, 0.15);
+    node_.param("grid_map/cloud_clear_max_pose_gap", cloud_clear_max_pose_gap_, 0.15);
+    node_.param("grid_map/cloud_clear_acceleration_bound", cloud_clear_acc_bound_, 6.0);
+    node_.param("grid_map/cloud_clear_angular_acceleration_bound", cloud_clear_angular_acc_bound_, 20.0);
+    node_.param("grid_map/cloud_clear_origin_margin", cloud_clear_origin_margin_, 0.0025);
+    node_.param("grid_map/cloud_free_interior_margin", o.free_interior_margin, mp_.resolution_*.05);
+    if(node_.hasParam("grid_map/cloud_clear_motion_limit"))
+      ROS_WARN("cloud_clear_motion_limit is obsolete; clearing now uses a conservative scan-origin envelope");
     node_.param<std::string>("grid_map/cloud_frame", cloud_expected_frame_, "camera_init");
     std::string pose_topic;
     node_.param<std::string>("grid_map/cloud_pose_topic", pose_topic, "/Odometry");
@@ -187,8 +195,14 @@ void GridMap::initMap(ros::NodeHandle &nh)
         !std::isfinite(cloud_pose_tolerance_) || cloud_pose_tolerance_<=0 ||
         !std::isfinite(cloud_timeout_) || cloud_timeout_<=0 ||
         !std::isfinite(cloud_jump_distance_) || cloud_jump_distance_<=0 ||
-        !std::isfinite(cloud_clear_motion_limit_) || cloud_clear_motion_limit_<0 ||
-        cloud_clear_motion_limit_>mp_.resolution_*.25 || cloud_expected_frame_.empty())
+        !std::isfinite(cloud_scan_duration_) || cloud_scan_duration_<=0 || cloud_scan_duration_>.2 ||
+        !std::isfinite(cloud_clear_max_span_) || cloud_clear_max_span_<=0 || cloud_clear_max_span_>.25 ||
+        !std::isfinite(cloud_clear_max_pose_gap_) || cloud_clear_max_pose_gap_<=0 || cloud_clear_max_pose_gap_>.2 ||
+        !std::isfinite(cloud_clear_acc_bound_) || cloud_clear_acc_bound_<6. || cloud_clear_acc_bound_>30. ||
+        !std::isfinite(cloud_clear_angular_acc_bound_) || cloud_clear_angular_acc_bound_<20. ||
+        cloud_clear_angular_acc_bound_>100. ||
+        !std::isfinite(cloud_clear_origin_margin_) || cloud_clear_origin_margin_<.0025 ||
+        cloud_clear_origin_margin_>mp_.resolution_*.25 || cloud_expected_frame_.empty())
       throw std::invalid_argument("cloud fusion requires calibrated sensor translation and valid timing/frame parameters");
     cloud_sensor_translation_ = Eigen::Vector3d(translation[0],translation[1],translation[2]);
     cloud_fusion_.reset(new plan_env::CloudFusion(o,md_.occupancy_buffer_,md_.occupancy_buffer_inflate_,
@@ -828,6 +842,8 @@ void GridMap::cloudStatus(const std::string& reason,double update_ms) {
      <<",\"valid_points\":"<<s.valid_points<<",\"hit_cells\":"<<s.hit_cells
      <<",\"rays\":"<<s.rays<<",\"cleared\":"<<s.cleared<<",\"pruned\":"<<s.pruned
      <<",\"active_cells\":"<<s.active<<",\"clearing_enabled\":"<<(s.clearing_enabled?"true":"false")
+     <<",\"clear_reason\":\""<<cloud_clear_reason_<<"\",\"origin_uncertainty\":"<<s.origin_uncertainty
+     <<",\"uncertain_cells\":"<<s.uncertain_cells
      <<",\"work_capacity_bytes\":"<<s.work_capacity_bytes<<"}";
   std_msgs::String msg;msg.data=out.str();cloud_status_pub_.publish(msg);
 }
@@ -889,6 +905,51 @@ bool GridMap::cloudPoseAt(const ros::Time& stamp,nav_msgs::Odometry& pose) const
   return false;
 }
 
+bool GridMap::cloudOriginEnvelope(const ros::Time& stamp,Eigen::Vector3d& center,
+                                  Eigen::Vector3d& half_extent) {
+  cloud_clear_reason_="insufficient_scan_pose_coverage";
+  const ros::Time first=stamp-ros::Duration(cloud_scan_duration_);
+  if(cloud_pose_cache_.empty() || cloud_pose_cache_.front().header.stamp>first ||
+     cloud_pose_cache_.back().header.stamp<stamp)return false;
+  nav_msgs::Odometry a,b;
+  if(!cloudPoseAt(first,a) || !cloudPoseAt(stamp,b))return false;
+  // Require bracketing poses: nearest-pose extrapolation is never clearing evidence.
+  std::vector<nav_msgs::Odometry> samples;
+  samples.push_back(a);
+  for(const auto& p:cloud_pose_cache_)
+    if(p.header.stamp>first && p.header.stamp<stamp)samples.push_back(p);
+  samples.push_back(b);
+  auto sensor=[this](const nav_msgs::Odometry& p) {
+    return Eigen::Vector3d(cloudPosition(p)+cloudRotation(p)*cloud_sensor_translation_);
+  };
+  Eigen::Vector3d lo=sensor(a),hi=lo;
+  double curve_margin=0.;
+  // Use complete source-pose intervals, including intervals bracketing the scan
+  // boundaries. Short interpolated subintervals would understate their error.
+  for(size_t i=1;i<cloud_pose_cache_.size();++i) {
+    const auto& prev=cloud_pose_cache_[i-1];const auto& next=cloud_pose_cache_[i];
+    if(next.header.stamp<=first || prev.header.stamp>=stamp)continue;
+    const double dt=(next.header.stamp-prev.header.stamp).toSec();
+    if(dt<=0 || dt>cloud_clear_max_pose_gap_) {
+      cloud_clear_reason_="scan_pose_gap";return false;
+    }
+    const double angle=cloudRotation(prev).angularDistance(cloudRotation(next));
+    if(angle>.35) {cloud_clear_reason_="scan_rotation_too_large";return false;}
+    curve_margin=std::max(curve_margin,cloud_clear_acc_bound_*dt*dt/8.+
+      cloud_sensor_translation_.norm()*(1.-std::cos(angle*.5)+cloud_clear_angular_acc_bound_*dt*dt/8.));
+  }
+  for(size_t i=0;i<samples.size();++i) {
+    Eigen::Vector3d s=sensor(samples[i]);lo=lo.cwiseMin(s);hi=hi.cwiseMax(s);
+  }
+  if((hi-lo).norm()>cloud_clear_max_span_) {
+    cloud_clear_reason_="scan_origin_span_too_large";return false;
+  }
+  center=(lo+hi)*.5;
+  half_extent=(hi-lo)*.5+Eigen::Vector3d::Constant(curve_margin+cloud_clear_origin_margin_);
+  cloud_clear_reason_="bounded_scan_origins";
+  return true;
+}
+
 void GridMap::fuseCloud(const sensor_msgs::PointCloud2ConstPtr& msg) {
   const double age=(ros::Time::now()-msg->header.stamp).toSec();
   size_t count=size_t(msg->width)*msg->height;
@@ -908,23 +969,14 @@ void GridMap::fuseCloud(const sensor_msgs::PointCloud2ConstPtr& msg) {
     cloud_pending_=msg;cloudStatus("waiting_matching_lio_pose");return;
   }
   Eigen::Vector3d sensor=cloudPosition(pose)+cloudRotation(pose)*cloud_sensor_translation_;
-  // A deskewed cloud contains endpoints but not each beam's moving origin.
-  // Keep new hits, but suspend clearing old obstacles while ray origins move.
-  bool have_previous=false,clear_free=std::abs((pose.header.stamp-msg->header.stamp).toSec())<=.005;
-  for(const auto& p:cloud_pose_cache_) {
-    double dt=(msg->header.stamp-p.header.stamp).toSec();
-    if(dt<=0 || dt>.15)continue;
-    have_previous=true;
-    Eigen::Vector3d earlier=cloudPosition(p)+cloudRotation(p)*cloud_sensor_translation_;
-    if((earlier-sensor).norm()>cloud_clear_motion_limit_)clear_free=false;
-  }
-  clear_free=clear_free&&have_previous;
+  Eigen::Vector3d half_extent=Eigen::Vector3d::Zero();
+  bool clear_free=cloudOriginEnvelope(msg->header.stamp,sensor,half_extent);
   const auto start=std::chrono::steady_clock::now();
   pcl::PointCloud<pcl::PointXYZ> cloud;
   pcl::fromROSMsg(*msg,cloud);
   plan_env::CloudFusion::Points points;points.reserve(cloud.size());
   for(const auto& p:cloud)points.emplace_back(p.x,p.y,p.z);
-  if(!cloud_fusion_->update(points,sensor,cloudPosition(pose),msg->header.stamp.toSec(),clear_free)) {
+  if(!cloud_fusion_->update(points,sensor,cloudPosition(pose),msg->header.stamp.toSec(),clear_free,half_extent)) {
     cloudStatus("empty_invalid_or_out_of_order_scan");return;
   }
   md_.local_bound_min_=cloud_fusion_->lowerBound();md_.local_bound_max_=cloud_fusion_->upperBound();

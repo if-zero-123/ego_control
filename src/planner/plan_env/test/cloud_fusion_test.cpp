@@ -106,8 +106,8 @@ TEST_F(FusionTest,MotionSuspendsClearingButKeepsNewHits) {
 }
 TEST_F(FusionTest,OnlyReliablyTraversedInteriorCanClear) {
   update({obstacle},1);
-  // This ray grazes the obstacle's voxel, 2cm away from its centre.
-  Eigen::Vector3d shifted_sensor=sensor+Eigen::Vector3d(0,.02,0),end=far+Eigen::Vector3d(0,.02,0);
+  // This ray is only 1mm from a voxel face, inside the protected interior margin.
+  Eigen::Vector3d shifted_sensor=sensor+Eigen::Vector3d(0,.024,0),end=far+Eigen::Vector3d(0,.024,0);
   for(int t=2;t<10;++t)f->update(points({end}),shifted_sensor,shifted_sensor,t);
   EXPECT_TRUE(occupied(obstacle));
 }
@@ -157,6 +157,56 @@ TEST_F(FusionTest,SensorOutsideGridDoesNotDropValidBodyInsideCloud) {
   ASSERT_TRUE(f->update(points({old}),lidar,body,1));EXPECT_TRUE(occupied(old));
   for(int t=2;t<9;++t)ASSERT_TRUE(f->update(points({behind}),lidar,body,t));
   EXPECT_FALSE(occupied(old));EXPECT_TRUE(occupied(behind));
+}
+
+TEST_F(FusionTest,BoundedFastMotionCanClearReliableInterior) {
+  update({obstacle},1);
+  // 0.56m/s over 0.1s: +/-2.8cm transverse origin extent, plus model error.
+  Eigen::Vector3d extent(.010,.038,.010);
+  for(int t=2;t<9;++t)ASSERT_TRUE(f->update(points({far}),sensor,sensor,t,true,extent));
+  EXPECT_FALSE(occupied(obstacle));EXPECT_TRUE(occupied(far));
+  EXPECT_GT(f->stats().origin_uncertainty,0.);
+}
+TEST_F(FusionTest,OriginEnvelopeThatCouldMissVoxelCannotClear) {
+  update({obstacle},1);
+  for(int t=2;t<12;++t)f->update(points({far}),sensor,sensor,t,true,Eigen::Vector3d(0,.06,0));
+  EXPECT_TRUE(occupied(obstacle));EXPECT_GT(f->stats().uncertain_cells,0u);
+}
+TEST_F(FusionTest,LongitudinalMotionStillClearsBeyondBlindZone) {
+  update({obstacle},1);
+  for(int t=2;t<9;++t)f->update(points({far}),sensor,sensor,t,true,Eigen::Vector3d(.038,.01,.01));
+  EXPECT_FALSE(occupied(obstacle));
+}
+TEST_F(FusionTest,UncertainOriginsExpandBlindProtection) {
+  update({obstacle},1);
+  Eigen::Vector3d near=obstacle-Eigen::Vector3d(.52,0,0);
+  for(int t=2;t<12;++t)f->update(points({far}),near,near,t,true,Eigen::Vector3d(.038,.01,.01));
+  EXPECT_TRUE(occupied(obstacle));
+}
+TEST_F(FusionTest,CurrentHitWinsWithMovingOriginEnvelope) {
+  update({obstacle},1);
+  for(int t=2;t<10;++t)f->update(points({obstacle,far}),sensor,sensor,t,true,Eigen::Vector3d(.01,.038,.01));
+  EXPECT_TRUE(occupied(obstacle));EXPECT_EQ(count[id(obstacle)],0);
+}
+TEST_F(FusionTest,InvalidEnvelopeRejectedWithoutChangingHistory) {
+  update({obstacle},1);
+  EXPECT_FALSE(f->update(points({far}),sensor,sensor,2,true,Eigen::Vector3d(-.01,0,0)));
+  EXPECT_FALSE(f->update(points({far}),sensor,sensor,2,true,Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN())));
+  EXPECT_TRUE(occupied(obstacle));
+}
+TEST_F(FusionTest,ClippedRayDoesNotUnderestimateOriginUncertainty) {
+  // Nominal origin outside map; uncertainty must contract towards measured endpoint,
+  // not towards the artificial map-entry or max-range clipping point.
+  Eigen::Vector3d body(.025,.025,2.4),lidar(.025,.025,2.55);
+  Eigen::Vector3d old(.025,.025,1.925),behind(.025,.025,.925);
+  f->update(points({old}),lidar,body,1);
+  for(int t=2;t<12;++t)f->update(points({behind}),lidar,body,t,true,Eigen::Vector3d(.06,0,0));
+  EXPECT_TRUE(occupied(old));
+}
+TEST_F(FusionTest,MaxRangeClippingDoesNotShrinkUncertaintyTooEarly) {
+  o.max_ray_length=1.5;rebuild();update({obstacle},1);
+  for(int t=2;t<12;++t)f->update(points({far}),sensor,sensor,t,true,Eigen::Vector3d(0,.06,0));
+  EXPECT_TRUE(occupied(obstacle));
 }
 
 int main(int argc,char**argv) {

@@ -202,12 +202,19 @@ private:
   ros::Publisher cloud_status_pub_;
   Eigen::Vector3d cloud_sensor_translation_ = Eigen::Vector3d::Zero();
   double cloud_pose_tolerance_ = 0.05, cloud_timeout_ = 0.5;
-  double cloud_jump_distance_ = 0.5, cloud_clear_motion_limit_ = 0.0125;
+  double cloud_jump_distance_ = 0.5;
+  double cloud_scan_duration_ = 0.10, cloud_clear_max_span_ = 0.15;
+  double cloud_clear_max_pose_gap_ = 0.15, cloud_clear_acc_bound_ = 6.0;
+  double cloud_clear_angular_acc_bound_ = 20.0;
+  double cloud_clear_origin_margin_ = 0.0025;
+  std::string cloud_clear_reason_ = "warming_up";
   int cloud_stable_frames_ = 0;
   ros::Time cloud_last_good_;
   std::string cloud_expected_frame_;
   void cloudPoseCallback(const nav_msgs::OdometryConstPtr& odom);
   bool cloudPoseAt(const ros::Time& stamp, nav_msgs::Odometry& pose) const;
+  bool cloudOriginEnvelope(const ros::Time& stamp, Eigen::Vector3d& center,
+                           Eigen::Vector3d& half_extent);
   void fuseCloud(const sensor_msgs::PointCloud2ConstPtr& msg);
   void cloudStatus(const std::string& reason, double update_ms = 0);
 

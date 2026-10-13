@@ -18,6 +18,8 @@ CloudFusion::CloudFusion(const Options& o, std::vector<double>& p,
       o_.max_ray_length <= o_.blind || o_.angular_resolution <= 0 ||
       o_.free_confirmations < 1 || o_.free_confirmations > 32000 ||
       o_.max_free_rays < 1 || o_.inflate_xy < 0 || o_.inflate_z < 0 ||
+      !std::isfinite(o_.free_interior_margin) || o_.free_interior_margin < 0 ||
+      o_.free_interior_margin >= o_.resolution*.5 ||
       !(o_.min_log < o_.occ_log && o_.occ_log < o_.max_log) ||
       !(o_.hit_log > 0 && o_.miss_log < 0))
     throw std::invalid_argument("invalid cloud fusion options");
@@ -80,10 +82,13 @@ void CloudFusion::rebuildInflation() {
   }
 }
 bool CloudFusion::update(const Points& points,const Eigen::Vector3d& sensor,
-                         const Eigen::Vector3d& map_center,double stamp,bool clear_free) {
+                         const Eigen::Vector3d& map_center,double stamp,bool clear_free,
+                         const Eigen::Vector3d& origin_half_extent) {
   const Eigen::Vector3d map_high=o_.origin+o_.size.cast<double>()*o_.resolution;
   if (points.size()>200000 || !sensor.allFinite() || !map_center.allFinite() || !std::isfinite(stamp) ||
-      stamp<=last_stamp_ || (map_center.array()<o_.origin.array()).any() ||
+      stamp<=last_stamp_ || !origin_half_extent.allFinite() || (origin_half_extent.array()<0).any() ||
+      origin_half_extent.maxCoeff()>o_.local_range.minCoeff() ||
+      (map_center.array()<o_.origin.array()).any() ||
       (map_center.array()>=map_high.array()).any() ||
       (sensor-map_center).cwiseAbs().maxCoeff()>o_.local_range.maxCoeff()) return false;
   Stats next; next.input_points=points.size();
@@ -100,7 +105,8 @@ bool CloudFusion::update(const Points& points,const Eigen::Vector3d& sensor,
     if(!p.allFinite() || ((p-map_center).cwiseAbs().array()>o_.local_range.array()).any())continue;
     Eigen::Vector3i i=index(p); if(!inside(i))continue;
     Eigen::Vector3d d=p-sensor; double r=d.norm();
-    if(r<std::max(o_.blind,1e-9) || !std::isfinite(r))continue;
+    // Shifting the nominal origin must never drop a valid current hit.
+    if(r<std::max(o_.blind-origin_half_extent.norm(),1e-9) || !std::isfinite(r))continue;
     valid.push_back(k);
     int az=int(std::floor((std::atan2(d.y(),d.x())+std::acos(-1.))*angle_scale));
     int el=int(std::floor((std::atan2(d.z(),std::hypot(d.x(),d.y()))+std::acos(-1.)*.5)*angle_scale));
@@ -138,7 +144,8 @@ bool CloudFusion::update(const Points& points,const Eigen::Vector3d& sensor,
   std::sort(rays.begin(),rays.end(),[](const auto&a,const auto&b){return a.first<b.first;});
   size_t nr=clear_free?std::min(rays.size(),size_t(o_.max_free_rays)):0;
   next.clearing_enabled=clear_free;
-  const double protected_radius=o_.blind+o_.blind_margin+std::sqrt(3.)*o_.resolution*.5;
+  next.origin_uncertainty=origin_half_extent.norm();
+  const double protected_radius=o_.blind+o_.blind_margin+std::sqrt(3.)*o_.resolution*.5+next.origin_uncertainty;
   const double end_margin=o_.endpoint_margin+std::sqrt(3.)*o_.resolution*.5;
   for(size_t n=0;n<nr;++n) {
     const Return& ret=rays[n*rays.size()/nr].second;
@@ -179,13 +186,20 @@ bool CloudFusion::update(const Points& points,const Eigen::Vector3d& sensor,
       int id=address(i);
       if(active_flag_[id] && !frame_hit_[id] && !frame_free_[id]) {
         Eigen::Vector3d p=center(i);
-        // Grazing a voxel edge is not evidence that its occupied interior is free.
-        double u=(p-start).dot(d)/d.squaredNorm();
-        double lateral=(p-(start+std::max(0.,std::min(1.,u))*d)).squaredNorm();
+        // Use the ORIGINAL segment, even when its DDA was clipped to the map.
+        // At parameter u, all possible origins lie in this contracted box.
+        // Clearing requires that entire box to pass the voxel interior.
+        Eigen::Vector3d beam=measured-sensor;
+        double u=(p-sensor).dot(beam)/beam.squaredNorm();
+        Eigen::Vector3d envelope=(sensor+u*beam-p).cwiseAbs()+(1.-u)*origin_half_extent;
+        bool reliable=u>0. && u<1. &&
+          (envelope.array()<=o_.resolution*.5-o_.free_interior_margin).all();
         if((p-sensor).squaredNorm()>=protected_radius*protected_radius &&
            (p-end).squaredNorm()>=end_margin*end_margin &&
-           lateral<=o_.resolution*o_.resolution/16.) {
+           reliable) {
           frame_free_[id]=1; misses_.push_back(id);
+        } else if(!reliable) {
+          ++next.uncertain_cells;
         }
       }
       if(i==last)break;

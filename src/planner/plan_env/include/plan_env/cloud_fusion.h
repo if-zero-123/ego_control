@@ -19,6 +19,7 @@ public:
     int inflate_xy = 5, inflate_z = 1;
     double blind = 0.35, blind_margin = 0.10, endpoint_margin = 0.15;
     double max_ray_length = 5.0, angular_resolution = 0.5;
+    double free_interior_margin = 0.0025;
     int free_confirmations = 3, max_free_rays = 3000;
     double min_log = -1.9924301647, max_log = 2.1972245773;
     double occ_log = 1.3862943611, hit_log = 0.6190392084, miss_log = -0.6190392084;
@@ -28,6 +29,8 @@ public:
     size_t rays = 0, cleared = 0, pruned = 0, active = 0;
     size_t work_capacity_bytes = 0;
     bool clearing_enabled = false;
+    size_t uncertain_cells = 0;
+    double origin_uncertainty = 0.;
   };
   using Points = std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>>;
 
@@ -36,7 +39,8 @@ public:
               std::vector<short>& frame_hit, std::vector<char>& frame_free,
               std::vector<char>& active_flag);
   bool update(const Points& points, const Eigen::Vector3d& sensor_origin,
-              const Eigen::Vector3d& map_center, double stamp, bool clear_free = true);
+              const Eigen::Vector3d& map_center, double stamp, bool clear_free = true,
+              const Eigen::Vector3d& origin_half_extent = Eigen::Vector3d::Zero());
   void reset();
   const Stats& stats() const { return stats_; }
   Eigen::Vector3i lowerBound() const { return lower_; }

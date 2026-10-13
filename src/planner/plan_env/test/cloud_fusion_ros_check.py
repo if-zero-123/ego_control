@@ -156,6 +156,23 @@ class Check:
         for i in range(3):self.send([new_wall],x=2.025)
         self.check('new-coordinate synchronized map becomes ready after warmup',self.status['cloud_probe']['ready'] and self.occupied(new_wall))
         self.stop(p)
+    def moving_clearing(self):
+        name='moving_probe';p=self.node(name)
+        assert self.wait(lambda:self.cloud_pub.get_num_connections()>0,10)
+        wall=[1.025,.025,1.025];far=[2.025,.025,1.025]
+        for i in range(5):self.send([wall])
+        self.check('moving test starts with remembered obstacle',self.wait(lambda:self.occupied(wall,name)))
+        for i in range(12):self.send([far],x=.025+(.028 if i%2 else -.028))
+        self.check('bounded motion permits reliable ray clearing',self.wait(lambda:not self.occupied(wall,name)))
+        history=self.status_history[name]
+        self.check('motion uses explicit conservative origin envelope',any(s.get('clear_reason')=='bounded_scan_origins' and s.get('origin_uncertainty',0)>.02 for s in history))
+        self.check('moving current endpoints stay occupied',self.occupied(far,name))
+        for i in range(3):self.send([wall])
+        self.wait(lambda:self.occupied(wall,name))
+        time.sleep(.3);self.send([far])
+        self.check('pose coverage gap disables clearing but preserves hits',self.status[name].get('clear_reason') in ('scan_pose_gap','insufficient_scan_pose_coverage') and self.occupied(wall,name))
+        self.stop(p)
+
     def planning(self):
         p=self.node('fusion_planner',planner=True);assert self.wait(lambda:self.cloud_pub.get_num_connections()>0,10)
         # Wall at x=1.025 leaves horizontal room on both sides; no extra height floor.
@@ -245,14 +262,15 @@ class Check:
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--params',required=True);parser.add_argument('--bag')
-    parser.add_argument('--mode',choices=['all','synthetic'],default='all')
+    parser.add_argument('--mode',choices=['all','synthetic','replay'],default='all')
     parser.add_argument('--output',required=True);args=parser.parse_args()
     with open(args.params) as f:params=yaml.safe_load(f)
     c=Check(params);result={}
     try:
-        c.setup();c.synthetic()
+        c.setup()
+        if args.mode!='replay':c.synthetic();c.moving_clearing()
         if args.mode=='all':c.planning()
-        if args.bag and args.mode=='all':result['replay']=c.replay(args.bag)
+        if args.bag and args.mode in ('all','replay'):result['replay']=c.replay(args.bag)
         result.update(passed=c.passed,master=os.environ['ROS_MASTER_URI'],log_dir=os.environ['ROS_LOG_DIR'])
         Path(args.output).write_text(json.dumps(result,ensure_ascii=False,indent=2));print(json.dumps(result,indent=2))
     finally:c.cleanup()
